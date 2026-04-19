@@ -14,7 +14,8 @@
       "Bash(powershell.exe -Command \"python -m pip install flask openpyxl 2>&1\")",
       "Bash(powershell.exe -Command \"python -m pip install openpyxl 2>&1 | Select-String 'Successfully|already'\")",
       "Bash(powershell.exe -Command \"Start-Process python -ArgumentList 'server.py' -WorkingDirectory 'd:\\\\riya personal\\\\RAPP\\\\Sadhana Tracker\\\\Sadhana Tracker- Coordinators Position based based\\\\Sakhi-Sang-Attendence' -RedirectStandardOutput 'server_out.txt' -RedirectStandardError 'server_err.txt' -PassThru | Select-Object Id\")",
-      "Bash(powershell.exe -Command \"Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force\")"
+      "Bash(powershell.exe -Command \"Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force\")",
+      "Bash(git add *)"
     ]
   }
 }
