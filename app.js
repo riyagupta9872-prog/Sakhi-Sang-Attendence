@@ -28,7 +28,193 @@ const AppState = {
   callingData: [],
   fromAttendance: false,
   attendanceCandidates: {},
+  // Auth
+  userRole: null,       // 'admin' | 'coordinator' | 'serviceDevotee'
+  userTeam: null,       // team name for coordinators
+  userName: '',
+  userId: null,
 };
+
+// ── AUTH ──────────────────────────────────────────────
+const auth = firebase.auth();
+
+auth.onAuthStateChanged(async (user) => {
+  if (!user) { showAuthScreen(); return; }
+  try {
+    AppState.userId = user.uid;
+    let userDoc = await fdb.collection('users').doc(user.uid).get();
+    if (!userDoc.exists) {
+      // First ever user becomes admin, rest default to serviceDevotee
+      const allUsers = await fdb.collection('users').limit(1).get();
+      const role = allUsers.empty ? 'admin' : 'serviceDevotee';
+      const data = { email: user.email, name: user.displayName || user.email.split('@')[0], role, teamName: null, createdAt: TS() };
+      await fdb.collection('users').doc(user.uid).set(data);
+      userDoc = { data: () => data };
+    }
+    const ud = userDoc.data();
+    AppState.userRole = ud.role;
+    AppState.userTeam = ud.teamName || null;
+    AppState.userName = ud.name || user.email;
+    hideAuthScreen();
+    applyRoleUI();
+    await initApp();
+  } catch (e) { console.error('Auth init', e); showAuthScreen(); }
+});
+
+function showAuthScreen() { document.getElementById('auth-screen').classList.remove('hidden'); }
+function hideAuthScreen() { document.getElementById('auth-screen').classList.add('hidden'); }
+
+function switchAuthTab(tab, btn) {
+  document.querySelectorAll('.auth-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('login-form').classList.toggle('hidden', tab !== 'login');
+  document.getElementById('signup-form').classList.toggle('hidden', tab !== 'signup');
+}
+
+// Show team field when coordinator is selected
+document.addEventListener('DOMContentLoaded', () => {
+  const roleSelect = document.getElementById('signup-role');
+  if (roleSelect) {
+    roleSelect.addEventListener('change', () => {
+      document.getElementById('signup-team-field').style.display = roleSelect.value === 'coordinator' ? 'flex' : 'none';
+    });
+  }
+});
+
+async function doLogin(e) {
+  e.preventDefault();
+  const err = document.getElementById('login-error');
+  err.classList.remove('show');
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  try {
+    await auth.signInWithEmailAndPassword(email, password);
+  } catch (ex) {
+    err.textContent = ex.code === 'auth/wrong-password' || ex.code === 'auth/user-not-found'
+      ? 'Invalid email or password' : ex.message;
+    err.classList.add('show');
+  }
+}
+
+async function doSignup(e) {
+  e.preventDefault();
+  const err = document.getElementById('signup-error');
+  err.classList.remove('show');
+  const name     = document.getElementById('signup-name').value.trim();
+  const email    = document.getElementById('signup-email').value.trim();
+  const password = document.getElementById('signup-password').value;
+  const role     = document.getElementById('signup-role').value;
+  const team     = document.getElementById('signup-team').value;
+  if (password.length < 6) { err.textContent = 'Password must be at least 6 characters'; err.classList.add('show'); return; }
+  try {
+    const cred = await auth.createUserWithEmailAndPassword(email, password);
+    await cred.user.updateProfile({ displayName: name });
+    // Check if first user
+    const existing = await fdb.collection('users').limit(2).get();
+    const isFirst = existing.docs.filter(d => d.id !== cred.user.uid).length === 0;
+    await fdb.collection('users').doc(cred.user.uid).set({
+      email, name, role: isFirst ? 'admin' : role,
+      teamName: role === 'coordinator' ? (team || null) : null,
+      createdAt: TS()
+    });
+  } catch (ex) {
+    err.textContent = ex.code === 'auth/email-already-in-use' ? 'Email already registered' : ex.message;
+    err.classList.add('show');
+  }
+}
+
+async function doLogout() {
+  if (!confirm('Log out?')) return;
+  await auth.signOut();
+}
+
+// ── ROLE-BASED UI ─────────────────────────────────────
+function applyRoleUI() {
+  const role = AppState.userRole;
+  const team = AppState.userTeam;
+
+  // Header info
+  document.getElementById('header-user-name').textContent = AppState.userName;
+  const pill = document.getElementById('header-role-pill');
+  pill.textContent = role === 'admin' ? 'Admin' : role === 'coordinator' ? (team ? `${team} Coord.` : 'Coordinator') : 'Seva';
+  pill.style.background = role === 'admin' ? 'rgba(201,168,76,.5)' : role === 'coordinator' ? 'rgba(82,183,136,.4)' : 'rgba(255,255,255,.2)';
+
+  // Admin gear
+  if (role === 'admin') document.getElementById('admin-gear-btn').classList.remove('hidden');
+
+  // Tab visibility
+  const tabs = {
+    devotees:   ['admin', 'coordinator'],
+    calling:    ['admin', 'coordinator'],
+    attendance: ['admin', 'coordinator', 'serviceDevotee'],
+    reports:    ['admin', 'coordinator'],
+    care:       ['admin', 'coordinator'],
+    events:     ['admin', 'coordinator'],
+  };
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    const tab = btn.dataset.tab;
+    if (!tabs[tab]?.includes(role)) {
+      btn.style.display = 'none';
+    }
+  });
+
+  // Admin/coordinator only elements
+  document.querySelectorAll('.admin-coordinator-only').forEach(el => {
+    if (!['admin','coordinator'].includes(role)) el.style.display = 'none';
+  });
+
+  // If service devotee, default to attendance tab
+  if (role === 'serviceDevotee') {
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('tab-attendance').classList.add('active');
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector('.tab-btn[data-tab="attendance"]')?.classList.add('active');
+    AppState.currentTab = 'attendance';
+  }
+
+  // Lock team filter for coordinators
+  if (role === 'coordinator' && team) {
+    const ft = document.getElementById('filter-team');
+    if (ft) { ft.value = team; ft.disabled = true; }
+  }
+}
+
+// ── ADMIN PANEL ───────────────────────────────────────
+async function openAdminPanel() {
+  openModal('admin-panel-modal');
+  const container = document.getElementById('admin-users-list');
+  container.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  try {
+    const snap = await fdb.collection('users').get();
+    const users = snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    const teams = ['','Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata'];
+    container.innerHTML = users.map(u => `
+      <div class="admin-user-row">
+        <div class="devotee-avatar" style="width:36px;height:36px;font-size:.8rem;flex-shrink:0">${initials(u.name||u.email)}</div>
+        <div class="admin-user-info">
+          <div class="admin-user-email">${u.name || ''} <span style="font-weight:400;color:var(--text-muted)">&lt;${u.email}&gt;</span></div>
+          <div class="admin-user-meta">UID: ${u.uid.slice(0,8)}…</div>
+        </div>
+        <div class="admin-user-controls">
+          <select class="filter-select" onchange="updateUserRole('${u.uid}', this.value, document.getElementById('team-${u.uid}').value)">
+            <option value="serviceDevotee"${u.role==='serviceDevotee'?' selected':''}>Service Devotee</option>
+            <option value="coordinator"${u.role==='coordinator'?' selected':''}>Coordinator</option>
+            <option value="admin"${u.role==='admin'?' selected':''}>Admin</option>
+          </select>
+          <select class="filter-select" id="team-${u.uid}" onchange="updateUserRole('${u.uid}', document.querySelector('[onchange*=\\'${u.uid}\\']:not(#team-${u.uid})').value, this.value)">
+            ${teams.map(t => `<option value="${t}"${u.teamName===t?' selected':''}>${t||'No Team'}</option>`).join('')}
+          </select>
+        </div>
+      </div>`).join('');
+  } catch (_) { container.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load users</p></div>'; }
+}
+
+async function updateUserRole(uid, role, teamName) {
+  try {
+    await fdb.collection('users').doc(uid).update({ role, teamName: teamName || null });
+    showToast('User updated!', 'success');
+  } catch (_) { showToast('Update failed', 'error'); }
+}
 
 // ── NORMALISERS ───────────────────────────────────────
 function tsToISO(ts) {
@@ -569,15 +755,104 @@ function openImportModal() { openModal('import-modal'); }
 // ══════════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════════
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('today-date').textContent = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  // Auth state handler above drives initApp()
+});
+
+async function initApp() {
   await initSession();
-  loadDevotees();
-  loadCallingPersonsFilter();
+  const role = AppState.userRole;
+  if (role !== 'serviceDevotee') {
+    loadDevotees();
+    loadCallingPersonsFilter();
+  } else {
+    loadAttendanceTab();
+  }
   loadBirthdays();
   document.getElementById('report-date').value = getToday();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-});
+  initAllPickers();
+}
+
+// ── MOBILE VALIDATION ─────────────────────────────────
+function validateMobile(val) {
+  const cleaned = (val || '').replace(/\D/g, '');
+  if (val && val.trim() && cleaned.length !== 10) return { valid: false, error: 'Mobile must be exactly 10 digits' };
+  return { valid: true, cleaned: cleaned || null };
+}
+
+function showFieldError(id, msg) {
+  const el = document.getElementById('err-' + id);
+  const inp = document.getElementById('f-' + id);
+  if (el) { el.textContent = msg; el.classList.add('show'); }
+  if (inp) inp.classList.add('invalid');
+}
+
+function clearFieldError(id) {
+  const el = document.getElementById('err-' + id);
+  const inp = document.getElementById('f-' + id);
+  if (el) el.classList.remove('show');
+  if (inp) inp.classList.remove('invalid');
+}
+
+// ── DEVOTEE PICKER ────────────────────────────────────
+function initAllPickers() {
+  setupPicker('picker-reference',   'f-reference');
+  setupPicker('picker-calling-by',  'f-calling-by');
+  setupPicker('picker-facilitator', 'f-facilitator');
+}
+
+function setupPicker(containerId, hiddenId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const input    = container.querySelector('.picker-input');
+  const dropdown = container.querySelector('.picker-dropdown');
+  const hidden   = document.getElementById(hiddenId);
+
+  input.addEventListener('input', debounce(async () => {
+    const q = input.value.trim();
+    hidden.value = '';
+    input.classList.remove('has-value');
+    if (q.length < 2) { dropdown.classList.add('hidden'); dropdown.innerHTML = ''; return; }
+    const results = await DB.getDevotees({ search: q });
+    if (!results.length) {
+      dropdown.innerHTML = '<div class="picker-no-result">No devotee found</div>';
+      dropdown.classList.remove('hidden'); return;
+    }
+    dropdown.innerHTML = results.slice(0, 8).map(d => `
+      <div class="picker-option" onclick="selectPicker('${containerId}','${hiddenId}','${d.name.replace(/'/g,"\\'")}','${d.id}')">
+        <span>${d.name}</span>
+        <span class="picker-team">${d.team_name || ''}</span>
+      </div>`).join('');
+    dropdown.classList.remove('hidden');
+  }, 280));
+
+  // Close on outside click
+  document.addEventListener('click', (e) => {
+    if (!container.contains(e.target)) dropdown.classList.add('hidden');
+  });
+}
+
+function selectPicker(containerId, hiddenId, name, id) {
+  const container = document.getElementById(containerId);
+  const input    = container.querySelector('.picker-input');
+  const dropdown = container.querySelector('.picker-dropdown');
+  const hidden   = document.getElementById(hiddenId);
+  input.value  = name;
+  hidden.value = name;
+  input.classList.add('has-value');
+  dropdown.classList.add('hidden');
+}
+
+function clearPicker(containerId, hiddenId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.querySelector('.picker-input').value = '';
+  container.querySelector('.picker-input').classList.remove('has-value');
+  container.querySelector('.picker-dropdown').classList.add('hidden');
+  document.getElementById(hiddenId).value = '';
+}
 
 async function initSession() {
   try {
@@ -691,7 +966,9 @@ async function handleImportFile(e) {
 async function loadDevotees() {
   const filters = {
     search:     document.getElementById('devotee-search').value.trim(),
-    team:       document.getElementById('filter-team').value,
+    team:       AppState.userRole === 'coordinator' && AppState.userTeam
+                  ? AppState.userTeam
+                  : document.getElementById('filter-team').value,
     calling_by: document.getElementById('filter-calling-by').value,
     status:     document.getElementById('filter-status').value,
   };
@@ -787,38 +1064,48 @@ function openDevoteeFormModal(fromAttendance = false, editId = null) {
 }
 
 function clearDevoteeForm() {
-  ['f-name','f-mobile','f-address','f-facilitator','f-reference','f-calling-by'].forEach(id => document.getElementById(id).value = '');
+  ['f-name','f-mobile','f-address'].forEach(id => document.getElementById(id).value = '');
   ['f-dob','f-joining'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('f-chanting').value = '0';
   document.getElementById('f-team').value = '';
   document.getElementById('f-status').value = 'Expected to be Serious';
   document.getElementById('f-kanthi').value = '0';
   document.getElementById('f-gopi').value = '0';
+  clearPicker('picker-facilitator', 'f-facilitator');
+  clearPicker('picker-reference',   'f-reference');
+  clearPicker('picker-calling-by',  'f-calling-by');
+  clearFieldError('mobile');
+  // Auto-fill team for coordinators
+  if (AppState.userRole === 'coordinator' && AppState.userTeam) {
+    document.getElementById('f-team').value = AppState.userTeam;
+  }
 }
 
 async function populateEditForm(id) {
   try {
     const d = await DB.getDevotee(id);
-    document.getElementById('f-name').value        = d.name || '';
-    document.getElementById('f-mobile').value      = d.mobile || '';
-    document.getElementById('f-address').value     = d.address || '';
-    document.getElementById('f-dob').value         = d.dob || '';
-    document.getElementById('f-joining').value     = d.date_of_joining || '';
-    document.getElementById('f-chanting').value    = d.chanting_rounds || 0;
-    document.getElementById('f-team').value        = d.team_name || '';
-    document.getElementById('f-status').value      = d.devotee_status || 'Expected to be Serious';
-    document.getElementById('f-kanthi').value      = d.kanthi || 0;
-    document.getElementById('f-gopi').value        = d.gopi_dress || 0;
-    document.getElementById('f-facilitator').value = d.facilitator || '';
-    document.getElementById('f-reference').value   = d.reference_by || '';
-    document.getElementById('f-calling-by').value  = d.calling_by || '';
+    document.getElementById('f-name').value     = d.name || '';
+    document.getElementById('f-mobile').value   = d.mobile || '';
+    document.getElementById('f-address').value  = d.address || '';
+    document.getElementById('f-dob').value      = d.dob || '';
+    document.getElementById('f-joining').value  = d.date_of_joining || '';
+    document.getElementById('f-chanting').value = d.chanting_rounds || 0;
+    document.getElementById('f-team').value     = d.team_name || '';
+    document.getElementById('f-status').value   = d.devotee_status || 'Expected to be Serious';
+    document.getElementById('f-kanthi').value   = d.kanthi || 0;
+    document.getElementById('f-gopi').value     = d.gopi_dress || 0;
+    // Pickers
+    if (d.facilitator) { document.getElementById('f-facilitator').value = d.facilitator; const pi = document.querySelector('#picker-facilitator .picker-input'); if(pi){pi.value=d.facilitator;pi.classList.add('has-value');} }
+    if (d.reference_by) { document.getElementById('f-reference').value = d.reference_by; const pi = document.querySelector('#picker-reference .picker-input'); if(pi){pi.value=d.reference_by;pi.classList.add('has-value');} }
+    if (d.calling_by) { document.getElementById('f-calling-by').value = d.calling_by; const pi = document.querySelector('#picker-calling-by .picker-input'); if(pi){pi.value=d.calling_by;pi.classList.add('has-value');} }
+    clearFieldError('mobile');
   } catch (_) { showToast('Failed to load profile', 'error'); }
 }
 
 function getFormPayload() {
   return {
     name:           document.getElementById('f-name').value.trim(),
-    mobile:         document.getElementById('f-mobile').value.trim(),
+    mobile:         document.getElementById('f-mobile').value.replace(/\D/g,'').slice(0,10),
     address:        document.getElementById('f-address').value.trim(),
     dob:            document.getElementById('f-dob').value,
     date_of_joining:document.getElementById('f-joining').value,
@@ -835,6 +1122,11 @@ function getFormPayload() {
 
 async function saveDevotee(e) {
   e.preventDefault();
+  // Mobile validation
+  const mobileRaw = document.getElementById('f-mobile').value;
+  const mob = validateMobile(mobileRaw);
+  if (!mob.valid) { showFieldError('mobile', mob.error); return; }
+  clearFieldError('mobile');
   const id = document.getElementById('f-id').value;
   const payload = getFormPayload();
   try {
@@ -1019,10 +1311,13 @@ async function loadAttendanceCandidates() {
         : '<div class="empty-state"><i class="fas fa-users"></i><p>No candidates for this session</p></div>';
       return;
     }
+    const isServiceDev = AppState.userRole === 'serviceDevotee';
     list.innerHTML = candidates.map(d => {
       const isPresent = !!d.attendance_id;
+      const canEdit   = !isServiceDev || isPresent; // service devotee can only edit present ones
       return `
-        <div class="attendance-card${isPresent ? ' is-present' : ''}" id="att-card-${d.id}">
+        <div class="attendance-card${isPresent ? ' is-present' : ''}" id="att-card-${d.id}"
+             ${canEdit ? `onclick="openProfileModal('${d.id}')" style="cursor:pointer"` : ''}>
           <div class="devotee-avatar" style="width:40px;height:40px;font-size:.9rem">${initials(d.name)}</div>
           <div class="attendance-card-info">
             <div class="attendance-card-name">${d.name}
@@ -1030,9 +1325,9 @@ async function loadAttendanceCandidates() {
               ${d.coming_status === 'Yes' ? '<span class="badge badge-expected" style="font-size:.7rem">Confirmed</span>' : ''}
             </div>
             <div class="attendance-card-meta">${d.team_name || ''}${d.calling_by ? ' · Called: ' + d.calling_by : ''}</div>
-            ${d.mobile ? `<div class="attendance-card-meta" style="margin-top:.2rem">${contactIcons(d.mobile)}</div>` : ''}
+            ${d.mobile ? `<div class="attendance-card-meta" style="margin-top:.2rem" onclick="event.stopPropagation()">${contactIcons(d.mobile)}</div>` : ''}
           </div>
-          <div>
+          <div onclick="event.stopPropagation()">
             ${isPresent
               ? `<span style="color:var(--success);font-weight:700;font-size:.85rem"><i class="fas fa-check-circle"></i> Present</span>
                  <button class="undo-btn" onclick="undoPresent('${d.id}')">Undo</button>`
