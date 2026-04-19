@@ -1,0 +1,6 @@
+
+  OM - Sakhi Sang Attendance System
+  Running at http://localhost:3000
+
+ * Serving Flask app 'server'
+ * Debug mode: off
