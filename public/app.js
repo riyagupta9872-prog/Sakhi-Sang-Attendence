@@ -576,7 +576,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadCallingPersonsFilter();
   loadBirthdays();
   document.getElementById('report-date').value = getToday();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 });
 
 async function initSession() {
