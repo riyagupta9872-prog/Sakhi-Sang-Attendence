@@ -40,13 +40,17 @@ const auth = firebase.auth();
 
 auth.onAuthStateChanged(async (user) => {
   if (!user) { showAuthScreen(); return; }
+  AppState.userId = user.uid;
   try {
-    AppState.userId = user.uid;
     let userDoc = await fdb.collection('users').doc(user.uid).get();
     if (!userDoc.exists) {
-      // First ever user becomes admin, rest default to serviceDevotee
-      const allUsers = await fdb.collection('users').limit(1).get();
-      const role = allUsers.empty ? 'admin' : 'serviceDevotee';
+      // Check if this is the very first user → make them admin
+      let isFirst = false;
+      try {
+        const allUsers = await fdb.collection('users').limit(1).get();
+        isFirst = allUsers.empty;
+      } catch (_) { isFirst = false; }
+      const role = isFirst ? 'admin' : 'serviceDevotee';
       const data = { email: user.email, name: user.displayName || user.email.split('@')[0], role, teamName: null, createdAt: TS() };
       await fdb.collection('users').doc(user.uid).set(data);
       userDoc = { data: () => data };
@@ -58,7 +62,17 @@ auth.onAuthStateChanged(async (user) => {
     hideAuthScreen();
     applyRoleUI();
     await initApp();
-  } catch (e) { console.error('Auth init', e); showAuthScreen(); }
+  } catch (e) {
+    if (e.code === 'permission-denied') {
+      // Firestore rules not configured yet — show helpful message
+      document.getElementById('auth-screen').classList.remove('hidden');
+      const errEl = document.getElementById('login-error');
+      errEl.innerHTML = '⚠️ Firestore rules not set. Go to <b>Firebase Console → Firestore → Rules</b> and paste the rules shown below, then refresh.<br><br><code style="font-size:.75rem;display:block;margin-top:.4rem;background:#f5f5f5;padding:.5rem;border-radius:4px;text-align:left">allow read, write: if request.auth != null;</code>';
+      errEl.classList.add('show');
+    } else {
+      console.error('Auth init', e);
+    }
+  }
 });
 
 function showAuthScreen() { document.getElementById('auth-screen').classList.remove('hidden'); }
