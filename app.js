@@ -28,6 +28,7 @@ const AppState = {
   callingData: [],
   fromAttendance: false,
   attendanceCandidates: {},
+  sessionsCache: {},     // sessionId → session object
   // Auth
   userRole: null,       // 'superAdmin' | 'teamAdmin' | 'serviceDevotee'
   userTeam: null,       // team name for coordinators
@@ -85,7 +86,7 @@ function switchAuthTab(tab, btn) {
   document.getElementById('signup-form').classList.toggle('hidden', tab !== 'signup');
 }
 
-// Show team field when coordinator is selected
+// Wire up auth forms and team-field toggle
 document.addEventListener('DOMContentLoaded', () => {
   const roleSelect = document.getElementById('signup-role');
   if (roleSelect) {
@@ -93,6 +94,9 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('signup-team-field').style.display = roleSelect.value === 'teamAdmin' ? 'flex' : 'none';
     });
   }
+  // Ensure login/signup forms fire correctly even if inline onsubmit is blocked
+  document.getElementById('login-form')?.addEventListener('submit', doLogin);
+  document.getElementById('signup-form')?.addEventListener('submit', doSignup);
 });
 
 async function doLogin(e) {
@@ -154,7 +158,14 @@ function applyRoleUI() {
   pill.style.background = role === 'superAdmin' ? 'rgba(201,168,76,.5)' : role === 'teamAdmin' ? 'rgba(82,183,136,.4)' : 'rgba(255,255,255,.2)';
 
   // Admin gear
-  if (role === 'superAdmin') document.getElementById('admin-gear-btn').classList.remove('hidden');
+  if (role === 'superAdmin') {
+    document.getElementById('admin-gear-btn').classList.remove('hidden');
+    document.getElementById('clear-data-btn').classList.remove('hidden');
+  }
+  // Super-admin-only elements
+  document.querySelectorAll('.super-admin-only').forEach(el => {
+    if (role !== 'superAdmin') el.style.display = 'none';
+  });
 
   // Tab visibility
   const tabs = {
@@ -230,6 +241,124 @@ async function updateUserRole(uid, role, teamName) {
   } catch (_) { showToast('Update failed', 'error'); }
 }
 
+// ── CLEAR DATA ────────────────────────────────────────
+async function openClearDataModal() {
+  // Populate team dropdown from known teams
+  const sel = document.getElementById('clear-team-select');
+  sel.innerHTML = '<option value="">-- Select Team --</option>';
+  const teams = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata'];
+  teams.forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t; sel.appendChild(o); });
+  // Also load from existing devotees
+  try {
+    const all = await DevoteeCache.all();
+    const dbTeams = [...new Set(all.map(d => d.teamName).filter(Boolean))].sort();
+    dbTeams.forEach(t => { if (!teams.includes(t)) { const o = document.createElement('option'); o.value = t; o.textContent = t; sel.appendChild(o); } });
+  } catch (_) {}
+  // Default dates to upcoming Sunday
+  const sun = getUpcomingSunday();
+  document.getElementById('clear-date-input').value = sun;
+  document.getElementById('clear-team-date-input').value = sun;
+  document.getElementById('clear-all-confirm').value = '';
+  openModal('clear-data-modal');
+}
+
+async function clearDataForDate() {
+  const date = document.getElementById('clear-date-input').value;
+  if (!date) return showToast('Please select a date', 'error');
+  if (!confirm(`Delete ALL attendance records for ${formatDate(date)}?\n\nThis cannot be undone.`)) return;
+  try {
+    showToast('Clearing…');
+    // Find session for this date
+    const sessSnap = await fdb.collection('sessions').where('sessionDate', '==', date).get();
+    if (sessSnap.empty) return showToast('No session found for this date', 'error');
+    const sessionId = sessSnap.docs[0].id;
+    // Delete all attendance records for this session
+    const attSnap = await fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get();
+    const batches = chunkArray(attSnap.docs, 400);
+    for (const chunk of batches) {
+      const b = fdb.batch();
+      chunk.forEach(d => { b.delete(d.ref); });
+      await b.commit();
+    }
+    // Also delete calling status records for this date
+    const csSnap = await fdb.collection('callingStatus').where('weekDate', '==', date).get();
+    const csBatches = chunkArray(csSnap.docs, 400);
+    for (const chunk of csBatches) {
+      const b = fdb.batch();
+      chunk.forEach(d => { b.delete(d.ref); });
+      await b.commit();
+    }
+    // Reset lifetimeAttendance for affected devotees
+    const devoteeIds = [...new Set(attSnap.docs.map(d => d.data().devoteeId))];
+    const dbatches = chunkArray(devoteeIds, 400);
+    for (const chunk of dbatches) {
+      const b = fdb.batch();
+      chunk.forEach(id => b.update(fdb.collection('devotees').doc(id), { lifetimeAttendance: INC(-1) }));
+      await b.commit();
+    }
+    DevoteeCache.bust();
+    showToast(`Cleared ${attSnap.size} records for ${formatDate(date)}`, 'success');
+    loadAttendanceCandidates?.(); updateAttendanceStats?.();
+  } catch (e) { showToast('Error: ' + e.message, 'error'); console.error(e); }
+}
+
+async function clearDataForTeamDate() {
+  const date = document.getElementById('clear-team-date-input').value;
+  const team = document.getElementById('clear-team-select').value;
+  if (!date) return showToast('Please select a date', 'error');
+  if (!team) return showToast('Please select a team', 'error');
+  if (!confirm(`Delete attendance records for team "${team}" on ${formatDate(date)}?\n\nThis cannot be undone.`)) return;
+  try {
+    showToast('Clearing…');
+    const sessSnap = await fdb.collection('sessions').where('sessionDate', '==', date).get();
+    if (sessSnap.empty) return showToast('No session found for this date', 'error');
+    const sessionId = sessSnap.docs[0].id;
+    const attSnap = await fdb.collection('attendanceRecords')
+      .where('sessionId', '==', sessionId)
+      .where('teamName', '==', team).get();
+    if (attSnap.empty) return showToast(`No records found for ${team} on ${formatDate(date)}`, 'error');
+    const b = fdb.batch();
+    attSnap.docs.forEach(d => b.delete(d.ref));
+    await b.commit();
+    // Decrement lifetimeAttendance
+    const b2 = fdb.batch();
+    attSnap.docs.forEach(d => b2.update(fdb.collection('devotees').doc(d.data().devoteeId), { lifetimeAttendance: INC(-1) }));
+    await b2.commit();
+    DevoteeCache.bust();
+    showToast(`Cleared ${attSnap.size} records for ${team} on ${formatDate(date)}`, 'success');
+    loadAttendanceCandidates?.(); updateAttendanceStats?.();
+  } catch (e) { showToast('Error: ' + e.message, 'error'); console.error(e); }
+}
+
+async function clearAllData() {
+  const confirm1 = document.getElementById('clear-all-confirm').value.trim();
+  if (confirm1 !== 'DELETE ALL') return showToast('Type "DELETE ALL" exactly to confirm', 'error');
+  if (!confirm('FINAL WARNING: This will permanently delete ALL devotees, sessions, attendance, and calling records.\n\nAre you absolutely sure?')) return;
+  try {
+    closeModal('clear-data-modal');
+    showToast('Erasing all data…');
+    const collections = ['devotees','sessions','attendanceRecords','callingStatus','events','profileChanges'];
+    for (const col of collections) {
+      let snap = await fdb.collection(col).limit(400).get();
+      while (!snap.empty) {
+        const b = fdb.batch();
+        snap.docs.forEach(d => b.delete(d.ref));
+        await b.commit();
+        snap = await fdb.collection(col).limit(400).get();
+      }
+    }
+    DevoteeCache.bust();
+    showToast('All data erased. Reloading…', 'success');
+    setTimeout(() => location.reload(), 2000);
+  } catch (e) { showToast('Error: ' + e.message, 'error'); console.error(e); }
+}
+
+function chunkArray(arr, size) {
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
+
 // ── NORMALISERS ───────────────────────────────────────
 function tsToISO(ts) {
   if (!ts) return null;
@@ -263,24 +392,43 @@ function toSnake(d) {
     coming_status:       d.comingStatus  || null,
     calling_notes:       d.callingNotes  || null,
     attendance_id:       d.attendanceId  || null,
+    // Personal details
+    education:           d.education || null,
+    email:               d.email || null,
+    profession:          d.profession || null,
+    family_favourable:   d.familyFavourable || null,
+    reading:             d.reading || null,
+    hearing:             d.hearing || null,
+    hobbies:             d.hobbies || null,
+    skills:              d.skills || null,
+    tilak:               d.tilak || 0,
   };
 }
 
 function toCamel(f) {
   return {
-    name:           (f.name || '').trim(),
-    mobile:         (f.mobile || '').trim() || null,
-    address:        (f.address || '').trim() || null,
-    dob:            f.dob || null,
-    dateOfJoining:  f.date_of_joining || null,
-    chantingRounds: parseInt(f.chanting_rounds) || 0,
-    kanthi:         parseInt(f.kanthi) || 0,
-    gopiDress:      parseInt(f.gopi_dress) || 0,
-    teamName:       f.team_name || null,
-    devoteeStatus:  f.devotee_status || 'Expected to be Serious',
-    facilitator:    (f.facilitator || '').trim() || null,
-    referenceBy:    (f.reference_by || '').trim() || null,
-    callingBy:      (f.calling_by || '').trim() || null,
+    name:              (f.name || '').trim(),
+    mobile:            (f.mobile || '').trim() || null,
+    address:           (f.address || '').trim() || null,
+    dob:               f.dob || null,
+    dateOfJoining:     f.date_of_joining || null,
+    chantingRounds:    parseInt(f.chanting_rounds) || 0,
+    kanthi:            parseInt(f.kanthi) || 0,
+    gopiDress:         parseInt(f.gopi_dress) || 0,
+    teamName:          f.team_name || null,
+    devoteeStatus:     f.devotee_status || 'Expected to be Serious',
+    facilitator:       (f.facilitator || '').trim() || null,
+    referenceBy:       (f.reference_by || '').trim() || null,
+    callingBy:         (f.calling_by || '').trim() || null,
+    education:         (f.education || '').trim() || null,
+    email:             (f.email || '').trim() || null,
+    profession:        (f.profession || '').trim() || null,
+    familyFavourable:  f.family_favourable || null,
+    reading:           f.reading || null,
+    hearing:           f.hearing || null,
+    hobbies:           (f.hobbies || '').trim() || null,
+    skills:            (f.skills || '').trim() || null,
+    tilak:             parseInt(f.tilak) || 0,
   };
 }
 
@@ -385,56 +533,138 @@ const DB = {
     }).sort((a, b) => (b.changed_at || '').localeCompare(a.changed_at || ''));
   },
 
-  async importDevotees(rows) {
-    let imported = 0, skipped = 0, errors = [];
+  async importDevotees(rows, mode = 'add') {
+    let imported = 0, updated = 0, skipped = 0, errors = [];
     const list = await DevoteeCache.all();
-    const existingMobiles = new Set(list.map(d => d.mobile).filter(Boolean));
+    const mobileMap = {}; // mobile → docId
+    const nameMap  = {}; // lower name → docId (fallback)
+    list.forEach(d => {
+      if (d.mobile) mobileMap[d.mobile] = d.id;
+      nameMap[d.name.toLowerCase()] = d.id;
+    });
+
     for (let ci = 0; ci < rows.length; ci += 400) {
       const chunk = rows.slice(ci, ci + 400);
       const batch = fdb.batch(); let any = false;
       chunk.forEach((row, i) => {
         try {
-          const name   = (row.Name || row.name || '').toString().trim();
-          const mobile = (row.Mobile || row.mobile || row.Phone || '').toString().trim();
+          const name   = importCol(row, ['Name','name','Full Name','Devotee Name','NAAM']).trim();
+          const mobile = importCol(row, ['Mobile','Contact','Phone','Mobile Number','Mobile (10 digits)','Contact Number','Mob','Ph No','Ph.No','mob no','contact']).replace(/\D/g,'').slice(0,10);
           if (!name) { skipped++; return; }
-          if (mobile && existingMobiles.has(mobile)) { skipped++; return; }
-          batch.set(fdb.collection('devotees').doc(), {
-            name, mobile: mobile || null,
-            address: (row.Address || '').toString() || null,
-            dob: (row.DOB || row['Date of Birth'] || '').toString() || null,
-            dateOfJoining: (row['Date of Joining'] || '').toString() || null,
-            chantingRounds: parseInt(row['Chanting Rounds'] || 0) || 0,
-            kanthi: row.Kanthi === 'Yes' ? 1 : 0,
-            gopiDress: row['Gopi Dress'] === 'Yes' ? 1 : 0,
-            teamName: (row.Team || '').toString() || null,
-            devoteeStatus: (row.Status || 'Expected to be Serious').toString(),
-            facilitator: (row.Facilitator || '').toString() || null,
-            referenceBy: (row.Reference || '').toString() || null,
-            callingBy: (row['Calling By'] || '').toString() || null,
-            lifetimeAttendance: 0, isActive: true, inactivityFlag: false, createdAt: TS(), updatedAt: TS()
-          });
-          if (mobile) existingMobiles.add(mobile);
-          imported++; any = true;
+
+          const payload = {
+            name,
+            mobile:           mobile || null,
+            address:          importCol(row, ['Address','address','Addr','ADDRESS']) || null,
+            dob:              importDate(importCol(row, ['DOB','D.O.B','Date of Birth','Birth Date','dob','D.O.B.','DOB (DD/MM/YYYY)'])) || null,
+            dateOfJoining:    importDate(importCol(row, ['Date of Joining','Date Of Joining','Joining Date','DOJ','Date of joining'])) || null,
+            chantingRounds:   Math.abs(parseInt(importCol(row, ['Chanting Rounds','CHANTING','Chanting','CR','chanting','Rounds','rounds','chanting rounds'])) || 0),
+            kanthi:           importYN(importCol(row, ['Kanthi','kanthi','KANTHI'])),
+            gopiDress:        importYN(importCol(row, ['Gopi Dress','Gopi','GOPI','gopi dress','Gopi dress'])),
+            tilak:            importYN(importCol(row, ['Tilak','tilak','TILAK'])),
+            teamName:         importCol(row, ['Team','Team Wise','Team Name','TEAM','Group','team','Team wise','Teamwise']) || null,
+            devoteeStatus:    importStatus(importCol(row, ['Status','Devotee Status','Dev Status','status','ETS','devotee status'])),
+            facilitator:      importCol(row, ['Facilitator','facilitator','Faciltr']) || null,
+            referenceBy:      importCol(row, ['Reference','Ref','Reference By','Referred By','Ref-2','ref','Ref 2','reference']) || null,
+            callingBy:        importCol(row, ['Calling By','Called By','Caller','Calling by','calling by','CallingBy']) || null,
+            education:        importCol(row, ['Education','education','EDUCATION']) || null,
+            email:            importCol(row, ['Email','E-Mail','email','E Mail','e-mail','EMAIL']) || null,
+            profession:       importCol(row, ['Profession','Occupation','profession','PROFESSION']) || null,
+            familyFavourable: importCol(row, ['Family Favourable','Family Favorable','Family','family favourable','Family Favourable?']) || null,
+            reading:          importCol(row, ['Reading','reading','READING']) || null,
+            hearing:          importCol(row, ['Hearing','hearing','HEARING']) || null,
+            hobbies:          importCol(row, ['Hobbies','hobbies','Hobby','HOBBIES']) || null,
+            skills:           importCol(row, ['Skills','skills','Skill','SKILLS']) || null,
+            isActive: true, inactivityFlag: false, updatedAt: TS(),
+          };
+
+          // Determine existing doc
+          const existingId = (mobile && mobileMap[mobile]) || (mode === 'upsert' && nameMap[name.toLowerCase()]) || null;
+
+          if (mode === 'upsert' && existingId) {
+            batch.update(fdb.collection('devotees').doc(existingId), payload);
+            updated++; any = true;
+          } else if (existingId) {
+            skipped++; // add-only mode
+          } else {
+            batch.set(fdb.collection('devotees').doc(), { ...payload, lifetimeAttendance: 0, createdAt: TS() });
+            if (mobile) mobileMap[mobile] = 'new';
+            nameMap[name.toLowerCase()] = 'new';
+            imported++; any = true;
+          }
         } catch (e) { errors.push(`Row ${ci + i + 2}: ${e.message}`); }
       });
       if (any) await batch.commit();
     }
     DevoteeCache.bust();
-    return { imported, skipped, errors };
+    return { imported, updated, skipped, errors };
   },
 
   /* SESSIONS */
   async getTodaySession() {
-    const today = getToday();
-    const snap = await fdb.collection('sessions').where('sessionDate', '==', today).limit(1).get();
-    if (!snap.empty) return { id: snap.docs[0].id, session_date: today };
-    const ref = await fdb.collection('sessions').add({ sessionDate: today, createdAt: TS() });
-    return { id: ref.id, session_date: today };
+    const sunday = getUpcomingSunday();
+    const snap = await fdb.collection('sessions').where('sessionDate', '==', sunday).limit(1).get();
+    if (!snap.empty) return { id: snap.docs[0].id, session_date: sunday };
+    const ref = await fdb.collection('sessions').add({ sessionDate: sunday, createdAt: TS() });
+    return { id: ref.id, session_date: sunday };
+  },
+
+  async getOrCreateSession(dateStr) {
+    const snap = await fdb.collection('sessions').where('sessionDate', '==', dateStr).limit(1).get();
+    if (!snap.empty) return { id: snap.docs[0].id, session_date: dateStr };
+    const ref = await fdb.collection('sessions').add({ sessionDate: dateStr, createdAt: TS() });
+    return { id: ref.id, session_date: dateStr };
   },
 
   async getSessions() {
-    const snap = await fdb.collection('sessions').orderBy('sessionDate', 'desc').limit(30).get();
-    return snap.docs.map(d => ({ id: d.id, session_date: d.data().sessionDate }));
+    const snap = await fdb.collection('sessions').orderBy('sessionDate', 'desc').limit(52).get();
+    return snap.docs.map(d => ({
+      id: d.id,
+      session_date: d.data().sessionDate,
+      topic: d.data().topic || '',
+      is_cancelled: d.data().isCancelled || false,
+    }));
+  },
+
+  async configureSunday(sessionId, { topic, isCancelled }) {
+    await fdb.collection('sessions').doc(sessionId).update({ topic: topic || '', isCancelled: !!isCancelled, updatedAt: TS() });
+  },
+
+  async getSheetData(yearStart, yearEnd) {
+    const snap = await fdb.collection('sessions')
+      .where('sessionDate', '>=', yearStart)
+      .where('sessionDate', '<=', yearEnd)
+      .orderBy('sessionDate', 'asc').get();
+    const sessions = snap.docs.map(d => ({
+      id: d.id, sessionDate: d.data().sessionDate,
+      topic: d.data().topic || '', isCancelled: d.data().isCancelled || false,
+    }));
+    if (!sessions.length) return { sessions: [], devotees: [], attMap: {}, csMap: {} };
+    const devotees = await DevoteeCache.all();
+    const sessionIds = sessions.map(s => s.id);
+    const weekDates  = sessions.map(s => s.sessionDate);
+    const attMap = {}, csMap = {};
+    // Attendance in batches of 10
+    for (let i = 0; i < sessionIds.length; i += 10) {
+      const batch = sessionIds.slice(i, i + 10);
+      const aSnap = await fdb.collection('attendanceRecords').where('sessionId', 'in', batch).get();
+      aSnap.docs.forEach(d => {
+        const { sessionId: sid, devoteeId: did } = d.data();
+        if (!attMap[sid]) attMap[sid] = new Set();
+        attMap[sid].add(did);
+      });
+    }
+    // Calling status in batches of 10
+    for (let i = 0; i < weekDates.length; i += 10) {
+      const batch = weekDates.slice(i, i + 10);
+      const cSnap = await fdb.collection('callingStatus').where('weekDate', 'in', batch).get();
+      cSnap.docs.forEach(d => {
+        const { weekDate, devoteeId: did, comingStatus } = d.data();
+        if (!csMap[weekDate]) csMap[weekDate] = {};
+        csMap[weekDate][did] = comingStatus;
+      });
+    }
+    return { sessions, devotees, attMap, csMap };
   },
 
   async getSessionStats(sessionId) {
@@ -698,6 +928,59 @@ const DB = {
   },
 };
 
+// ── IMPORT HELPERS ────────────────────────────────────
+function importCol(row, aliases) {
+  for (const alias of aliases) {
+    const key = Object.keys(row).find(k => k.toString().trim().toLowerCase() === alias.toLowerCase());
+    if (key !== undefined && row[key] !== undefined && row[key] !== null) {
+      const v = row[key].toString().trim();
+      if (v) return v;
+    }
+  }
+  return '';
+}
+
+function importDate(val) {
+  if (!val) return null;
+  const s = val.toString().trim();
+  if (!s || s === '0') return null;
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // Excel serial number (e.g. 36839)
+  if (/^\d{5}(\.\d+)?$/.test(s)) {
+    const d = new Date(Math.round((parseFloat(s) - 25569) * 86400 * 1000));
+    if (!isNaN(d)) return d.toISOString().split('T')[0];
+  }
+  // DD/MM/YYYY
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) {
+    const [d, m, y] = s.split('/');
+    return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+  // MM/DD/YYYY (US format)
+  if (/^\d{1,2}\/\d{1,2}\/\d{2}$/.test(s)) {
+    const [m, d, y] = s.split('/');
+    return `20${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+  // DD-MM-YYYY
+  if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(s)) {
+    const [d, m, y] = s.split('-');
+    return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+  return s;
+}
+
+function importYN(val) {
+  return ['yes','y','1','true','हाँ','ha'].includes((val || '').toLowerCase()) ? 1 : 0;
+}
+
+function importStatus(val) {
+  const v = (val || '').toLowerCase().trim();
+  if (v === 'ets' || v.includes('expected')) return 'Expected to be Serious';
+  if (v === 'ms' || v.includes('most')) return 'Most Serious';
+  if (v === 's' || v === 'serious') return 'Serious';
+  return val || 'Expected to be Serious';
+}
+
 // ── EXCEL HELPER ──────────────────────────────────────
 function downloadExcel(rows, filename) {
   const ws = XLSX.utils.json_to_sheet(rows);
@@ -714,6 +997,19 @@ function getCurrentSunday() {
   const now = new Date(), day = now.getDay();
   const sun = new Date(now); sun.setDate(now.getDate() - day);
   return sun.toISOString().split('T')[0];
+}
+function getUpcomingSunday() {
+  const now = new Date(), day = now.getDay(); // 0=Sun
+  const daysUntilSunday = day === 0 ? 0 : 7 - day;
+  const sun = new Date(now); sun.setDate(now.getDate() + daysUntilSunday);
+  return sun.toISOString().split('T')[0];
+}
+function snapToSunday(dateStr) {
+  // Given a YYYY-MM-DD, return the nearest Sunday (same day if already Sunday, else next Sunday)
+  const d = new Date(dateStr + 'T00:00:00'), day = d.getDay();
+  if (day === 0) return dateStr;
+  d.setDate(d.getDate() + (7 - day));
+  return d.toISOString().split('T')[0];
 }
 function initials(name = '') { return name.split(' ').slice(0, 2).map(w => w[0]?.toUpperCase() || '').join(''); }
 function formatDate(iso) {
@@ -787,6 +1083,7 @@ async function initApp() {
   loadBirthdays();
   document.getElementById('report-date').value = getToday();
   initAllPickers();
+  initSheetYearSelector();
 }
 
 // ── MOBILE VALIDATION ─────────────────────────────────
@@ -872,22 +1169,65 @@ async function initSession() {
   try {
     const session = await DB.getTodaySession();
     AppState.currentSessionId = session.id;
+    const picker = document.getElementById('session-date-picker');
+    if (picker) picker.value = session.session_date;
     await loadSessionSelector();
+    loadAttendanceSession(session.id);
   } catch (e) { console.error('Session init', e); }
 }
 
 async function loadSessionSelector() {
-  const sel = document.getElementById('session-selector');
   try {
     const sessions = await DB.getSessions();
-    sel.innerHTML = '<option value="">-- Select Date --</option>';
-    sessions.forEach(s => {
-      const opt = document.createElement('option');
-      opt.value = s.id; opt.textContent = formatDate(s.session_date);
-      if (s.id === AppState.currentSessionId) opt.selected = true;
-      sel.appendChild(opt);
-    });
+    AppState.sessionsCache = {};
+    sessions.forEach(s => { AppState.sessionsCache[s.id] = s; });
+
+    // Sync date picker to current session date
+    const picker = document.getElementById('session-date-picker');
+    const currentSession = AppState.sessionsCache[AppState.currentSessionId];
+    if (picker && currentSession) picker.value = currentSession.session_date;
+
+    if (AppState.currentSessionId) showSessionInfo(AppState.currentSessionId);
   } catch (_) {}
+}
+
+async function loadSessionByDate(dateStr) {
+  if (!dateStr) return;
+  // Snap to Sunday — sessions are always on Sundays
+  const sunday = snapToSunday(dateStr);
+  if (sunday !== dateStr) {
+    showToast(`Snapped to Sunday: ${formatDate(sunday)}`, 'info');
+    const picker = document.getElementById('session-date-picker');
+    if (picker) picker.value = sunday;
+  }
+  try {
+    const session = await DB.getOrCreateSession(sunday);
+    AppState.currentSessionId = session.id;
+    // Cache it
+    AppState.sessionsCache[session.id] = AppState.sessionsCache[session.id] || {
+      id: session.id, session_date: sunday, topic: '', is_cancelled: false
+    };
+    showSessionInfo(session.id);
+    loadAttendanceSession(session.id);
+  } catch (e) { showToast('Could not load session', 'error'); console.error(e); }
+}
+
+function showSessionInfo(sessionId) {
+  const s = AppState.sessionsCache?.[sessionId];
+  const banner = document.getElementById('session-cancelled-banner');
+  const topicBar = document.getElementById('session-topic-bar');
+  if (!banner || !topicBar) return;
+  if (s?.is_cancelled) {
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
+  if (s?.topic && !s.is_cancelled) {
+    document.getElementById('session-topic-text').textContent = s.topic;
+    topicBar.classList.remove('hidden');
+  } else {
+    topicBar.classList.add('hidden');
+  }
 }
 
 async function loadCallingPersonsFilter() {
@@ -950,28 +1290,704 @@ async function exportAttendance() {
   } catch (_) { showToast('Export failed', 'error'); }
 }
 
+// ── ATTENDANCE SUB-TAB ────────────────────────────────
+function switchAttTab(tab, btn) {
+  document.querySelectorAll('.att-sub-tab').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.att-sub-panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('att-panel-' + tab).classList.add('active');
+  if (tab === 'sheet') loadAttendanceSheet();
+}
+
+// ── SUNDAY CONFIG ─────────────────────────────────────
+function openSundayConfig() {
+  if (!AppState.currentSessionId) return showToast('Select a session first', 'error');
+  const s = AppState.sessionsCache?.[AppState.currentSessionId];
+  document.getElementById('config-session-date').value = s ? formatDate(s.session_date) : '';
+  document.getElementById('config-topic').value = s?.topic || '';
+  document.getElementById('config-cancelled').checked = s?.is_cancelled || false;
+  openModal('sunday-config-modal');
+}
+
+async function saveSundayConfig() {
+  if (!AppState.currentSessionId) return;
+  const topic     = document.getElementById('config-topic').value.trim();
+  const cancelled = document.getElementById('config-cancelled').checked;
+  try {
+    await DB.configureSunday(AppState.currentSessionId, { topic, isCancelled: cancelled });
+    showToast('Sunday class configured!', 'success');
+    closeModal('sunday-config-modal');
+    await loadSessionSelector();
+  } catch (_) { showToast('Save failed', 'error'); }
+}
+
+// ── ATTENDANCE SHEET ──────────────────────────────────
+function getFYYears() {
+  const now = new Date();
+  const m = now.getMonth() + 1;
+  const y = now.getFullYear();
+  const fyStart = m >= 4 ? y : y - 1;
+  const years = [];
+  for (let i = 0; i <= 3; i++) {
+    const s = fyStart - i;
+    years.push({ label: `FY ${s}-${String(s + 1).slice(-2)}`, start: `${s}-04-01`, end: `${s + 1}-03-31` });
+  }
+  return years;
+}
+
+function initSheetYearSelector() {
+  const sel = document.getElementById('sheet-year');
+  if (!sel || sel.options.length > 0) return;
+  getFYYears().forEach((y, i) => {
+    const opt = document.createElement('option');
+    opt.value = JSON.stringify({ start: y.start, end: y.end });
+    opt.textContent = y.label;
+    if (i === 0) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+async function loadAttendanceSheet() {
+  initSheetYearSelector();
+  const wrap = document.getElementById('attendance-sheet-wrap');
+  const yearVal = document.getElementById('sheet-year').value;
+  const teamFilter = document.getElementById('sheet-team').value;
+  if (!yearVal) return;
+  const { start, end } = JSON.parse(yearVal);
+  wrap.innerHTML = '<div class="loading" style="padding:2rem"><i class="fas fa-spinner"></i> Loading attendance data…</div>';
+  try {
+    const { sessions, devotees, attMap, csMap } = await DB.getSheetData(start, end);
+    if (!sessions.length) {
+      wrap.innerHTML = '<div class="empty-state"><i class="fas fa-table"></i><p>No sessions found for this year</p></div>';
+      return;
+    }
+    wrap.innerHTML = buildSheetTable(devotees, sessions, attMap, csMap, teamFilter);
+  } catch (e) {
+    console.error('Sheet error', e);
+    wrap.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load sheet data</p></div>';
+  }
+}
+
+function buildSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
+  let rows = [...devotees];
+  if (teamFilter) rows = rows.filter(d => d.teamName === teamFilter);
+  rows.sort((a, b) => (a.teamName || '').localeCompare(b.teamName || '') || a.name.localeCompare(b.name));
+
+  // Header row 1
+  let h1 = `<th rowspan="2" class="sh-header sh-sno">Sno</th>
+    <th rowspan="2" class="sh-header" style="min-width:120px">Name</th>
+    <th rowspan="2" class="sh-header">Mobile</th>
+    <th rowspan="2" class="sh-header">Reference</th>
+    <th rowspan="2" class="sh-header">CR</th>
+    <th rowspan="2" class="sh-header">Active</th>
+    <th rowspan="2" class="sh-header">Team</th>
+    <th rowspan="2" class="sh-header">Calling By</th>`;
+  sessions.forEach(s => {
+    const cls = s.isCancelled ? 'sh-header sh-cancelled' : 'sh-header';
+    const dateLabel = sheetFmtDate(s.sessionDate);
+    const topicLine = s.topic ? `<small>${s.topic.length > 18 ? s.topic.slice(0, 18) + '…' : s.topic}</small>` : '';
+    const cancelLine = s.isCancelled ? `<small>CANCELLED</small>` : '';
+    h1 += `<th colspan="2" class="${cls}">${dateLabel}${topicLine}${cancelLine}</th>`;
+  });
+  h1 += `<th rowspan="2" class="sh-header sh-total">TOTAL</th>`;
+
+  // Header row 2 — CS / AT sub-cols
+  let h2 = '';
+  sessions.forEach(s => {
+    const sat = sheetFmtShort(shiftDateDay(s.sessionDate, -1));
+    const sun = sheetFmtShort(s.sessionDate);
+    h2 += `<th class="sh-sub-header">CS<small>${sat}</small></th><th class="sh-sub-header">AT<small>${sun}</small></th>`;
+  });
+
+  // Body rows
+  const bodyRows = rows.map((d, i) => {
+    const isActive = d.isActive !== false;
+    const rowBg = isActive ? 'background:#fffde7' : 'background:#ffebee';
+    let cells = `<td class="sh-cell sh-center sh-sno">${i + 1}</td>
+      <td class="sh-cell sh-name">${d.name}</td>
+      <td class="sh-cell sh-center">${d.mobile || '—'}</td>
+      <td class="sh-cell">${d.referenceBy || ''}</td>
+      <td class="sh-cell sh-center">${d.chantingRounds || 0}</td>
+      <td class="sh-cell sh-center">${isActive ? '<span class="sh-active">Active</span>' : ''}</td>
+      <td class="sh-cell">${d.teamName || ''}</td>
+      <td class="sh-cell">${d.callingBy || ''}</td>`;
+    sessions.forEach(s => {
+      if (s.isCancelled) {
+        cells += `<td colspan="2" class="sh-cell sh-cancelled-cell sh-center">—</td>`;
+      } else {
+        const cs = csMap[s.sessionDate]?.[d.id] || null;
+        const at = attMap[s.id]?.has(d.id) || false;
+        cells += `<td class="sh-cell sh-center" style="${csColor(cs)}">${csLabel(cs)}</td>`;
+        cells += `<td class="sh-cell sh-center" style="${at ? 'background:#a5d6a7;font-weight:700' : ''}">${at ? 'P' : ''}</td>`;
+      }
+    });
+    const total = d.lifetimeAttendance || 0;
+    const totalBg = total >= 30 ? 'background:#b2ebf2;font-weight:700' : total >= 15 ? 'background:#c8e6c9;font-weight:600' : total >= 5 ? 'background:#fff9c4' : '';
+    cells += `<td class="sh-cell sh-center" style="${totalBg}">${total}</td>`;
+    return `<tr style="${rowBg}">${cells}</tr>`;
+  }).join('');
+
+  return `<table class="attendance-sheet-table">
+    <thead><tr>${h1}</tr><tr>${h2}</tr></thead>
+    <tbody>${bodyRows}</tbody>
+  </table>`;
+}
+
+function shiftDateDay(dateStr, days) {
+  const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+function sheetFmtDate(dateStr) {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-');
+  return `${d} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m - 1]} ${y.slice(-2)}`;
+}
+function sheetFmtShort(dateStr) {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-');
+  return `${d}.${m}.${y.slice(-2)}`;
+}
+function csLabel(status) {
+  return { Yes: 'Coming', No: 'No', Maybe: 'Maybe', Shifted: 'Shifted', 'Not Interested': 'N/I' }[status] || '';
+}
+function csColor(status) {
+  if (!status) return '';
+  if (status === 'Yes')             return 'background:#c8e6c9';
+  if (status === 'Maybe')           return 'background:#fff9c4';
+  if (status === 'No')              return 'background:#ffcdd2';
+  if (status === 'Shifted')         return 'background:#ffe0b2';
+  if (status === 'Not Interested')  return 'background:#ffccbc';
+  return '';
+}
+
+async function exportSheetExcel() {
+  initSheetYearSelector();
+  const yearVal = document.getElementById('sheet-year').value;
+  const teamFilter = document.getElementById('sheet-team').value;
+  if (!yearVal) return showToast('Select a year first', 'error');
+  const { start, end } = JSON.parse(yearVal);
+  showToast('Preparing Excel…');
+  try {
+    const { sessions, devotees, attMap, csMap } = await DB.getSheetData(start, end);
+    let rows = [...devotees];
+    if (teamFilter) rows = rows.filter(d => d.teamName === teamFilter);
+    rows.sort((a, b) => (a.teamName || '').localeCompare(b.teamName || '') || a.name.localeCompare(b.name));
+
+    // Build header rows
+    const fixedHdrs = ['Sno', 'Name', 'Mobile', 'Reference', 'CR', 'Active', 'Team', 'Calling By'];
+    const headerRow1 = [...fixedHdrs];
+    const headerRow2 = [...fixedHdrs.map(() => '')];
+    sessions.forEach(s => {
+      const label = sheetFmtDate(s.sessionDate) + (s.isCancelled ? ' [CANCELLED]' : '') + (s.topic ? ` – ${s.topic}` : '');
+      headerRow1.push(label, '');
+      headerRow2.push(`CS (${sheetFmtShort(shiftDateDay(s.sessionDate, -1))})`, `AT (${sheetFmtShort(s.sessionDate)})`);
+    });
+    headerRow1.push('TOTAL'); headerRow2.push('');
+
+    const dataRows = rows.map((d, i) => {
+      const base = [i + 1, d.name, d.mobile || '', d.referenceBy || '', d.chantingRounds || 0, d.isActive !== false ? 'Active' : '', d.teamName || '', d.callingBy || ''];
+      sessions.forEach(s => {
+        if (s.isCancelled) { base.push('—', '—'); return; }
+        base.push(csLabel(csMap[s.sessionDate]?.[d.id] || null), attMap[s.id]?.has(d.id) ? 'P' : '');
+      });
+      base.push(d.lifetimeAttendance || 0);
+      return base;
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet([headerRow1, headerRow2, ...dataRows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Attendance Sheet');
+    const yearLabel = JSON.parse(yearVal).start.slice(0, 4);
+    XLSX.writeFile(wb, `attendance_sheet_${yearLabel}.xlsx`);
+    showToast('Excel downloaded!', 'success');
+  } catch (e) { console.error(e); showToast('Export failed', 'error'); }
+}
+
+async function exportDevoteeDatabase() {
+  showToast('Building database export…');
+  try {
+    const allDevotees = await DevoteeCache.all();
+    const teams = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata'];
+
+    const levels = [
+      { label: 'Level 1 – (0–4 Rounds)  Well Wishers  (Yet to start chanting)', min: 0, max: 4 },
+      { label: 'Level 2 – (5–8 Rounds)  Beginners  (Starting their journey)', min: 5, max: 8 },
+      { label: 'Level 3 – (9–15 Rounds)  Advancing  (Growing in practice)', min: 9, max: 15 },
+      { label: 'Level 4 – (16+ Rounds)  Committed Chanters  (Steady practitioners)', min: 16, max: 999 },
+    ];
+
+    const cols = [
+      'Sr. No.', 'Name', 'Contact', 'Date of Joining', 'D.O.B',
+      'Devotee Status', 'Address', 'E-Mail', 'Education', 'Profession',
+      'Facilitator', 'Chanting', 'Family Favourable',
+      'Hobbies', 'Skills', 'Reading', 'Hearing',
+      'Gopi Dress', 'Tilak', 'Kanthi',
+    ];
+
+    const wb = XLSX.utils.book_new();
+
+    teams.forEach(team => {
+      const teamDevotees = allDevotees.filter(d => d.teamName === team && d.isActive !== false);
+      if (!teamDevotees.length) return;
+
+      const aoa = []; // array of arrays for this sheet
+      const merges = [];
+      let rowIdx = 0;
+
+      levels.forEach(lvl => {
+        const members = teamDevotees.filter(d => {
+          const cr = d.chantingRounds || 0;
+          return cr >= lvl.min && cr <= lvl.max;
+        });
+
+        // Level header (merged across all cols)
+        aoa.push([lvl.label, ...Array(cols.length - 1).fill('')]);
+        merges.push({ s: { r: rowIdx, c: 0 }, e: { r: rowIdx, c: cols.length - 1 } });
+        rowIdx++;
+
+        // Column headers
+        aoa.push([...cols]);
+        rowIdx++;
+
+        // Data rows
+        if (members.length === 0) {
+          aoa.push(['—', ...Array(cols.length - 1).fill('')]);
+          rowIdx++;
+        } else {
+          members.sort((a, b) => a.name.localeCompare(b.name));
+          members.forEach((d, i) => {
+            aoa.push([
+              i + 1,
+              d.name,
+              d.mobile || '',
+              d.dateOfJoining || '',
+              d.dob || '',
+              d.devoteeStatus || '',
+              d.address || '',
+              d.email || '',
+              d.education || '',
+              d.profession || '',
+              d.facilitator || '',
+              d.chantingRounds || 0,
+              d.familyFavourable || '',
+              d.hobbies || '',
+              d.skills || '',
+              d.reading || '',
+              d.hearing || '',
+              d.gopiDress ? 'Yes' : 'No',
+              d.tilak ? 'Yes' : 'No',
+              d.kanthi ? 'Yes' : 'No',
+            ]);
+            rowIdx++;
+          });
+        }
+
+        // Blank spacer row between levels
+        aoa.push(Array(cols.length).fill(''));
+        rowIdx++;
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!merges'] = merges;
+      ws['!cols'] = [
+        { wch: 6 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 13 },
+        { wch: 22 }, { wch: 28 }, { wch: 24 }, { wch: 16 }, { wch: 18 },
+        { wch: 20 }, { wch: 10 }, { wch: 18 },
+        { wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 12 },
+        { wch: 11 }, { wch: 9 }, { wch: 9 },
+      ];
+      XLSX.utils.book_append_sheet(wb, ws, team.slice(0, 31));
+    });
+
+    // All teams combined sheet
+    const aoaAll = [];
+    const mergesAll = [];
+    let rAll = 0;
+    aoaAll.push(['ALL TEAMS – Devotee Database', ...Array(cols.length - 1).fill('')]);
+    mergesAll.push({ s: { r: rAll, c: 0 }, e: { r: rAll, c: cols.length - 1 } });
+    rAll++;
+    aoaAll.push(Array(cols.length).fill(''));
+    rAll++;
+
+    teams.forEach(team => {
+      const teamDevotees = allDevotees.filter(d => d.teamName === team && d.isActive !== false);
+      if (!teamDevotees.length) return;
+
+      // Team header
+      aoaAll.push([`── ${team.toUpperCase()} ──`, ...Array(cols.length - 1).fill('')]);
+      mergesAll.push({ s: { r: rAll, c: 0 }, e: { r: rAll, c: cols.length - 1 } });
+      rAll++;
+
+      levels.forEach(lvl => {
+        const members = teamDevotees.filter(d => {
+          const cr = d.chantingRounds || 0; return cr >= lvl.min && cr <= lvl.max;
+        });
+        if (!members.length) return;
+
+        aoaAll.push([lvl.label, ...Array(cols.length - 1).fill('')]);
+        mergesAll.push({ s: { r: rAll, c: 0 }, e: { r: rAll, c: cols.length - 1 } });
+        rAll++;
+        aoaAll.push([...cols]); rAll++;
+
+        members.sort((a, b) => a.name.localeCompare(b.name));
+        members.forEach((d, i) => {
+          aoaAll.push([
+            i + 1, d.name, d.mobile || '', d.dateOfJoining || '', d.dob || '',
+            d.devoteeStatus || '', d.address || '', d.email || '',
+            d.education || '', d.profession || '', d.facilitator || '',
+            d.chantingRounds || 0, d.familyFavourable || '',
+            d.hobbies || '', d.skills || '', d.reading || '', d.hearing || '',
+            d.gopiDress ? 'Yes' : 'No', d.tilak ? 'Yes' : 'No', d.kanthi ? 'Yes' : 'No',
+          ]);
+          rAll++;
+        });
+        aoaAll.push(Array(cols.length).fill('')); rAll++;
+      });
+    });
+
+    const wsAll = XLSX.utils.aoa_to_sheet(aoaAll);
+    wsAll['!merges'] = mergesAll;
+    wsAll['!cols'] = [
+      { wch: 6 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 13 },
+      { wch: 22 }, { wch: 28 }, { wch: 24 }, { wch: 16 }, { wch: 18 },
+      { wch: 20 }, { wch: 10 }, { wch: 18 },
+      { wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 12 },
+      { wch: 11 }, { wch: 9 }, { wch: 9 },
+    ];
+    XLSX.utils.book_append_sheet(wb, wsAll, 'All Teams');
+
+    XLSX.writeFile(wb, `sakhi_sang_database_${getToday()}.xlsx`);
+    showToast('Database exported!', 'success');
+  } catch (e) {
+    console.error(e);
+    showToast('Export failed', 'error');
+  }
+}
+
+function downloadImportTemplate() {
+  const teams  = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata'];
+  const statuses = ['Expected to be Serious','Serious','Most Serious'];
+
+  // ── Sheet 1: DATA (import-ready) ──
+  const headers = [
+    'Name', 'Mobile', 'Address', 'DOB',
+    'Date of Joining', 'Chanting Rounds', 'Kanthi', 'Gopi Dress',
+    'Team', 'Status', 'Facilitator', 'Reference', 'Calling By',
+    'Education', 'Email', 'Profession', 'Family Favourable', 'Reading', 'Hearing',
+    'Hobbies', 'Skills', 'Tilak',
+  ];
+  const sample1 = [
+    'Radha Kumari', '9876543210', 'C-12, Sector 5, Noida',
+    '2000-06-15', '2023-04-02', '16', 'Yes', 'No',
+    'Champaklata', 'Serious', 'Anjali Mishra Mtg', 'Priya Devi', 'Anjali Mishra Mtg',
+    'B.Com', 'radha@example.com', 'Housewife', 'Yes', 'Regular', 'Daily',
+    'Singing, Cooking', 'Music, Art', 'Yes',
+  ];
+  const sample2 = [
+    'Sita Devi', '8765432109', 'B-4, Govind Nagar, Mathura',
+    '1998-03-22', '2024-01-07', '8', 'No', 'No',
+    'Lalita', 'Expected to be Serious', 'Neha Bhandari', '', 'Neha Bhandari',
+    '12th Pass', '', 'Student', 'Partial', 'Occasionally', 'Occasionally',
+    'Dance', 'Teaching', 'No',
+  ];
+
+  const wsData = XLSX.utils.aoa_to_sheet([headers, sample1, sample2]);
+  wsData['!cols'] = [
+    { wch: 22 }, { wch: 14 }, { wch: 30 }, { wch: 13 }, { wch: 15 },
+    { wch: 15 }, { wch: 9 }, { wch: 10 }, { wch: 14 }, { wch: 26 },
+    { wch: 22 }, { wch: 22 }, { wch: 22 },
+    { wch: 16 }, { wch: 24 }, { wch: 18 }, { wch: 18 }, { wch: 14 }, { wch: 14 },
+  ];
+
+  // ── Sheet 2: INSTRUCTIONS ──
+  const instrRows = [
+    ['SAKHI SANG – Devotee Import Template', '', ''],
+    ['', '', ''],
+    ['HOW TO USE:', '', ''],
+    ['1. Fill your data in the "Devotees" sheet starting from Row 2 (Row 1 = headers — do not change)', '', ''],
+    ['2. Delete the 2 sample rows before importing', '', ''],
+    ['3. Save the file and upload it using Import Excel button', '', ''],
+    ['', '', ''],
+    ['COLUMN GUIDE:', 'Allowed Values / Format', 'Required?'],
+    ['Name', 'Full name of devotee', 'YES (mandatory)'],
+    ['Mobile', '10-digit number only, no spaces/dashes', 'Recommended'],
+    ['Address', 'Full address', 'Optional'],
+    ['DOB', 'YYYY-MM-DD  (e.g. 2000-06-15)', 'Optional'],
+    ['Date of Joining', 'YYYY-MM-DD  (e.g. 2023-04-02)', 'Optional'],
+    ['Chanting Rounds', 'Number between 0 and 64', 'Optional'],
+    ['Kanthi', 'Yes  or  No', 'Optional'],
+    ['Gopi Dress', 'Yes  or  No', 'Optional'],
+    ['Team', teams.join('  |  '), 'Optional'],
+    ['Status', statuses.join('  |  '), 'Optional'],
+    ['Facilitator', 'Name of facilitator (must match a devotee in database)', 'Optional'],
+    ['Reference', 'Name of referring devotee (must match a devotee in database)', 'Optional'],
+    ['Calling By', 'Name of caller (must match a devotee in database)', 'Optional'],
+    ['Education', 'e.g. 10th, 12th Pass, B.Com, M.A., PhD…', 'Optional'],
+    ['Email', 'Valid email address', 'Optional'],
+    ['Profession', 'e.g. Housewife, Teacher, Student, Business…', 'Optional'],
+    ['Family Favourable', 'Yes  |  Partial  |  No', 'Optional'],
+    ['Reading', 'None  |  Occasionally  |  Regular  |  Daily', 'Optional'],
+    ['Hearing', 'None  |  Occasionally  |  Regular  |  Daily', 'Optional'],
+    ['Hobbies', 'Free text — e.g. Singing, Dance, Cooking', 'Optional'],
+    ['Skills', 'Free text — e.g. Teaching, Graphic Design, Music', 'Optional'],
+    ['Tilak', 'Yes  or  No', 'Optional'],
+    ['', '', ''],
+    ['NOTE: Duplicate mobile numbers are automatically skipped during import.', '', ''],
+  ];
+  const wsInstr = XLSX.utils.aoa_to_sheet(instrRows);
+  wsInstr['!cols'] = [{ wch: 50 }, { wch: 60 }, { wch: 14 }];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, wsData,  'Devotees');
+  XLSX.utils.book_append_sheet(wb, wsInstr, 'Instructions');
+  XLSX.writeFile(wb, 'sakhi_sang_devotee_template.xlsx');
+  showToast('Template downloaded!', 'success');
+}
+
+// ── IMPORT FIELD DEFINITIONS (for column mapping UI) ──
+const IMPORT_FIELDS = [
+  { key: 'name',             label: 'Name *',             aliases: ['Name','name','Full Name','Devotee Name','NAAM'] },
+  { key: 'mobile',           label: 'Mobile',             aliases: ['Mobile','Contact','Phone','Mobile Number','Mobile (10 digits)','Contact Number','Mob','Ph No','mob no','contact'] },
+  { key: 'address',          label: 'Address',            aliases: ['Address','address','Addr','ADDRESS'] },
+  { key: 'dob',              label: 'Date of Birth',      aliases: ['DOB','D.O.B','Date of Birth','Birth Date','dob','D.O.B.','DOB (DD/MM/YYYY)'] },
+  { key: 'dateOfJoining',    label: 'Date of Joining',    aliases: ['Date of Joining','Date Of Joining','Joining Date','DOJ','Date of joining'] },
+  { key: 'chantingRounds',   label: 'Chanting Rounds',    aliases: ['Chanting Rounds','CHANTING','Chanting','CR','chanting','Rounds','rounds','chanting rounds'] },
+  { key: 'teamName',         label: 'Team',               aliases: ['Team','Team Wise','Team Name','TEAM','Group','team','Team wise','Teamwise'] },
+  { key: 'devoteeStatus',    label: 'Devotee Status',     aliases: ['Status','Devotee Status','Dev Status','status','ETS','devotee status'] },
+  { key: 'facilitator',      label: 'Facilitator',        aliases: ['Facilitator','facilitator','Faciltr'] },
+  { key: 'referenceBy',      label: 'Reference By',       aliases: ['Reference','Ref','Reference By','Referred By','Ref-2','ref','Ref 2','reference'] },
+  { key: 'callingBy',        label: 'Calling By',         aliases: ['Calling By','Called By','Caller','Calling by','calling by','CallingBy'] },
+  { key: 'kanthi',           label: 'Kanthi (Y/N)',       aliases: ['Kanthi','kanthi','KANTHI'] },
+  { key: 'gopiDress',        label: 'Gopi Dress (Y/N)',   aliases: ['Gopi Dress','Gopi','GOPI','gopi dress','Gopi dress'] },
+  { key: 'tilak',            label: 'Tilak (Y/N)',        aliases: ['Tilak','tilak','TILAK'] },
+  { key: 'education',        label: 'Education',          aliases: ['Education','education','EDUCATION'] },
+  { key: 'email',            label: 'Email',              aliases: ['Email','E-Mail','email','E Mail','e-mail','EMAIL'] },
+  { key: 'profession',       label: 'Profession',         aliases: ['Profession','Occupation','profession','PROFESSION'] },
+  { key: 'familyFavourable', label: 'Family Favourable',  aliases: ['Family Favourable','Family Favorable','Family','family favourable','Family Favourable?'] },
+  { key: 'reading',          label: 'Reading',            aliases: ['Reading','reading','READING'] },
+  { key: 'hearing',          label: 'Hearing',            aliases: ['Hearing','hearing','HEARING'] },
+  { key: 'hobbies',          label: 'Hobbies',            aliases: ['Hobbies','hobbies','Hobby','HOBBIES'] },
+  { key: 'skills',           label: 'Skills',             aliases: ['Skills','skills','Skill','SKILLS'] },
+];
+
+// Temp storage for mapping modal
+let _importRows = [], _importMode = 'add';
+
 async function handleImportFile(e) {
   const file = e.target.files[0]; if (!file) return;
   const zone   = document.getElementById('import-drop-zone');
   const result = document.getElementById('import-result');
-  zone.innerHTML = `<i class="fas fa-spinner" style="font-size:2rem;color:var(--secondary)"></i><p>Importing…</p>`;
+  _importMode  = document.querySelector('input[name="import-mode"]:checked')?.value || 'add';
+  zone.innerHTML = `<i class="fas fa-spinner" style="font-size:2rem;color:var(--secondary)"></i><p>Reading file…</p>`;
+  result.classList.add('hidden');
+  e.target.value = '';
   try {
-    const ab   = await file.arrayBuffer();
-    const wb   = XLSX.read(ab, { type: 'array' });
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-    const data = await DB.importDevotees(rows);
-    result.className = 'import-result success';
-    result.innerHTML = `<strong>Done!</strong> Imported: ${data.imported} | Skipped: ${data.skipped}${data.errors.length ? `<br><small>${data.errors.slice(0,3).join(', ')}</small>` : ''}`;
-    result.classList.remove('hidden');
-    loadDevotees(); loadCallingPersonsFilter();
-    showToast(`Imported ${data.imported} devotees!`, 'success');
+    const ab = await file.arrayBuffer();
+    const wb = XLSX.read(ab, { type: 'array', cellDates: false });
+
+    let allRows = [];
+    for (const sheetName of wb.SheetNames) {
+      if (sheetName.toLowerCase().includes('instruction')) continue;
+      const ws = wb.Sheets[sheetName];
+      let rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      if (!rows.length) continue;
+
+      const firstKeys = Object.keys(rows[0] || {});
+      const knownCols = ['Name','name','Contact','Mobile','NAAM','Devotee Name'];
+      const hasHeader = firstKeys.some(k => knownCols.some(kc => k.toLowerCase() === kc.toLowerCase()));
+      if (!hasHeader && rows.length > 1) {
+        rows = XLSX.utils.sheet_to_json(ws, { defval: '', range: 1 });
+      }
+
+      rows = rows.filter(r => {
+        const nm = importCol(r, ['Name','name','Devotee Name','NAAM','Contact']);
+        if (!nm) return false;
+        if (/^(level|──|sr\.?\s*no|sno|s\.no|well wish|beginn|advanc|committ)/i.test(nm)) return false;
+        return true;
+      });
+
+      allRows = allRows.concat(rows);
+    }
+
+    if (!allRows.length) {
+      throw new Error('No data rows found. Make sure your Excel has data rows with a Name/Contact column.');
+    }
+
+    _importRows = allRows;
+    zone.innerHTML = `<i class="fas fa-cloud-upload-alt"></i>
+      <p>Click to browse or drag & drop Excel file</p>
+      <small style="color:var(--text-muted)">Supports any column names — auto-detected</small>
+      <input type="file" id="import-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleImportFile(event)">`;
+    showColumnMappingUI(allRows);
   } catch (err) {
     result.className = 'import-result error';
-    result.textContent = 'Import failed: ' + (err.message || 'Unknown error');
+    result.innerHTML = `<strong>Import failed:</strong> ${err.message || 'Unknown error'}`;
     result.classList.remove('hidden');
-    zone.innerHTML = `<i class="fas fa-cloud-upload-alt"></i><p>Click to browse or drag & drop</p><input type="file" id="import-file" accept=".xlsx,.xls" style="display:none" onchange="handleImportFile(event)">`;
+    console.error('Import error', err);
+    zone.innerHTML = `<i class="fas fa-cloud-upload-alt"></i>
+      <p>Click to browse or drag & drop Excel file</p>
+      <small style="color:var(--text-muted)">Supports any column names — auto-detected</small>
+      <input type="file" id="import-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleImportFile(event)">`;
   }
-  e.target.value = '';
+}
+
+function showColumnMappingUI(rows) {
+  // Gather all unique column headers from uploaded file
+  const headerSet = new Set();
+  rows.forEach(r => Object.keys(r).forEach(k => { if (k && !k.startsWith('__')) headerSet.add(k); }));
+  const headers = [...headerSet];
+
+  const tbody = document.getElementById('col-mapping-body');
+  tbody.innerHTML = '';
+
+  // Build field options HTML
+  const fieldOptions = IMPORT_FIELDS.map(f => `<option value="${f.key}">${f.label}</option>`).join('');
+
+  headers.forEach(col => {
+    // Auto-detect best match from aliases
+    let autoMatch = '';
+    for (const field of IMPORT_FIELDS) {
+      if (field.aliases.some(a => a.toLowerCase() === col.toString().trim().toLowerCase())) {
+        autoMatch = field.key;
+        break;
+      }
+    }
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="excel-col" title="${col}">${col}</td>
+      <td>
+        <select data-col="${col}" onchange="this.classList.toggle('mapped', this.value !== '')">
+          <option value="">(Ignore)</option>
+          ${fieldOptions}
+        </select>
+      </td>`;
+    tbody.appendChild(tr);
+
+    const sel = tr.querySelector('select');
+    if (autoMatch) { sel.value = autoMatch; sel.classList.add('mapped'); }
+  });
+
+  openModal('import-mapping-modal');
+}
+
+async function confirmMappingImport() {
+  if (!_importRows.length) return;
+  const selects = document.querySelectorAll('#col-mapping-body select');
+  const colMap = {};
+  selects.forEach(sel => {
+    if (sel.value) colMap[sel.dataset.col] = sel.value;
+  });
+
+  closeModal('import-mapping-modal');
+  const zone   = document.getElementById('import-drop-zone');
+  const result = document.getElementById('import-result');
+  zone.innerHTML = `<i class="fas fa-spinner" style="font-size:2rem;color:var(--secondary)"></i><p>Saving ${_importRows.length} rows…</p>`;
+  result.classList.add('hidden');
+
+  try {
+    const data = await importWithMapping(_importRows, colMap, _importMode);
+    const updLine = data.updated ? ` | Updated: ${data.updated}` : '';
+    result.className = 'import-result success';
+    result.innerHTML = `<strong>Done!</strong> Added: ${data.imported}${updLine} | Skipped: ${data.skipped}` +
+      (data.errors.length ? `<br><small style="color:#c62828">${data.errors.slice(0,5).join('<br>')}</small>` : '');
+    result.classList.remove('hidden');
+    loadDevotees(); loadCallingPersonsFilter();
+    showToast(`Import complete — ${data.imported} added${data.updated ? ', ' + data.updated + ' updated' : ''}`, 'success');
+  } catch (err) {
+    result.className = 'import-result error';
+    result.innerHTML = `<strong>Import failed:</strong> ${err.message || 'Unknown error'}`;
+    result.classList.remove('hidden');
+    console.error('Import error', err);
+  }
+  zone.innerHTML = `<i class="fas fa-cloud-upload-alt"></i>
+    <p>Click to browse or drag & drop Excel file</p>
+    <small style="color:var(--text-muted)">Supports any column names — auto-detected</small>
+    <input type="file" id="import-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleImportFile(event)">`;
+  _importRows = [];
+}
+
+async function importWithMapping(rows, colMap, mode = 'add') {
+  // colMap: { excelColName: appFieldKey }
+  function getField(row, fieldKey) {
+    const excelCol = Object.keys(colMap).find(c => colMap[c] === fieldKey);
+    return excelCol ? (row[excelCol] ?? '') : '';
+  }
+
+  let imported = 0, updated = 0, skipped = 0, errors = [];
+  const list = await DevoteeCache.all();
+  const mobileMap = {}, nameMap = {};
+  list.forEach(d => {
+    if (d.mobile) mobileMap[d.mobile] = d.id;
+    nameMap[d.name.toLowerCase()] = d.id;
+  });
+
+  const chunks = [];
+  for (let i = 0; i < rows.length; i += 20) chunks.push(rows.slice(i, i + 20));
+
+  for (const chunk of chunks) {
+    const batch = fdb.batch();
+    let batchHasWrites = false;
+
+    chunk.forEach((row, i) => {
+      try {
+        const name   = String(getField(row, 'name')).trim();
+        const mobile = String(getField(row, 'mobile')).replace(/\D/g, '').slice(0, 10);
+        if (!name) { skipped++; return; }
+
+        const payload = {
+          name,
+          mobile:           mobile || null,
+          address:          String(getField(row, 'address')) || null,
+          dob:              importDate(getField(row, 'dob')) || null,
+          dateOfJoining:    importDate(getField(row, 'dateOfJoining')) || null,
+          chantingRounds:   Math.abs(parseInt(getField(row, 'chantingRounds')) || 0),
+          kanthi:           importYN(getField(row, 'kanthi')),
+          gopiDress:        importYN(getField(row, 'gopiDress')),
+          tilak:            importYN(getField(row, 'tilak')),
+          teamName:         String(getField(row, 'teamName')) || null,
+          devoteeStatus:    importStatus(getField(row, 'devoteeStatus')),
+          facilitator:      String(getField(row, 'facilitator')) || null,
+          referenceBy:      String(getField(row, 'referenceBy')) || null,
+          callingBy:        String(getField(row, 'callingBy')) || null,
+          education:        String(getField(row, 'education')) || null,
+          email:            String(getField(row, 'email')) || null,
+          profession:       String(getField(row, 'profession')) || null,
+          familyFavourable: String(getField(row, 'familyFavourable')) || null,
+          reading:          String(getField(row, 'reading')) || null,
+          hearing:          String(getField(row, 'hearing')) || null,
+          hobbies:          String(getField(row, 'hobbies')) || null,
+          skills:           String(getField(row, 'skills')) || null,
+          isActive: true, inactivityFlag: false, updatedAt: TS(),
+        };
+
+        // Clean up null strings
+        Object.keys(payload).forEach(k => { if (payload[k] === 'null' || payload[k] === '') payload[k] = null; });
+
+        const existId = (mobile && mobileMap[mobile]) || nameMap[name.toLowerCase()];
+        if (existId) {
+          if (mode === 'upsert') {
+            batch.update(fdb.collection('devotees').doc(existId), payload);
+            updated++;
+          } else { skipped++; }
+        } else {
+          const ref = fdb.collection('devotees').doc();
+          batch.set(ref, { ...payload, lifetimeAttendance: 0, createdAt: TS() });
+          if (mobile) mobileMap[mobile] = ref.id;
+          nameMap[name.toLowerCase()] = ref.id;
+          imported++;
+        }
+        batchHasWrites = true;
+      } catch (err) {
+        errors.push(`Row ${i + 1}: ${err.message}`);
+      }
+    });
+
+    if (batchHasWrites) await batch.commit();
+  }
+
+  DevoteeCache.bust();
+  return { imported, updated, skipped, errors };
 }
 
 // ══════════════════════════════════════════════════════
@@ -1039,6 +2055,7 @@ async function openProfileModal(id) {
           <div class="profile-field"><label>Address</label><span>${d.address || '—'}</span></div>
           <div class="profile-field"><label>Date of Birth</label><span>${formatDate(d.dob)}${isBirthdayWeek(d.dob) ? ' 🎂' : ''}</span></div>
           <div class="profile-field"><label>Date of Joining</label><span>${formatDate(d.date_of_joining)}</span></div>
+          <div class="profile-field"><label>Admitted On</label><span style="font-size:.82rem;color:var(--text-muted)">${d.created_at ? formatDateTime(d.created_at) : '—'}</span></div>
           <div class="profile-field"><label>Lifetime Attendance</label><span style="color:var(--primary);font-size:1.1rem;font-family:'Cinzel',serif">${d.lifetime_attendance}</span></div>
         </div>
       </div>
@@ -1046,8 +2063,7 @@ async function openProfileModal(id) {
         <div class="profile-section-title">Spiritual Profile</div>
         <div class="profile-fields">
           <div class="profile-field"><label>Chanting Rounds</label><span style="font-size:1.1rem;font-family:'Cinzel',serif">${d.chanting_rounds || 0}</span></div>
-          <div class="profile-field"><label>Kanthi</label><span>${d.kanthi ? '✓ Yes' : '✗ No'}</span></div>
-          <div class="profile-field"><label>Gopi Dress</label><span>${d.gopi_dress ? '✓ Yes' : '✗ No'}</span></div>
+          <div class="profile-field"><label>Lifetime Attendance</label><span style="color:var(--primary);font-size:1.1rem;font-family:'Cinzel',serif">${d.lifetime_attendance}</span></div>
         </div>
       </div>
       <div class="profile-section">
@@ -1058,6 +2074,23 @@ async function openProfileModal(id) {
           <div class="profile-field"><label>Calling By</label><span>${d.calling_by || '—'}</span></div>
         </div>
       </div>
+      ${(d.education || d.email || d.profession || d.family_favourable || d.reading || d.hearing || d.hobbies || d.skills || d.tilak || d.kanthi || d.gopi_dress) ? `
+      <div class="profile-section">
+        <div class="profile-section-title"><i class="fas fa-user-graduate" style="margin-right:.35rem"></i>Personal Details</div>
+        <div class="profile-fields">
+          ${d.education ? `<div class="profile-field"><label>Education</label><span>${d.education}</span></div>` : ''}
+          ${d.email ? `<div class="profile-field"><label>Email</label><span><a href="mailto:${d.email}" style="color:var(--primary)">${d.email}</a></span></div>` : ''}
+          ${d.profession ? `<div class="profile-field"><label>Profession</label><span>${d.profession}</span></div>` : ''}
+          ${d.family_favourable ? `<div class="profile-field"><label>Family Favourable</label><span class="pf-tag pf-family-${d.family_favourable.toLowerCase().replace(/\s/g,'-')}">${d.family_favourable}</span></div>` : ''}
+          ${d.reading ? `<div class="profile-field"><label>Reading</label><span class="pf-tag">${d.reading}</span></div>` : ''}
+          ${d.hearing ? `<div class="profile-field"><label>Hearing</label><span class="pf-tag">${d.hearing}</span></div>` : ''}
+          ${d.hobbies ? `<div class="profile-field"><label>Hobbies</label><span>${d.hobbies}</span></div>` : ''}
+          ${d.skills ? `<div class="profile-field"><label>Skills</label><span>${d.skills}</span></div>` : ''}
+          <div class="profile-field"><label>Tilak</label><span>${d.tilak ? '✓ Yes' : '✗ No'}</span></div>
+          <div class="profile-field"><label>Kanthi</label><span>${d.kanthi ? '✓ Yes' : '✗ No'}</span></div>
+          <div class="profile-field"><label>Gopi Dress</label><span>${d.gopi_dress ? '✓ Yes' : '✗ No'}</span></div>
+        </div>
+      </div>` : ''}
       <div class="profile-section" style="display:flex;gap:.6rem;justify-content:flex-end">
         <button class="btn btn-secondary" onclick="editCurrentDevotee()"><i class="fas fa-pencil-alt"></i> Edit</button>
         <button class="btn btn-danger" onclick="deleteDevotee('${d.id}')"><i class="fas fa-trash"></i> Remove</button>
@@ -1078,18 +2111,22 @@ function openDevoteeFormModal(fromAttendance = false, editId = null) {
 }
 
 function clearDevoteeForm() {
-  ['f-name','f-mobile','f-address'].forEach(id => document.getElementById(id).value = '');
-  ['f-dob','f-joining'].forEach(id => document.getElementById(id).value = '');
+  ['f-name','f-mobile','f-address','f-education','f-email','f-profession','f-hobbies','f-skills'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-dob').value = '';
+  document.getElementById('f-joining').value = getToday(); // auto-fill today for new devotees
   document.getElementById('f-chanting').value = '0';
   document.getElementById('f-team').value = '';
   document.getElementById('f-status').value = 'Expected to be Serious';
   document.getElementById('f-kanthi').value = '0';
   document.getElementById('f-gopi').value = '0';
+  document.getElementById('f-family-favourable').value = '';
+  document.getElementById('f-reading').value = '';
+  document.getElementById('f-hearing').value = '';
+  document.getElementById('f-tilak').value = '0';
   clearPicker('picker-facilitator', 'f-facilitator');
   clearPicker('picker-reference',   'f-reference');
   clearPicker('picker-calling-by',  'f-calling-by');
   clearFieldError('mobile');
-  // Auto-fill team for coordinators
   if (AppState.userRole === 'teamAdmin' && AppState.userTeam) {
     document.getElementById('f-team').value = AppState.userTeam;
   }
@@ -1112,25 +2149,44 @@ async function populateEditForm(id) {
     if (d.facilitator) { document.getElementById('f-facilitator').value = d.facilitator; const pi = document.querySelector('#picker-facilitator .picker-input'); if(pi){pi.value=d.facilitator;pi.classList.add('has-value');} }
     if (d.reference_by) { document.getElementById('f-reference').value = d.reference_by; const pi = document.querySelector('#picker-reference .picker-input'); if(pi){pi.value=d.reference_by;pi.classList.add('has-value');} }
     if (d.calling_by) { document.getElementById('f-calling-by').value = d.calling_by; const pi = document.querySelector('#picker-calling-by .picker-input'); if(pi){pi.value=d.calling_by;pi.classList.add('has-value');} }
+    // Personal details
+    document.getElementById('f-education').value        = d.education || '';
+    document.getElementById('f-email').value            = d.email || '';
+    document.getElementById('f-profession').value       = d.profession || '';
+    document.getElementById('f-family-favourable').value= d.family_favourable || '';
+    document.getElementById('f-reading').value          = d.reading || '';
+    document.getElementById('f-hearing').value          = d.hearing || '';
+    document.getElementById('f-hobbies').value          = d.hobbies || '';
+    document.getElementById('f-skills').value           = d.skills || '';
+    document.getElementById('f-tilak').value            = d.tilak || '0';
     clearFieldError('mobile');
   } catch (_) { showToast('Failed to load profile', 'error'); }
 }
 
 function getFormPayload() {
   return {
-    name:           document.getElementById('f-name').value.trim(),
-    mobile:         document.getElementById('f-mobile').value.replace(/\D/g,'').slice(0,10),
-    address:        document.getElementById('f-address').value.trim(),
-    dob:            document.getElementById('f-dob').value,
-    date_of_joining:document.getElementById('f-joining').value,
-    chanting_rounds:parseInt(document.getElementById('f-chanting').value) || 0,
-    team_name:      document.getElementById('f-team').value,
-    devotee_status: document.getElementById('f-status').value,
-    kanthi:         parseInt(document.getElementById('f-kanthi').value),
-    gopi_dress:     parseInt(document.getElementById('f-gopi').value),
-    facilitator:    document.getElementById('f-facilitator').value.trim(),
-    reference_by:   document.getElementById('f-reference').value.trim(),
-    calling_by:     document.getElementById('f-calling-by').value.trim(),
+    name:              document.getElementById('f-name').value.trim(),
+    mobile:            document.getElementById('f-mobile').value.replace(/\D/g,'').slice(0,10),
+    address:           document.getElementById('f-address').value.trim(),
+    dob:               document.getElementById('f-dob').value,
+    date_of_joining:   document.getElementById('f-joining').value,
+    chanting_rounds:   parseInt(document.getElementById('f-chanting').value) || 0,
+    team_name:         document.getElementById('f-team').value,
+    devotee_status:    document.getElementById('f-status').value,
+    kanthi:            parseInt(document.getElementById('f-kanthi').value),
+    gopi_dress:        parseInt(document.getElementById('f-gopi').value),
+    facilitator:       document.getElementById('f-facilitator').value.trim(),
+    reference_by:      document.getElementById('f-reference').value.trim(),
+    calling_by:        document.getElementById('f-calling-by').value.trim(),
+    education:         document.getElementById('f-education').value.trim(),
+    email:             document.getElementById('f-email').value.trim(),
+    profession:        document.getElementById('f-profession').value.trim(),
+    family_favourable: document.getElementById('f-family-favourable').value,
+    reading:           document.getElementById('f-reading').value,
+    hearing:           document.getElementById('f-hearing').value,
+    hobbies:           document.getElementById('f-hobbies').value.trim(),
+    skills:            document.getElementById('f-skills').value.trim(),
+    tilak:             parseInt(document.getElementById('f-tilak').value),
   };
 }
 
@@ -1149,7 +2205,11 @@ async function saveDevotee(e) {
     else    { saved = await DB.createDevotee(payload);     showToast('Devotee added!', 'success'); }
     closeModal('devotee-form-modal');
     loadDevotees(); loadCallingPersonsFilter();
-    if (AppState.fromAttendance && AppState.currentSessionId && saved?.id) await markPresent(saved.id, true);
+    if (AppState.fromAttendance && AppState.currentSessionId && saved?.id) {
+      await DB.markPresent(AppState.currentSessionId, saved, true);
+      showToast('Registered & marked Present! Hare Krishna 🙏', 'success');
+      loadAttendanceCandidates(); updateAttendanceStats();
+    }
   } catch (err) {
     if (err.error === 'Duplicate') { showToast(err.message, 'error'); }
     else if (err.error === 'DuplicateName') {
@@ -1158,7 +2218,11 @@ async function saveDevotee(e) {
           const saved2 = await DB.forceCreateDevotee(payload);
           showToast('Devotee added!', 'success');
           closeModal('devotee-form-modal'); loadDevotees();
-          if (AppState.fromAttendance && AppState.currentSessionId && saved2?.id) await markPresent(saved2.id, true);
+          if (AppState.fromAttendance && AppState.currentSessionId && saved2?.id) {
+            await DB.markPresent(AppState.currentSessionId, saved2, true);
+            showToast('Registered & marked Present! Hare Krishna 🙏', 'success');
+            loadAttendanceCandidates(); updateAttendanceStats();
+          }
         } catch (_) { showToast('Error saving', 'error'); }
       }
     } else { showToast('Error: ' + (err.message || 'Unknown'), 'error'); }
@@ -1295,7 +2359,11 @@ async function loadAttendanceTab() {
 async function loadAttendanceSession(sessionId) {
   if (!sessionId) return;
   AppState.currentSessionId = sessionId;
-  document.getElementById('session-selector').value = sessionId;
+  // Sync date picker to this session's date
+  const s = AppState.sessionsCache[sessionId];
+  const picker = document.getElementById('session-date-picker');
+  if (picker && s?.session_date) picker.value = s.session_date;
+  showSessionInfo(sessionId);
   await Promise.all([updateAttendanceStats(), loadAttendanceCandidates()]);
 }
 
@@ -1326,7 +2394,7 @@ async function loadAttendanceCandidates() {
       return;
     }
     const isServiceDev = AppState.userRole === 'serviceDevotee';
-    list.innerHTML = candidates.map(d => {
+    list.innerHTML = candidates.map((d, idx) => {
       const isPresent = !!d.attendance_id;
       const canEdit   = !isServiceDev || isPresent; // service devotee can only edit present ones
       return `
@@ -1338,8 +2406,8 @@ async function loadAttendanceCandidates() {
               ${isBirthdayWeek(d.dob) ? '<i class="fas fa-birthday-cake" style="color:var(--gold);margin-left:.3rem"></i>' : ''}
               ${d.coming_status === 'Yes' ? '<span class="badge badge-expected" style="font-size:.7rem">Confirmed</span>' : ''}
             </div>
+            ${d.mobile ? `<div class="att-mobile" onclick="event.stopPropagation()">${contactIcons(d.mobile)}<span class="att-mobile-num">${d.mobile}</span></div>` : ''}
             <div class="attendance-card-meta">${d.team_name || ''}${d.calling_by ? ' · Called: ' + d.calling_by : ''}</div>
-            ${d.mobile ? `<div class="attendance-card-meta" style="margin-top:.2rem" onclick="event.stopPropagation()">${contactIcons(d.mobile)}</div>` : ''}
           </div>
           <div onclick="event.stopPropagation()">
             ${isPresent
