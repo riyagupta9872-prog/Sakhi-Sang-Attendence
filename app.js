@@ -29,7 +29,7 @@ const AppState = {
   fromAttendance: false,
   attendanceCandidates: {},
   // Auth
-  userRole: null,       // 'admin' | 'coordinator' | 'serviceDevotee'
+  userRole: null,       // 'superAdmin' | 'teamAdmin' | 'serviceDevotee'
   userTeam: null,       // team name for coordinators
   userName: '',
   userId: null,
@@ -50,7 +50,7 @@ auth.onAuthStateChanged(async (user) => {
         const allUsers = await fdb.collection('users').limit(1).get();
         isFirst = allUsers.empty;
       } catch (_) { isFirst = false; }
-      const role = isFirst ? 'admin' : 'serviceDevotee';
+      const role = isFirst ? 'superAdmin' : 'serviceDevotee';
       const data = { email: user.email, name: user.displayName || user.email.split('@')[0], role, teamName: null, createdAt: TS() };
       await fdb.collection('users').doc(user.uid).set(data);
       userDoc = { data: () => data };
@@ -90,7 +90,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const roleSelect = document.getElementById('signup-role');
   if (roleSelect) {
     roleSelect.addEventListener('change', () => {
-      document.getElementById('signup-team-field').style.display = roleSelect.value === 'coordinator' ? 'flex' : 'none';
+      document.getElementById('signup-team-field').style.display = roleSelect.value === 'teamAdmin' ? 'flex' : 'none';
     });
   }
 });
@@ -127,8 +127,8 @@ async function doSignup(e) {
     const existing = await fdb.collection('users').limit(2).get();
     const isFirst = existing.docs.filter(d => d.id !== cred.user.uid).length === 0;
     await fdb.collection('users').doc(cred.user.uid).set({
-      email, name, role: isFirst ? 'admin' : role,
-      teamName: role === 'coordinator' ? (team || null) : null,
+      email, name, role: isFirst ? 'superAdmin' : role,
+      teamName: role === 'teamAdmin' ? (team || null) : null,
       createdAt: TS()
     });
   } catch (ex) {
@@ -150,20 +150,20 @@ function applyRoleUI() {
   // Header info
   document.getElementById('header-user-name').textContent = AppState.userName;
   const pill = document.getElementById('header-role-pill');
-  pill.textContent = role === 'admin' ? 'Admin' : role === 'coordinator' ? (team ? `${team} Coord.` : 'Coordinator') : 'Seva';
-  pill.style.background = role === 'admin' ? 'rgba(201,168,76,.5)' : role === 'coordinator' ? 'rgba(82,183,136,.4)' : 'rgba(255,255,255,.2)';
+  pill.textContent = role === 'superAdmin' ? 'Super Admin' : role === 'teamAdmin' ? (team ? `${team} Admin` : 'Team Admin') : 'Seva';
+  pill.style.background = role === 'superAdmin' ? 'rgba(201,168,76,.5)' : role === 'teamAdmin' ? 'rgba(82,183,136,.4)' : 'rgba(255,255,255,.2)';
 
   // Admin gear
-  if (role === 'admin') document.getElementById('admin-gear-btn').classList.remove('hidden');
+  if (role === 'superAdmin') document.getElementById('admin-gear-btn').classList.remove('hidden');
 
   // Tab visibility
   const tabs = {
-    devotees:   ['admin', 'coordinator'],
-    calling:    ['admin', 'coordinator'],
-    attendance: ['admin', 'coordinator', 'serviceDevotee'],
-    reports:    ['admin', 'coordinator'],
-    care:       ['admin', 'coordinator'],
-    events:     ['admin', 'coordinator'],
+    devotees:   ['superAdmin', 'teamAdmin'],
+    calling:    ['superAdmin', 'teamAdmin'],
+    attendance: ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    reports:    ['superAdmin', 'teamAdmin'],
+    care:       ['superAdmin', 'teamAdmin'],
+    events:     ['superAdmin', 'teamAdmin'],
   };
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const tab = btn.dataset.tab;
@@ -174,7 +174,7 @@ function applyRoleUI() {
 
   // Admin/coordinator only elements
   document.querySelectorAll('.admin-coordinator-only').forEach(el => {
-    if (!['admin','coordinator'].includes(role)) el.style.display = 'none';
+    if (!['superAdmin','teamAdmin'].includes(role)) el.style.display = 'none';
   });
 
   // If service devotee, default to attendance tab
@@ -187,7 +187,7 @@ function applyRoleUI() {
   }
 
   // Lock team filter for coordinators
-  if (role === 'coordinator' && team) {
+  if (role === 'teamAdmin' && team) {
     const ft = document.getElementById('filter-team');
     if (ft) { ft.value = team; ft.disabled = true; }
   }
@@ -212,8 +212,8 @@ async function openAdminPanel() {
         <div class="admin-user-controls">
           <select class="filter-select" onchange="updateUserRole('${u.uid}', this.value, document.getElementById('team-${u.uid}').value)">
             <option value="serviceDevotee"${u.role==='serviceDevotee'?' selected':''}>Service Devotee</option>
-            <option value="coordinator"${u.role==='coordinator'?' selected':''}>Coordinator</option>
-            <option value="admin"${u.role==='admin'?' selected':''}>Admin</option>
+            <option value="teamAdmin"${u.role==='teamAdmin'?' selected':''}>Team Admin</option>
+            <option value="superAdmin"${u.role==='superAdmin'?' selected':''}>Super Admin</option>
           </select>
           <select class="filter-select" id="team-${u.uid}" onchange="updateUserRole('${u.uid}', document.querySelector('[onchange*=\\'${u.uid}\\']:not(#team-${u.uid})').value, this.value)">
             ${teams.map(t => `<option value="${t}"${u.teamName===t?' selected':''}>${t||'No Team'}</option>`).join('')}
@@ -980,7 +980,7 @@ async function handleImportFile(e) {
 async function loadDevotees() {
   const filters = {
     search:     document.getElementById('devotee-search').value.trim(),
-    team:       AppState.userRole === 'coordinator' && AppState.userTeam
+    team:       AppState.userRole === 'teamAdmin' && AppState.userTeam
                   ? AppState.userTeam
                   : document.getElementById('filter-team').value,
     calling_by: document.getElementById('filter-calling-by').value,
@@ -1090,7 +1090,7 @@ function clearDevoteeForm() {
   clearPicker('picker-calling-by',  'f-calling-by');
   clearFieldError('mobile');
   // Auto-fill team for coordinators
-  if (AppState.userRole === 'coordinator' && AppState.userTeam) {
+  if (AppState.userRole === 'teamAdmin' && AppState.userTeam) {
     document.getElementById('f-team').value = AppState.userTeam;
   }
 }
