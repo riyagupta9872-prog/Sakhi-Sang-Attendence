@@ -1479,8 +1479,9 @@ async function initApp() {
 // ── MOBILE VALIDATION ─────────────────────────────────
 function validateMobile(val) {
   const cleaned = (val || '').replace(/\D/g, '');
-  if (val && val.trim() && cleaned.length !== 10) return { valid: false, error: 'Mobile must be exactly 10 digits' };
-  return { valid: true, cleaned: cleaned || null };
+  if (cleaned.length === 0) return { valid: false, error: 'Mobile number is required' };
+  if (cleaned.length !== 10) return { valid: false, error: 'Mobile must be exactly 10 digits' };
+  return { valid: true, cleaned };
 }
 
 function showFieldError(id, msg) {
@@ -2997,6 +2998,23 @@ async function saveDevotee(e) {
   const id = document.getElementById('f-id').value;
   const payload = getFormPayload();
 
+  // Required field validation
+  if (!payload.address) {
+    showToast('Address is required', 'error');
+    document.getElementById('f-address').focus();
+    return;
+  }
+  if (!payload.dob) {
+    showToast('Date of Birth is required', 'error');
+    document.getElementById('f-dob').focus();
+    return;
+  }
+  if (!payload.reference_by) {
+    showToast('Reference By is required — search and select who referred this devotee', 'error');
+    document.querySelector('#picker-reference .picker-input')?.focus();
+    return;
+  }
+
   // Validate Calling By must have a login in the same team
   if (payload.calling_by) {
     const teamUsers = await DB.getUsersForTeam(payload.team_name);
@@ -3428,9 +3446,10 @@ async function _loadCallingSummary(week, el) {
         return 0;
       });
       sortedCallers.forEach(([caller, s]) => {
+        const posLabel = s.isCoordinator ? 'Coordinator' : (s.position || 'Calling Sevak');
         const posBadge = s.isCoordinator
-          ? `<span style="font-size:.68rem;padding:.1rem .35rem;border-radius:.2rem;background:rgba(201,168,76,.2);color:#8B6914;font-weight:600">Coordinator</span>`
-          : `<span style="font-size:.68rem;padding:.1rem .35rem;border-radius:.2rem;background:rgba(82,183,136,.15);color:var(--primary)">Calling Sevak</span>`;
+          ? `<span style="font-size:.68rem;padding:.1rem .35rem;border-radius:.2rem;background:rgba(201,168,76,.2);color:#8B6914;font-weight:600">${posLabel}</span>`
+          : `<span style="font-size:.68rem;padding:.1rem .35rem;border-radius:.2rem;background:rgba(82,183,136,.15);color:var(--primary)">${posLabel}</span>`;
         bodyRows += `<tr style="font-size:.82rem">
           <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}</td>
           <td>${posBadge}</td>

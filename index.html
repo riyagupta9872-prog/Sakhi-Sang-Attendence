@@ -210,7 +210,7 @@
     <div class="panel-header">
       <h2><i class="fas fa-phone-alt"></i> Calling Status</h2>
       <div class="panel-actions">
-        <span id="calling-week-label" style="font-size:.83rem;color:var(--text-muted);white-space:nowrap"></span>
+        <span id="calling-week-label" class="calling-week-label"></span>
         <button class="btn btn-secondary" onclick="exportCallingList()"><i class="fas fa-file-excel"></i> Export FY</button>
       </div>
     </div>
@@ -252,30 +252,28 @@
 
     <!-- ── REPORTS PANEL ── -->
     <div id="calling-panel-reports" class="att-sub-panel">
-      <!-- Date + report-type row -->
-      <div style="display:flex;align-items:center;gap:.75rem;padding:.4rem 0 .6rem;flex-wrap:wrap;justify-content:space-between">
-        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
-          <label style="font-size:.85rem;font-weight:600;color:var(--text-muted)"><i class="fas fa-calendar-week"></i> Week</label>
-          <input type="date" id="calling-report-week" style="border:1px solid var(--border);border-radius:6px;padding:.3rem .6rem;font-size:.85rem" onchange="loadCallingReports()">
-          <span id="rpt-week-label" style="font-size:.82rem;color:var(--primary);font-weight:600"></span>
+      <div class="rpt-controls-row">
+        <div class="rpt-week-group">
+          <span class="rpt-week-label-static"><i class="fas fa-calendar-week"></i> Week</span>
+          <input type="date" id="calling-report-week" class="filter-select" onchange="loadCallingReports()">
+          <span id="rpt-week-label" class="rpt-active-week"></span>
         </div>
-        <div style="display:flex;gap:.4rem;flex-wrap:wrap">
-          <button id="rpt-tab-summary"  class="btn btn-primary"    style="padding:.3rem .9rem;font-size:.82rem" onclick="switchReportType('summary',this)"><i class="fas fa-phone-alt"></i> Calling Summary</button>
-          <button id="rpt-tab-accuracy" class="btn btn-secondary"  style="padding:.3rem .9rem;font-size:.82rem" onclick="switchReportType('accuracy',this)"><i class="fas fa-bullseye"></i> Attendance Accuracy</button>
+        <div class="rpt-type-btns">
+          <button id="rpt-tab-summary"  class="btn btn-primary rpt-type-btn"   onclick="switchReportType('summary',this)"><i class="fas fa-phone-alt"></i> Calling Summary</button>
+          <button id="rpt-tab-accuracy" class="btn btn-secondary rpt-type-btn" onclick="switchReportType('accuracy',this)"><i class="fas fa-bullseye"></i> Attendance Accuracy</button>
         </div>
       </div>
-      <!-- Download row -->
-      <div id="rpt-download-bar" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.6rem">
+      <div id="rpt-download-bar" class="rpt-download-bar">
         <button class="btn btn-secondary" style="padding:.28rem .75rem;font-size:.8rem" onclick="downloadCurrentReportExcel()"><i class="fas fa-file-excel"></i> Download This Date</button>
         <button class="btn btn-secondary" style="padding:.28rem .75rem;font-size:.8rem" onclick="downloadCompleteReportExcel()"><i class="fas fa-download"></i> Download Complete History</button>
       </div>
-      <div id="calling-reports-content" style="padding:.25rem 0"></div>
+      <div id="calling-reports-content"></div>
     </div>
 
     <!-- ── LATE REPORTS PANEL ── -->
     <div id="calling-panel-late" class="att-sub-panel">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:.4rem 0 .6rem;flex-wrap:wrap;gap:.5rem">
-        <div style="font-size:.83rem;color:var(--text-muted)"><i class="fas fa-clock"></i> Calling submission times — current week + last 3 weeks</div>
+      <div class="late-rpt-header">
+        <span class="late-rpt-info"><i class="fas fa-clock"></i> Calling submission times — current week + last 3 weeks</span>
         <button class="btn btn-secondary" style="padding:.3rem .8rem;font-size:.8rem" onclick="loadLateReports()"><i class="fas fa-sync-alt"></i> Refresh</button>
       </div>
       <div id="calling-late-content"></div>
@@ -518,18 +516,18 @@
           <input type="text" id="f-name" required placeholder="Enter full name">
         </div>
         <div class="form-group">
-          <label>Mobile Number</label>
+          <label>Mobile Number <span class="req">*</span></label>
           <input type="tel" id="f-mobile" placeholder="10-digit mobile number"
             inputmode="numeric" maxlength="10" pattern="[0-9]{10}"
             oninput="this.value=this.value.replace(/\D/g,'').slice(0,10)">
           <span class="field-error" id="err-mobile">Mobile must be exactly 10 digits</span>
         </div>
         <div class="form-group full">
-          <label>Address</label>
+          <label>Address <span class="req">*</span></label>
           <textarea id="f-address" rows="2" placeholder="Full address"></textarea>
         </div>
         <div class="form-group">
-          <label>Date of Birth</label>
+          <label>Date of Birth <span class="req">*</span></label>
           <input type="date" id="f-dob">
         </div>
         <div class="form-group">
@@ -563,7 +561,7 @@
           <input type="hidden" id="f-facilitator">
         </div>
         <div class="form-group">
-          <label>Reference By <span style="font-size:.72rem;color:var(--text-muted)">(search devotee)</span></label>
+          <label>Reference By <span class="req">*</span> <span style="font-size:.72rem;color:var(--text-muted)">(search devotee)</span></label>
           <div class="devotee-picker" id="picker-reference">
             <input type="text" class="picker-input" placeholder="Search who referred them…" autocomplete="off">
             <div class="picker-dropdown hidden"></div>
