@@ -32,6 +32,7 @@ const AppState = {
   // Auth
   userRole: null,       // 'superAdmin' | 'teamAdmin' | 'serviceDevotee'
   userTeam: null,       // team name for coordinators
+  userPosition: null,   // free-text position from user profile (e.g. 'Facilitator')
   userName: '',
   userId: null,
   profilePic: null,            // base64 string or null
@@ -60,10 +61,11 @@ auth.onAuthStateChanged(async (user) => {
       userDoc = { data: () => data };
     }
     const ud = userDoc.data();
-    AppState.userRole   = ud.role;
-    AppState.userTeam   = ud.teamName   || null;
-    AppState.userName   = ud.name       || user.email;
-    AppState.profilePic = ud.profilePic || null;
+    AppState.userRole     = ud.role;
+    AppState.userTeam     = ud.teamName   || null;
+    AppState.userPosition = ud.position   || null;
+    AppState.userName     = ud.name       || user.email;
+    AppState.profilePic   = ud.profilePic || null;
     hideAuthScreen();
     applyRoleUI();
     await initApp();
@@ -185,10 +187,29 @@ let _pendingProfilePic = undefined; // undefined = no change, null = remove, str
 
 function openEditProfile() {
   _pendingProfilePic = undefined;
-  document.getElementById('edit-profile-name').value = AppState.userName || '';
+  document.getElementById('edit-profile-name').value     = AppState.userName || '';
+  document.getElementById('edit-profile-position').value = AppState.userPosition || '';
   document.getElementById('edit-profile-error').style.display = 'none';
   document.getElementById('profile-pic-input').value = '';
   _renderProfilePicPreview(AppState.profilePic || null);
+
+  const isSuperAdmin = AppState.userRole === 'superAdmin';
+  const teamSelect   = document.getElementById('edit-profile-team');
+  const teamReadonly = document.getElementById('edit-profile-team-readonly');
+  const teamNote     = document.getElementById('edit-profile-team-note');
+
+  if (isSuperAdmin) {
+    teamSelect.style.display   = '';
+    teamReadonly.style.display = 'none';
+    teamNote.style.display     = 'none';
+    teamSelect.value           = AppState.userTeam || '';
+  } else {
+    teamSelect.style.display   = 'none';
+    teamReadonly.style.display = '';
+    teamReadonly.textContent   = AppState.userTeam || '— Not assigned —';
+    teamNote.style.display     = '';
+  }
+
   openModal('edit-profile-modal');
 }
 
@@ -233,18 +254,27 @@ function removeProfilePic() {
 }
 
 async function saveEditProfile() {
-  const name  = document.getElementById('edit-profile-name').value.trim();
-  const errEl = document.getElementById('edit-profile-error');
+  const name     = document.getElementById('edit-profile-name').value.trim();
+  const position = document.getElementById('edit-profile-position').value.trim() || null;
+  const errEl    = document.getElementById('edit-profile-error');
   errEl.style.display = 'none';
   if (!name) { errEl.textContent = 'Name cannot be empty.'; errEl.style.display = 'block'; return; }
-  const updates = { name, updatedAt: TS() };
-  if (_pendingProfilePic !== undefined) updates.profilePic = _pendingProfilePic; // null clears it
+
+  const updates = { name, position, updatedAt: TS() };
+  if (AppState.userRole === 'superAdmin') {
+    updates.teamName = document.getElementById('edit-profile-team').value || null;
+  }
+  if (_pendingProfilePic !== undefined) updates.profilePic = _pendingProfilePic;
+
   try {
     await fdb.collection('users').doc(AppState.userId).update(updates);
-    AppState.userName = name;
+    AppState.userName     = name;
+    AppState.userPosition = position;
+    if (AppState.userRole === 'superAdmin') AppState.userTeam = updates.teamName;
     if (_pendingProfilePic !== undefined) AppState.profilePic = _pendingProfilePic || null;
     document.getElementById('header-user-name').textContent = name;
     _applyHeaderAvatar();
+    applyRoleUI(); // refresh pill with new position/team
     closeModal('edit-profile-modal');
     showToast('Profile updated! Hare Krishna 🙏', 'success');
   } catch (ex) {
@@ -276,8 +306,11 @@ function applyRoleUI() {
   document.getElementById('header-user-name').textContent = AppState.userName;
   _applyHeaderAvatar();
   const pill = document.getElementById('header-role-pill');
-  pill.textContent = role === 'superAdmin' ? 'Super Admin' : role === 'teamAdmin' ? (team ? `${team} Admin` : 'Team Admin') : 'Seva';
-  pill.style.background = role === 'superAdmin' ? 'rgba(201,168,76,.5)' : role === 'teamAdmin' ? 'rgba(82,183,136,.4)' : 'rgba(255,255,255,.2)';
+  const pos = AppState.userPosition;
+  pill.textContent = role === 'superAdmin' ? 'Super Admin'
+    : role === 'teamAdmin' ? (team ? `${team} - Coordinator` : 'Coordinator')
+    : (team ? `${team} - ${pos || 'Sevak'}` : (pos || 'Sevak'));
+  pill.style.background = role === 'superAdmin' ? 'rgba(201,168,76,.5)' : role === 'teamAdmin' ? 'rgba(82,183,136,.4)' : 'rgba(82,183,136,.25)';
 
   // Admin gear
   if (role === 'superAdmin') {
@@ -291,12 +324,12 @@ function applyRoleUI() {
 
   // Tab visibility
   const tabs = {
-    devotees:   ['superAdmin', 'teamAdmin'],
-    calling:    ['superAdmin', 'teamAdmin'],
+    devotees:   ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    calling:    ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     attendance: ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    reports:    ['superAdmin', 'teamAdmin'],
-    care:       ['superAdmin', 'teamAdmin'],
-    events:     ['superAdmin', 'teamAdmin'],
+    reports:    ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    care:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    events:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
   };
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const tab = btn.dataset.tab;
@@ -310,17 +343,8 @@ function applyRoleUI() {
     if (!['superAdmin','teamAdmin'].includes(role)) el.style.display = 'none';
   });
 
-  // If service devotee, default to attendance tab
-  if (role === 'serviceDevotee') {
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    document.getElementById('tab-attendance').classList.add('active');
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelector('.tab-btn[data-tab="attendance"]')?.classList.add('active');
-    AppState.currentTab = 'attendance';
-  }
-
-  // Lock team filter for coordinators
-  if (role === 'teamAdmin' && team) {
+  // Lock team filter for coordinators and service devotees
+  if ((role === 'teamAdmin' || role === 'serviceDevotee') && team) {
     const ft = document.getElementById('filter-team');
     if (ft) { ft.value = team; ft.disabled = true; }
   }
@@ -343,22 +367,26 @@ async function openAdminPanel() {
           <div class="admin-user-meta">UID: ${u.uid.slice(0,8)}…</div>
         </div>
         <div class="admin-user-controls">
-          <select class="filter-select" onchange="updateUserRole('${u.uid}', this.value, document.getElementById('team-${u.uid}').value)">
-            <option value="serviceDevotee"${u.role==='serviceDevotee'?' selected':''}>Service Devotee</option>
-            <option value="teamAdmin"${u.role==='teamAdmin'?' selected':''}>Team Admin</option>
+          <select class="filter-select" id="role-${u.uid}" onchange="updateUserRole('${u.uid}')">
+            <option value="serviceDevotee"${u.role==='serviceDevotee'?' selected':''}>Sevak</option>
+            <option value="teamAdmin"${u.role==='teamAdmin'?' selected':''}>Coordinator</option>
             <option value="superAdmin"${u.role==='superAdmin'?' selected':''}>Super Admin</option>
           </select>
-          <select class="filter-select" id="team-${u.uid}" onchange="updateUserRole('${u.uid}', document.querySelector('[onchange*=\\'${u.uid}\\']:not(#team-${u.uid})').value, this.value)">
+          <select class="filter-select" id="team-${u.uid}" onchange="updateUserRole('${u.uid}')">
             ${teams.map(t => `<option value="${t}"${u.teamName===t?' selected':''}>${t||'No Team'}</option>`).join('')}
           </select>
+          <input class="filter-select" id="pos-${u.uid}" placeholder="Position…" value="${u.position||''}" style="width:110px" onchange="updateUserRole('${u.uid}')" onblur="updateUserRole('${u.uid}')" />
         </div>
       </div>`).join('');
   } catch (_) { container.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load users</p></div>'; }
 }
 
-async function updateUserRole(uid, role, teamName) {
+async function updateUserRole(uid) {
+  const role     = document.getElementById(`role-${uid}`)?.value;
+  const teamName = document.getElementById(`team-${uid}`)?.value || null;
+  const position = document.getElementById(`pos-${uid}`)?.value.trim() || null;
   try {
-    await fdb.collection('users').doc(uid).update({ role, teamName: teamName || null });
+    await fdb.collection('users').doc(uid).update({ role, teamName, position });
     showToast('User updated!', 'success');
   } catch (_) { showToast('Update failed', 'error'); }
 }
@@ -799,20 +827,23 @@ const DB = {
   },
 
   async getSessionStats(sessionId) {
-    const week = getCurrentSunday();
+    // Use the session's own date so calling data always matches the selected session
+    const sessSnap = await fdb.collection('sessions').doc(sessionId).get();
+    const week = sessSnap.exists ? sessSnap.data().sessionDate : getUpcomingSunday();
     const [cs, at] = await Promise.all([
       fdb.collection('callingStatus').where('weekDate', '==', week).get(),
       fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get()
     ]);
-    const target  = cs.docs.filter(d => d.data().comingStatus === 'Yes').length;
-    const present = at.size;
-    const newD    = at.docs.filter(d => d.data().isNewDevotee).length;
-    return { target, present, newDevotees: newD, totalPresent: present };
+    const confirmed = cs.docs.filter(d => d.data().comingStatus === 'Yes').length;
+    const present   = at.size;
+    const newD      = at.docs.filter(d => d.data().isNewDevotee).length;
+    return { confirmed, present, newDevotees: newD, totalPresent: present };
   },
 
   /* ATTENDANCE */
   async getAttendanceCandidates(sessionId, search = '') {
-    const week = getCurrentSunday();
+    const sessSnap = await fdb.collection('sessions').doc(sessionId).get();
+    const week = sessSnap.exists ? sessSnap.data().sessionDate : getUpcomingSunday();
     const [rawDevotees, csSnap, atSnap] = await Promise.all([
       DevoteeCache.all(),
       fdb.collection('callingStatus').where('weekDate', '==', week).get(),
@@ -889,6 +920,18 @@ const DB = {
       updated_at_client: csMap[d.id]?.updatedAtClient || null,
       late_remarks:      csMap[d.id]?.lateRemarks     || null,
     }));
+  },
+
+  async getUsersForTeam(team, search = '') {
+    const snap = await fdb.collection('users').get();
+    let users = snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    users = users.filter(u => u.role !== 'superAdmin');
+    if (team) users = users.filter(u => u.teamName === team);
+    if (search) {
+      const s = search.toLowerCase();
+      users = users.filter(u => (u.name || '').toLowerCase().includes(s));
+    }
+    return users;
   },
 
   async getNotInterestedDevotees() {
@@ -977,15 +1020,10 @@ const DB = {
   },
 
   async submitCallingWeek(weekDate, userId, userName, teamName) {
-    // Upsert: one submission per user per week (filter userId in JS to avoid composite index)
-    const snap = await fdb.collection('callingSubmissions').where('weekDate', '==', weekDate).get();
-    const existing = snap.docs.find(d => d.data().userId === userId);
+    // Doc ID = userId_weekDate — deterministic upsert, no reads, no composite index needed
+    const docId = `${userId}_${weekDate}`;
     const payload = { weekDate, userId, userName, teamName: teamName || '', submittedAt: TS(), submittedAtClient: new Date().toISOString() };
-    if (existing) {
-      await existing.ref.update(payload);
-    } else {
-      await fdb.collection('callingSubmissions').add(payload);
-    }
+    await fdb.collection('callingSubmissions').doc(docId).set(payload);
   },
 
   async getCallingSubmissions(weekDates) {
@@ -996,7 +1034,6 @@ const DB = {
       const snap = await fdb.collection('callingSubmissions').where('weekDate', '==', w).get();
       snap.docs.forEach(d => {
         const { userName, teamName, submittedAtClient } = d.data();
-        // Keep latest if user submitted multiple times
         if (!result[w][userName] || submittedAtClient > (result[w][userName].submittedAtClient || '')) {
           result[w][userName] = { teamName: teamName || '', submittedAtClient };
         }
@@ -1006,18 +1043,27 @@ const DB = {
   },
 
   async getMyCallingSubmission(weekDate, userId) {
-    // Query by weekDate only (avoids composite index requirement), filter userId in JS
+    // Direct doc fetch by deterministic ID — no query, no index, works with strict rules
+    const docId = `${userId}_${weekDate}`;
+    const doc = await fdb.collection('callingSubmissions').doc(docId).get();
+    if (doc.exists) return doc.data();
+    // Fallback: old docs added before this change (random IDs) — query once to migrate
     const snap = await fdb.collection('callingSubmissions')
-      .where('weekDate', '==', weekDate).get();
-    const mine = snap.docs.find(d => d.data().userId === userId);
-    return mine ? mine.data() : null;
+      .where('weekDate', '==', weekDate).where('userId', '==', userId).limit(1).get();
+    return snap.empty ? null : snap.docs[0].data();
   },
 
   async getCallingReport(weekDate) {
-    const raw  = await DevoteeCache.all();
-    const snap = await fdb.collection('callingStatus').where('weekDate', '==', weekDate).get();
+    const [raw, snap, usersSnap] = await Promise.all([
+      DevoteeCache.all(),
+      fdb.collection('callingStatus').where('weekDate', '==', weekDate).get(),
+      fdb.collection('users').get()
+    ]);
     const csMap = {};
     snap.docs.forEach(d => { csMap[d.data().devoteeId] = d.data(); });
+    // Build name → {role, position} map for position labelling
+    const userRoleMap = {};
+    usersSnap.docs.forEach(d => { const u = d.data(); if (u.name) userRoleMap[u.name] = { role: u.role, position: u.position || null }; });
 
     // Find the session for this Sunday and load actual attendance
     const sessSnap = await fdb.collection('sessions')
@@ -1054,6 +1100,8 @@ const DB = {
           else if (cs.comingStatus === 'No')     { s.no++;    if (came) s.noButCame++; }
           else if (cs.comingStatus === 'Shift')  { s.shift++; }
         });
+        s.isCoordinator = userRoleMap[caller]?.role === 'teamAdmin';
+        s.position = s.isCoordinator ? 'Coordinator' : (userRoleMap[caller]?.position || 'Calling Sevak');
         result[team].callers[caller] = s;
         STAT_KEYS.forEach(k => { result[team][k] += s[k]; });
       });
@@ -1420,13 +1468,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function initApp() {
   await initSession();
-  const role = AppState.userRole;
-  if (role !== 'serviceDevotee') {
-    loadDevotees();
-    loadCallingPersonsFilter();
-  } else {
-    loadAttendanceTab();
-  }
+  loadDevotees();
+  loadCallingPersonsFilter();
   loadBirthdays();
   document.getElementById('report-date').value = getToday();
   initAllPickers();
@@ -1457,8 +1500,10 @@ function clearFieldError(id) {
 // ── DEVOTEE PICKER ────────────────────────────────────
 function initAllPickers() {
   setupPicker('picker-reference',   'f-reference');
-  setupPicker('picker-calling-by',  'f-calling-by');
-  setupPicker('picker-facilitator', 'f-facilitator');
+  // Calling By: must be a user with login, same team as devotee
+  setupUserPicker('picker-calling-by',  'f-calling-by',  () => document.getElementById('f-team')?.value || '');
+  // Facilitator: must be a user with login (any team)
+  setupUserPicker('picker-facilitator', 'f-facilitator', () => '');
 }
 
 function setupPicker(containerId, hiddenId) {
@@ -1501,6 +1546,37 @@ function selectPicker(containerId, hiddenId, name, id) {
   hidden.value = name;
   input.classList.add('has-value');
   dropdown.classList.add('hidden');
+}
+
+function setupUserPicker(containerId, hiddenId, getTeam) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const input    = container.querySelector('.picker-input');
+  const dropdown = container.querySelector('.picker-dropdown');
+  const hidden   = document.getElementById(hiddenId);
+
+  input.addEventListener('input', debounce(async () => {
+    const q = input.value.trim();
+    hidden.value = '';
+    input.classList.remove('has-value');
+    if (q.length < 2) { dropdown.classList.add('hidden'); dropdown.innerHTML = ''; return; }
+    const team = getTeam();
+    const results = await DB.getUsersForTeam(team, q);
+    if (!results.length) {
+      dropdown.innerHTML = `<div class="picker-no-result">No login found${team ? ' for ' + team + ' team' : ''}</div>`;
+      dropdown.classList.remove('hidden'); return;
+    }
+    dropdown.innerHTML = results.slice(0, 8).map(u => `
+      <div class="picker-option" onclick="selectPicker('${containerId}','${hiddenId}','${(u.name||'').replace(/'/g,"\\'")}','${u.uid}')">
+        <span>${u.name || u.email}</span>
+        <span class="picker-team">${u.teamName || ''}${u.teamName ? ' · ' : ''}${u.role === 'teamAdmin' ? 'Coordinator' : 'Calling Sevak'}</span>
+      </div>`).join('');
+    dropdown.classList.remove('hidden');
+  }, 280));
+
+  document.addEventListener('click', (e) => {
+    if (!container.contains(e.target)) dropdown.classList.add('hidden');
+  });
 }
 
 function clearPicker(containerId, hiddenId) {
@@ -2848,7 +2924,7 @@ function clearDevoteeForm() {
   clearPicker('picker-reference',   'f-reference');
   clearPicker('picker-calling-by',  'f-calling-by');
   clearFieldError('mobile');
-  if (AppState.userRole === 'teamAdmin' && AppState.userTeam) {
+  if ((AppState.userRole === 'teamAdmin' || AppState.userRole === 'serviceDevotee') && AppState.userTeam) {
     document.getElementById('f-team').value = AppState.userTeam;
   }
 }
@@ -2920,6 +2996,24 @@ async function saveDevotee(e) {
   clearFieldError('mobile');
   const id = document.getElementById('f-id').value;
   const payload = getFormPayload();
+
+  // Validate Calling By must have a login in the same team
+  if (payload.calling_by) {
+    const teamUsers = await DB.getUsersForTeam(payload.team_name);
+    if (!teamUsers.some(u => u.name === payload.calling_by)) {
+      showToast(`"${payload.calling_by}" has no system login in ${payload.team_name || 'this team'}. Assign a login first.`, 'error');
+      return;
+    }
+  }
+  // Validate Facilitator must have a login (any team)
+  if (payload.facilitator) {
+    const allUsers = await DB.getUsersForTeam('');
+    if (!allUsers.some(u => u.name === payload.facilitator)) {
+      showToast(`Facilitator "${payload.facilitator}" has no system login. Assign a login first.`, 'error');
+      return;
+    }
+  }
+
   try {
     let saved;
     if (id) { saved = await DB.updateDevotee(id, payload); showToast('Profile updated!', 'success'); }
@@ -3086,17 +3180,28 @@ function _renderCallingSubmitBar(week, existing) {
     const t = new Date(existing.submittedAtClient);
     const time = t.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
     const isLate = t.getHours() >= 21;
+    bar.style.background   = isLate ? '#fff3e0' : '#e8f5e9';
+    bar.style.borderColor  = isLate ? '#ffb74d' : 'var(--secondary)';
     bar.innerHTML = `
-      <span style="font-size:.85rem;color:${isLate ? '#c62828' : 'var(--success)'}">
-        <i class="fas fa-${isLate ? 'clock' : 'check-circle'}"></i>
-        Calling submitted at <strong>${time}</strong>${isLate ? ' (Late)' : ''}
-      </span>
-      <button class="btn btn-secondary" style="padding:.3rem .8rem;font-size:.8rem" onclick="doSubmitCallingWeek('${week}')">
-        <i class="fas fa-redo"></i> Re-submit
+      <div style="display:flex;flex-direction:column;gap:.15rem">
+        <span style="font-size:.85rem;color:${isLate ? '#e65100' : 'var(--success)'};font-weight:600">
+          <i class="fas fa-${isLate ? 'exclamation-clock' : 'check-circle'}"></i>
+          Submitted at <strong>${time}</strong>${isLate ? ' — Late submission' : ' ✓'}
+        </span>
+        <span style="font-size:.75rem;color:var(--text-muted)">
+          <i class="fas fa-pencil-alt"></i> You can still edit statuses above and re-submit to update.
+        </span>
+      </div>
+      <button class="btn btn-primary" style="padding:.35rem 1rem;font-size:.85rem;flex-shrink:0" onclick="doSubmitCallingWeek('${week}')">
+        <i class="fas fa-paper-plane"></i> Re-submit
       </button>`;
   } else {
+    bar.style.background  = '';
+    bar.style.borderColor = '';
     bar.innerHTML = `
-      <span style="font-size:.85rem;color:var(--text-muted)"><i class="fas fa-info-circle"></i> Done calling for this week?</span>
+      <span style="font-size:.85rem;color:var(--text-muted)">
+        <i class="fas fa-info-circle"></i> Done calling for this week?
+      </span>
       <button class="btn btn-primary" style="padding:.35rem 1rem;font-size:.85rem" onclick="doSubmitCallingWeek('${week}')">
         <i class="fas fa-paper-plane"></i> Submit Calling
       </button>`;
@@ -3106,11 +3211,19 @@ function _renderCallingSubmitBar(week, existing) {
 async function doSubmitCallingWeek(week) {
   try {
     await DB.submitCallingWeek(week, AppState.userId, AppState.userName, AppState.userTeam);
+    showToast('Calling submitted! Hare Krishna 🙏', 'success');
+  } catch (e) {
+    console.error('Submit calling failed:', e);
+    showToast('Submit failed: ' + (e.message || 'Check connection & try again'), 'error');
+    return;
+  }
+  // Refresh bar separately — don't let a read failure mask a successful submit
+  try {
     const sub = await DB.getMyCallingSubmission(week, AppState.userId);
     _renderCallingSubmitBar(week, sub);
-    showToast('Calling submitted!', 'success');
-  } catch (e) {
-    showToast('Submit failed', 'error');
+  } catch (_) {
+    // Even if re-read fails, show submitted state manually
+    _renderCallingSubmitBar(week, { submittedAtClient: new Date().toISOString() });
   }
 }
 
@@ -3298,7 +3411,7 @@ async function _loadCallingSummary(week, el) {
       grandYes += t.yes; grandMaybe += t.maybe; grandNo += t.no; grandShift += t.shift;
 
       bodyRows += `<tr style="background:var(--accent-light);font-weight:700;font-size:.83rem">
-        <td>${teamBadge(team)}</td>
+        <td colspan="2">${teamBadge(team)}</td>
         <td style="text-align:center">${t.total}</td>
         <td style="text-align:center">${t.called}</td>
         <td style="text-align:center;color:#c62828">${t.notCalled}</td>
@@ -3308,9 +3421,19 @@ async function _loadCallingSummary(week, el) {
         <td style="text-align:center;color:var(--text-muted)">${t.shift}</td>
       </tr>`;
 
-      Object.entries(t.callers).forEach(([caller, s]) => {
+      // Coordinator first, then alphabetical
+      const sortedCallers = Object.entries(t.callers).sort(([, a], [, b]) => {
+        if (a.isCoordinator && !b.isCoordinator) return -1;
+        if (!a.isCoordinator && b.isCoordinator) return 1;
+        return 0;
+      });
+      sortedCallers.forEach(([caller, s]) => {
+        const posBadge = s.isCoordinator
+          ? `<span style="font-size:.68rem;padding:.1rem .35rem;border-radius:.2rem;background:rgba(201,168,76,.2);color:#8B6914;font-weight:600">Coordinator</span>`
+          : `<span style="font-size:.68rem;padding:.1rem .35rem;border-radius:.2rem;background:rgba(82,183,136,.15);color:var(--primary)">Calling Sevak</span>`;
         bodyRows += `<tr style="font-size:.82rem">
           <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}</td>
+          <td>${posBadge}</td>
           <td style="text-align:center">${s.total}</td>
           <td style="text-align:center">${s.called}</td>
           <td style="text-align:center;color:#c62828">${s.notCalled}</td>
@@ -3329,6 +3452,7 @@ async function _loadCallingSummary(week, el) {
     <table class="calling-table" style="margin:0">
       <thead><tr>
         <th style="min-width:160px">Team / Calling By</th>
+        <th style="min-width:110px">Position</th>
         <th style="text-align:center">Total</th>
         <th style="text-align:center">Called</th>
         <th style="text-align:center;color:#c62828">Not Called</th>
@@ -3340,7 +3464,7 @@ async function _loadCallingSummary(week, el) {
       <tbody>
         ${bodyRows}
         <tr style="background:#1a5c3a;color:#fff;font-weight:700;font-size:.83rem">
-          <td>Grand Total</td>
+          <td colspan="2">Grand Total</td>
           <td style="text-align:center">${grandTotal}</td>
           <td style="text-align:center">${grandCalled}</td>
           <td style="text-align:center">${grandNotCalled}</td>
@@ -3670,7 +3794,7 @@ async function updateAttendanceStats() {
   if (!AppState.currentSessionId) return;
   try {
     const s = await DB.getSessionStats(AppState.currentSessionId);
-    document.getElementById('stat-target').textContent  = s.target;
+    document.getElementById('stat-confirmed').textContent = s.confirmed;
     document.getElementById('stat-present').textContent = s.present;
     document.getElementById('stat-new').textContent     = s.newDevotees;
     document.getElementById('stat-total').textContent   = s.totalPresent;

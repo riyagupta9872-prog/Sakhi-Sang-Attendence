@@ -323,8 +323,8 @@
       </div>
       <div class="attendance-dashboard">
         <div class="stat-card target-card">
-          <div class="stat-icon"><i class="fas fa-bullseye"></i></div>
-          <div class="stat-info"><div class="stat-value" id="stat-target">0</div><div class="stat-label">Target</div></div>
+          <div class="stat-icon"><i class="fas fa-check-double"></i></div>
+          <div class="stat-info"><div class="stat-value" id="stat-confirmed">0</div><div class="stat-label">Total Confirmed</div></div>
         </div>
         <div class="stat-card present-card">
           <div class="stat-icon"><i class="fas fa-user-check"></i></div>
@@ -930,6 +930,24 @@
       <div class="form-group">
         <label for="edit-profile-name">Display Name</label>
         <input type="text" id="edit-profile-name" class="form-control" placeholder="Your name" maxlength="60">
+      </div>
+      <!-- Team field -->
+      <div class="form-group" id="edit-profile-team-group">
+        <label>Team</label>
+        <select id="edit-profile-team" class="form-control">
+          <option value="">No Team</option>
+          <option>Lalita</option><option>Vishakha</option><option>Tungavidya</option>
+          <option>Indulekha</option><option>Sudevi</option><option>Rangadevi</option>
+          <option>Chitralekha</option><option>Champaklata</option><option>Nilachal</option>
+          <option>New Devotees</option>
+        </select>
+        <div id="edit-profile-team-readonly" class="form-control" style="display:none;background:var(--accent-light);color:var(--text-muted);cursor:default"></div>
+        <p id="edit-profile-team-note" style="font-size:.72rem;color:var(--text-muted);margin-top:.25rem;display:none">Contact Super Admin to change your team.</p>
+      </div>
+      <!-- Position field -->
+      <div class="form-group">
+        <label for="edit-profile-position">Position</label>
+        <input type="text" id="edit-profile-position" class="form-control" placeholder="e.g. Facilitator, Calling Sevak…" maxlength="60">
       </div>
       <!-- Error -->
       <div id="edit-profile-error" style="color:var(--danger);font-size:.82rem;margin:.5rem 0;display:none"></div>
