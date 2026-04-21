@@ -275,11 +275,12 @@ h3 { font-size: .95rem; }
 .badge-expected { background: var(--success-light); color: var(--success); }
 
 /* ── CONTACT ICONS ── */
-.contact-icons { display: flex; gap: .3rem; }
+.contact-icons { display: flex; gap: .3rem; flex-shrink: 0; }
 .contact-icon {
-  width: 30px; height: 30px; border-radius: 50%; border: none;
+  width: 30px; height: 30px; min-width: 30px; border-radius: 50%; border: none;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; font-size: .85rem; text-decoration: none; transition: transform .15s;
+  flex-shrink: 0;
 }
 .contact-icon:hover { transform: scale(1.15); }
 .icon-phone { background: #e8f5e9; color: #2e7d32; }
@@ -619,10 +620,11 @@ h3 { font-size: .95rem; }
 .birthday-header { display: flex; align-items: center; gap: .75rem; padding: 1.25rem 1.4rem; border-bottom: 1px solid var(--border-subtle); }
 .birthday-icon-wrap { width: 44px; height: 44px; border-radius: 50%; background: var(--gold-light); display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: var(--gold); flex-shrink: 0; }
 .birthday-header h2 { flex: 1; font-size: .98rem; }
-.birthday-list { padding: .75rem 1.4rem; display: flex; flex-direction: column; gap: .5rem; }
-.birthday-item { display: flex; align-items: center; gap: .75rem; padding: .6rem .85rem; background: var(--gold-light); border-radius: var(--radius-sm); border: 1px solid #e8d4a0; }
-.birthday-name { font-weight: 700; flex: 1; }
-.birthday-date { font-size: .79rem; color: var(--text-muted); }
+.birthday-list { padding: .75rem 1.4rem; display: flex; flex-direction: column; gap: .5rem; max-height: 55vh; overflow-y: auto; }
+.birthday-item { display: flex; align-items: center; gap: .6rem; padding: .6rem .85rem; background: var(--gold-light); border-radius: var(--radius-sm); border: 1px solid #e8d4a0; min-width: 0; }
+.birthday-name { font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.birthday-date { font-size: .79rem; color: var(--text-muted); flex-shrink: 0; white-space: nowrap; }
+.birthday-item .contact-icons { margin-left: auto; flex-shrink: 0; }
 
 /* ── IMPORT ── */
 .import-instructions { padding: 1rem 1.4rem; font-size: .85rem; color: var(--text-muted); }
@@ -694,15 +696,29 @@ h3 { font-size: .95rem; }
   .care-grid { grid-template-columns: 1fr; }
   .tab-btn span { display: none; }
   .tab-btn { padding: 0 .85rem; }
-  .panel-header { flex-direction: column; align-items: flex-start; }
+  .panel-header { flex-direction: column; align-items: flex-start; gap: .6rem; }
+  .panel-header .panel-actions { width: 100%; flex-wrap: wrap; }
+  .modal-box { width: calc(100vw - 2rem); margin: 1rem auto; }
 }
 @media (max-width: 480px) {
-  .main-content { padding: 1rem .75rem 5rem; }
+  :root { --header-h: 56px; --nav-h: 46px; }
+  .main-content { padding: 1rem .6rem 5rem; }
   .stat-value { font-size: 1.5rem; }
-  .modal-box { max-height: 95vh; border-radius: 14px; }
+  .modal-box { max-height: 92vh; border-radius: 14px; width: calc(100vw - 1.5rem); }
+  .modal-header, .birthday-header { padding: 1rem 1rem; }
+  .modal-body { padding: .75rem 1rem; }
+  .birthday-list { padding: .5rem 1rem; }
+  .birthday-item { padding: .5rem .65rem; gap: .45rem; }
   .attendance-dashboard { grid-template-columns: 1fr 1fr; gap: .5rem; }
   .stat-card { padding: .75rem .85rem; }
   .search-filter-bar { padding: .5rem; gap: .4rem; }
+  .panel-header { padding: .85rem 1rem; }
+  .panel-header h2 { font-size: .92rem; }
+  .att-sub-tabs { gap: .25rem; }
+  .att-sub-tab { font-size: .77rem; padding: .45rem .65rem; }
+  .fab { bottom: 5rem; right: 1rem; width: 50px; height: 50px; font-size: 1.25rem; }
+  .header-profile { display: none; }
+  .header-right { gap: .5rem; }
 }
 
 /* ════════════════════════════════════════════════════

@@ -1,5 +1,5 @@
 /* ══ SERVICE WORKER – Sakhi Sang ══ */
-const CACHE = 'sakhi-sang-v4';
+const CACHE = 'sakhi-sang-v5';
 const SHELL = [
   './index.html',
   './app.js',

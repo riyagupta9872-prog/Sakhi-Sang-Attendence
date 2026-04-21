@@ -344,9 +344,6 @@
         </div>
       </div>
       <div id="attendance-list" class="attendance-grid"></div>
-      <button class="fab" onclick="openDevoteeFormModal(true)" title="Register New Devotee">
-        <i class="fas fa-plus"></i>
-      </button>
     </div>
 
     <!-- ── ATTENDANCE SHEET PANEL ── -->
@@ -470,6 +467,11 @@
     </div>
     <div id="events-list" class="events-grid"></div>
   </section>
+
+<!-- FAB: Register New Devotee (shown only on Attendance > Live) -->
+<button id="register-fab" class="fab hidden" onclick="openDevoteeFormModal(true)" title="Register New Devotee">
+  <i class="fas fa-plus"></i>
+</button>
 
 </main>
 

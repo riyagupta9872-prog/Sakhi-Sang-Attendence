@@ -1690,6 +1690,9 @@ function switchTab(tab, btn) {
     AppState.devoteeSelectMode = false;
     AppState.selectedDevotees.clear();
   }
+  // FAB only visible on attendance tab (live sub-tab); hide on all other tabs
+  const fab = document.getElementById('register-fab');
+  if (fab) fab.classList.toggle('hidden', tab !== 'attendance');
   if (tab === 'calling')    loadCallingStatus();
   if (tab === 'attendance') loadAttendanceTab();
   if (tab === 'reports')    loadReports();
@@ -1934,6 +1937,9 @@ function switchAttTab(tab, btn) {
   document.querySelectorAll('.att-sub-panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('att-panel-' + tab).classList.add('active');
+  // FAB only on live sub-tab
+  const fab = document.getElementById('register-fab');
+  if (fab) fab.classList.toggle('hidden', tab !== 'live');
   if (tab === 'sheet') loadAttendanceSheet();
 }
 
