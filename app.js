@@ -2656,11 +2656,12 @@ function renderDevoteeItem(d) {
       ${selectMode ? `<input type="checkbox" class="devotee-checkbox"${isSelected ? ' checked' : ''} onclick="event.stopPropagation();toggleDevoteeSelect('${d.id}',this.closest('.devotee-item'))">` : ''}
       <div class="devotee-avatar">${initials(d.name)}</div>
       <div class="devotee-info">
-        <div class="devotee-name">${d.name}
+        <div class="devotee-name">
+          ${d.name}
           ${isBirthdayWeek(d.dob) ? '<i class="fas fa-birthday-cake birthday-icon" title="Birthday this week!"></i>' : ''}
         </div>
         <div class="devotee-meta">${d.mobile || '—'}</div>
-        <div class="devotee-badges">${statusBadge(d.devotee_status)} ${teamBadge(d.team_name)}</div>
+        <div class="devotee-badges">${statusBadge(d.devotee_status)}${d.team_name ? ' ' + teamBadge(d.team_name) : ''}</div>
       </div>
       <div style="display:flex;align-items:center;gap:.5rem">${selectMode ? '' : contactIcons(d.mobile)}</div>
     </div>`;
@@ -3251,13 +3252,28 @@ function switchReportType(type, btn) {
   document.getElementById('rpt-tab-summary' ).classList.toggle('btn-secondary',  type !== 'summary');
   document.getElementById('rpt-tab-accuracy').classList.toggle('btn-primary',   type === 'accuracy');
   document.getElementById('rpt-tab-accuracy').classList.toggle('btn-secondary',  type !== 'accuracy');
+  // Reset date to the appropriate default for each report type
+  const inp = document.getElementById('calling-report-week');
+  if (inp) inp.value = type === 'summary' ? getCallingWeekDefault() : getCurrentSunday();
   loadCallingReports();
 }
 
 async function loadCallingReports() {
   const inp = document.getElementById('calling-report-week');
-  if (inp && !inp.value) inp.value = getCurrentSunday();
-  const week = (inp && inp.value) || getCurrentSunday();
+  // Summary: default to upcoming Sunday (same week coordinators just called)
+  // Accuracy: default to last Sunday (needs attendance data which is past)
+  const defaultWeek = _reportType === 'summary' ? getCallingWeekDefault() : getCurrentSunday();
+  if (inp && !inp.value) inp.value = defaultWeek;
+  const week = (inp && inp.value) || defaultWeek;
+
+  // Update label
+  const lbl = document.getElementById('rpt-week-label');
+  if (lbl) {
+    const [y,m,d] = week.split('-').map(Number);
+    const dateStr = new Date(y,m-1,d).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
+    lbl.textContent = dateStr;
+  }
+
   const el = document.getElementById('calling-reports-content');
   el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   if (_reportType === 'summary') return _loadCallingSummary(week, el);

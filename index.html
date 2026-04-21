@@ -255,8 +255,9 @@
       <!-- Date + report-type row -->
       <div style="display:flex;align-items:center;gap:.75rem;padding:.4rem 0 .6rem;flex-wrap:wrap;justify-content:space-between">
         <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
-          <label style="font-size:.85rem;font-weight:600;color:var(--text-muted)"><i class="fas fa-calendar-week"></i> Class Date</label>
+          <label style="font-size:.85rem;font-weight:600;color:var(--text-muted)"><i class="fas fa-calendar-week"></i> Week</label>
           <input type="date" id="calling-report-week" style="border:1px solid var(--border);border-radius:6px;padding:.3rem .6rem;font-size:.85rem" onchange="loadCallingReports()">
+          <span id="rpt-week-label" style="font-size:.82rem;color:var(--primary);font-weight:600"></span>
         </div>
         <div style="display:flex;gap:.4rem;flex-wrap:wrap">
           <button id="rpt-tab-summary"  class="btn btn-primary"    style="padding:.3rem .9rem;font-size:.82rem" onclick="switchReportType('summary',this)"><i class="fas fa-phone-alt"></i> Calling Summary</button>
