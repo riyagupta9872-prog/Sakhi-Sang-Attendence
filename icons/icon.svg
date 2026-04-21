@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#2d7a52"/>
+      <stop offset="100%" stop-color="#1a5c3a"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f6e9c0" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#f6e9c0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <circle cx="256" cy="256" r="256" fill="url(#bg)"/>
+  <circle cx="256" cy="220" r="200" fill="url(#glow)"/>
+
+  <!-- Lotus petals (back row) -->
+  <ellipse cx="256" cy="310" rx="22" ry="62" fill="#95d5b2" opacity="0.55" transform="rotate(-40 256 310)"/>
+  <ellipse cx="256" cy="310" rx="22" ry="62" fill="#95d5b2" opacity="0.55" transform="rotate(40 256 310)"/>
+  <ellipse cx="256" cy="310" rx="22" ry="62" fill="#95d5b2" opacity="0.55" transform="rotate(-80 256 310)"/>
+  <ellipse cx="256" cy="310" rx="22" ry="62" fill="#95d5b2" opacity="0.55" transform="rotate(80 256 310)"/>
+  <ellipse cx="256" cy="310" rx="22" ry="62" fill="#95d5b2" opacity="0.55" transform="rotate(-120 256 310)"/>
+  <ellipse cx="256" cy="310" rx="22" ry="62" fill="#95d5b2" opacity="0.55" transform="rotate(120 256 310)"/>
+
+  <!-- Lotus petals (front row) -->
+  <ellipse cx="256" cy="308" rx="20" ry="58" fill="#d8f3dc" transform="rotate(-20 256 308)"/>
+  <ellipse cx="256" cy="308" rx="20" ry="58" fill="#d8f3dc" transform="rotate(20 256 308)"/>
+  <ellipse cx="256" cy="308" rx="20" ry="58" fill="#d8f3dc" transform="rotate(-60 256 308)"/>
+  <ellipse cx="256" cy="308" rx="20" ry="58" fill="#d8f3dc" transform="rotate(60 256 308)"/>
+  <ellipse cx="256" cy="308" rx="20" ry="58" fill="#d8f3dc" transform="rotate(-100 256 308)"/>
+  <ellipse cx="256" cy="308" rx="20" ry="58" fill="#d8f3dc" transform="rotate(100 256 308)"/>
+  <ellipse cx="256" cy="308" rx="20" ry="58" fill="#d8f3dc" transform="rotate(180 256 308)"/>
+
+  <!-- Lotus center -->
+  <circle cx="256" cy="310" r="38" fill="#c9a84c"/>
+  <circle cx="256" cy="310" r="28" fill="#f6e9c0"/>
+
+  <!-- Om symbol -->
+  <text x="256" y="206"
+    text-anchor="middle"
+    font-size="148"
+    fill="#c9a84c"
+    font-family="serif"
+    font-weight="bold"
+    letter-spacing="-2">ॐ</text>
+
+  <!-- App name -->
+  <text x="256" y="400"
+    text-anchor="middle"
+    font-size="38"
+    fill="#f6e9c0"
+    font-family="Georgia, serif"
+    font-weight="600"
+    letter-spacing="3">Sakhi Sang</text>
+
+  <!-- Decorative dots -->
+  <circle cx="110" cy="390" r="5" fill="#c9a84c" opacity="0.7"/>
+  <circle cx="402" cy="390" r="5" fill="#c9a84c" opacity="0.7"/>
+  <circle cx="80" cy="370" r="3" fill="#c9a84c" opacity="0.5"/>
+  <circle cx="432" cy="370" r="3" fill="#c9a84c" opacity="0.5"/>
+</svg>

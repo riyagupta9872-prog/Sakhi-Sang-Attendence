@@ -34,6 +34,9 @@ const AppState = {
   userTeam: null,       // team name for coordinators
   userName: '',
   userId: null,
+  profilePic: null,            // base64 string or null
+  devoteeSelectMode: false,    // multi-select mode in devotee list
+  selectedDevotees: new Set(), // selected devotee ids
 };
 
 // ── AUTH ──────────────────────────────────────────────
@@ -57,9 +60,10 @@ auth.onAuthStateChanged(async (user) => {
       userDoc = { data: () => data };
     }
     const ud = userDoc.data();
-    AppState.userRole = ud.role;
-    AppState.userTeam = ud.teamName || null;
-    AppState.userName = ud.name || user.email;
+    AppState.userRole   = ud.role;
+    AppState.userTeam   = ud.teamName   || null;
+    AppState.userName   = ud.name       || user.email;
+    AppState.profilePic = ud.profilePic || null;
     hideAuthScreen();
     applyRoleUI();
     await initApp();
@@ -176,6 +180,93 @@ async function doLogout() {
   await auth.signOut();
 }
 
+// ── EDIT PROFILE ─────────────────────────────────────
+let _pendingProfilePic = undefined; // undefined = no change, null = remove, string = new base64
+
+function openEditProfile() {
+  _pendingProfilePic = undefined;
+  document.getElementById('edit-profile-name').value = AppState.userName || '';
+  document.getElementById('edit-profile-error').style.display = 'none';
+  document.getElementById('profile-pic-input').value = '';
+  _renderProfilePicPreview(AppState.profilePic || null);
+  openModal('edit-profile-modal');
+}
+
+function _renderProfilePicPreview(src) {
+  const img   = document.getElementById('profile-pic-img');
+  const inits = document.getElementById('profile-pic-initials');
+  const rmBtn = document.getElementById('remove-pic-btn');
+  if (src) {
+    img.src = src; img.style.display = 'block';
+    inits.style.display = 'none';
+    rmBtn.style.display = '';
+  } else {
+    img.style.display = 'none';
+    inits.textContent = initials(AppState.userName || '?');
+    inits.style.display = '';
+    rmBtn.style.display = 'none';
+  }
+}
+
+function handleProfilePicSelect(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const errEl = document.getElementById('edit-profile-error');
+  errEl.style.display = 'none';
+  if (file.size > 50 * 1024) {
+    errEl.textContent = `Image is too large (${(file.size / 1024).toFixed(1)} KB). Please choose an image under 50 KB.`;
+    errEl.style.display = 'block';
+    e.target.value = '';
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = ev => {
+    _pendingProfilePic = ev.target.result;
+    _renderProfilePicPreview(_pendingProfilePic);
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeProfilePic() {
+  _pendingProfilePic = null;
+  _renderProfilePicPreview(null);
+}
+
+async function saveEditProfile() {
+  const name  = document.getElementById('edit-profile-name').value.trim();
+  const errEl = document.getElementById('edit-profile-error');
+  errEl.style.display = 'none';
+  if (!name) { errEl.textContent = 'Name cannot be empty.'; errEl.style.display = 'block'; return; }
+  const updates = { name, updatedAt: TS() };
+  if (_pendingProfilePic !== undefined) updates.profilePic = _pendingProfilePic; // null clears it
+  try {
+    await fdb.collection('users').doc(AppState.userId).update(updates);
+    AppState.userName = name;
+    if (_pendingProfilePic !== undefined) AppState.profilePic = _pendingProfilePic || null;
+    document.getElementById('header-user-name').textContent = name;
+    _applyHeaderAvatar();
+    closeModal('edit-profile-modal');
+    showToast('Profile updated! Hare Krishna 🙏', 'success');
+  } catch (ex) {
+    errEl.textContent = 'Save failed: ' + ex.message;
+    errEl.style.display = 'block';
+  }
+}
+
+function _applyHeaderAvatar() {
+  const img   = document.getElementById('header-avatar-img');
+  const inits = document.getElementById('header-avatar-initials');
+  const pic   = AppState.profilePic;
+  if (pic) {
+    img.src = pic; img.style.display = 'block';
+    inits.style.display = 'none';
+  } else {
+    img.style.display = 'none';
+    inits.textContent = initials(AppState.userName || '?');
+    inits.style.display = '';
+  }
+}
+
 // ── ROLE-BASED UI ─────────────────────────────────────
 function applyRoleUI() {
   const role = AppState.userRole;
@@ -183,6 +274,7 @@ function applyRoleUI() {
 
   // Header info
   document.getElementById('header-user-name').textContent = AppState.userName;
+  _applyHeaderAvatar();
   const pill = document.getElementById('header-role-pill');
   pill.textContent = role === 'superAdmin' ? 'Super Admin' : role === 'teamAdmin' ? (team ? `${team} Admin` : 'Team Admin') : 'Seva';
   pill.style.background = role === 'superAdmin' ? 'rgba(201,168,76,.5)' : role === 'teamAdmin' ? 'rgba(82,183,136,.4)' : 'rgba(255,255,255,.2)';
@@ -242,7 +334,7 @@ async function openAdminPanel() {
   try {
     const snap = await fdb.collection('users').get();
     const users = snap.docs.map(d => ({ uid: d.id, ...d.data() }));
-    const teams = ['','Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata'];
+    const teams = ['', ...TEAMS];
     container.innerHTML = users.map(u => `
       <div class="admin-user-row">
         <div class="devotee-avatar" style="width:36px;height:36px;font-size:.8rem;flex-shrink:0">${initials(u.name||u.email)}</div>
@@ -276,7 +368,7 @@ async function openClearDataModal() {
   // Populate team dropdown from known teams
   const sel = document.getElementById('clear-team-select');
   sel.innerHTML = '<option value="">-- Select Team --</option>';
-  const teams = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata'];
+  const teams = TEAMS;
   teams.forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t; sel.appendChild(o); });
   // Also load from existing devotees
   try {
@@ -726,12 +818,15 @@ const DB = {
       fdb.collection('callingStatus').where('weekDate', '==', week).get(),
       fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get()
     ]);
-    const csMap = {};
+    const csMap = {}, markedAtMap = {};
     csSnap.docs.forEach(d => { csMap[d.data().devoteeId] = d.data(); });
+    atSnap.docs.forEach(d => {
+      markedAtMap[d.data().devoteeId] = tsToISO(d.data().markedAt);
+    });
     const presentSet = new Set(atSnap.docs.map(d => d.data().devoteeId));
     let list = rawDevotees.filter(d => {
       const cs = csMap[d.id];
-      return !cs || !['Shifted', 'Not Interested'].includes(cs.comingStatus);
+      return !cs || !['Shift', 'Not Interested'].includes(cs.comingStatus);
     });
     if (search) {
       const s = search.toLowerCase();
@@ -741,6 +836,7 @@ const DB = {
       ...toSnake(d),
       coming_status: csMap[d.id]?.comingStatus || null,
       attendance_id: presentSet.has(d.id) ? d.id : null,
+      marked_at:     markedAtMap[d.id] || null,
     }));
   },
 
@@ -787,9 +883,11 @@ const DB = {
     const filtered = raw.filter(d => d.callingBy && d.callingBy.trim() && !d.isNotInterested);
     return filtered.map(d => ({
       ...toSnake(d),
-      coming_status: csMap[d.id]?.comingStatus || null,
-      calling_notes: csMap[d.id]?.callingNotes || null,
-      calling_id:    csMap[d.id]?.id            || null,
+      coming_status:     csMap[d.id]?.comingStatus    || null,
+      calling_notes:     csMap[d.id]?.callingNotes    || null,
+      calling_id:        csMap[d.id]?.id              || null,
+      updated_at_client: csMap[d.id]?.updatedAtClient || null,
+      late_remarks:      csMap[d.id]?.lateRemarks     || null,
     }));
   },
 
@@ -812,10 +910,175 @@ const DB = {
   },
 
   async updateCallingStatus(devoteeId, weekDate, data) {
+    const now = new Date();
     const snap = await fdb.collection('callingStatus').where('devoteeId', '==', devoteeId).where('weekDate', '==', weekDate).limit(1).get();
-    const payload = { devoteeId, weekDate, comingStatus: data.coming_status || 'Maybe', callingNotes: data.calling_notes || null, updatedAt: TS() };
-    if (snap.empty) await fdb.collection('callingStatus').add(payload);
-    else await snap.docs[0].ref.update(payload);
+    const payload = {
+      devoteeId, weekDate,
+      comingStatus:    data.coming_status || 'Maybe',
+      updatedAt:       TS(),
+      updatedAtClient: now.toISOString(),
+    };
+    if (data.calling_notes !== undefined) payload.callingNotes = data.calling_notes ?? null;
+    if (data.late_remarks  !== undefined) payload.lateRemarks  = data.late_remarks  ?? null;
+    if (snap.empty) {
+      payload.createdAt = TS();
+      payload.createdAtClient = now.toISOString();
+      await fdb.collection('callingStatus').add(payload);
+    } else {
+      await snap.docs[0].ref.update(payload);
+    }
+  },
+
+  async getCallingHistory(devoteeId, weeksBefore = 2) {
+    // Last N Sundays before/including today
+    const weeks = [];
+    const d = new Date(); const day = d.getDay();
+    d.setDate(d.getDate() - day); // this Sunday
+    for (let i = 0; i < weeksBefore; i++) {
+      weeks.push(d.toISOString().split('T')[0]);
+      d.setDate(d.getDate() - 7);
+    }
+    const snaps = await Promise.all(weeks.map(w =>
+      fdb.collection('callingStatus').where('devoteeId', '==', devoteeId).where('weekDate', '==', w).limit(1).get()
+    ));
+    return weeks.map((w, i) => {
+      const doc = snaps[i].docs[0];
+      return doc ? { weekDate: w, ...doc.data(), id: doc.id } : { weekDate: w, comingStatus: null };
+    });
+  },
+
+  async getLateSubmissions(weekDate, afterHour = 21) {
+    const snap = await fdb.collection('callingStatus').where('weekDate', '==', weekDate).get();
+    const all  = await DevoteeCache.all();
+    const devMap = {}; all.forEach(d => { devMap[d.id] = d; });
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(r => {
+        const t = r.updatedAtClient || (r.updatedAt?.toDate ? r.updatedAt.toDate().toISOString() : null);
+        if (!t) return false;
+        return new Date(t).getHours() >= afterHour;
+      })
+      .map(r => {
+        const dev = devMap[r.devoteeId] || {};
+        return {
+          id: r.id, devoteeId: r.devoteeId,
+          name: dev.name || '—', team_name: dev.teamName || '',
+          calling_by: dev.callingBy || '',
+          coming_status: r.comingStatus || '',
+          updated_at_client: r.updatedAtClient || null,
+          late_remarks: r.lateRemarks || '',
+        };
+      })
+      .sort((a, b) => (a.updated_at_client || '').localeCompare(b.updated_at_client || ''));
+  },
+
+  async saveCallingRemarks(statusId, remarks) {
+    await fdb.collection('callingStatus').doc(statusId).update({ lateRemarks: remarks, updatedAt: TS() });
+  },
+
+  async submitCallingWeek(weekDate, userId, userName, teamName) {
+    // Upsert: one submission per user per week (filter userId in JS to avoid composite index)
+    const snap = await fdb.collection('callingSubmissions').where('weekDate', '==', weekDate).get();
+    const existing = snap.docs.find(d => d.data().userId === userId);
+    const payload = { weekDate, userId, userName, teamName: teamName || '', submittedAt: TS(), submittedAtClient: new Date().toISOString() };
+    if (existing) {
+      await existing.ref.update(payload);
+    } else {
+      await fdb.collection('callingSubmissions').add(payload);
+    }
+  },
+
+  async getCallingSubmissions(weekDates) {
+    // Returns { weekDate: { userName: { teamName, submittedAtClient } } }
+    const result = {};
+    weekDates.forEach(w => { result[w] = {}; });
+    await Promise.all(weekDates.map(async w => {
+      const snap = await fdb.collection('callingSubmissions').where('weekDate', '==', w).get();
+      snap.docs.forEach(d => {
+        const { userName, teamName, submittedAtClient } = d.data();
+        // Keep latest if user submitted multiple times
+        if (!result[w][userName] || submittedAtClient > (result[w][userName].submittedAtClient || '')) {
+          result[w][userName] = { teamName: teamName || '', submittedAtClient };
+        }
+      });
+    }));
+    return result;
+  },
+
+  async getMyCallingSubmission(weekDate, userId) {
+    // Query by weekDate only (avoids composite index requirement), filter userId in JS
+    const snap = await fdb.collection('callingSubmissions')
+      .where('weekDate', '==', weekDate).get();
+    const mine = snap.docs.find(d => d.data().userId === userId);
+    return mine ? mine.data() : null;
+  },
+
+  async getCallingReport(weekDate) {
+    const raw  = await DevoteeCache.all();
+    const snap = await fdb.collection('callingStatus').where('weekDate', '==', weekDate).get();
+    const csMap = {};
+    snap.docs.forEach(d => { csMap[d.data().devoteeId] = d.data(); });
+
+    // Find the session for this Sunday and load actual attendance
+    const sessSnap = await fdb.collection('sessions')
+      .where('sessionDate', '==', weekDate).limit(1).get();
+    let attSet = new Set(), hasSession = false;
+    if (!sessSnap.empty && !sessSnap.docs[0].data().isCancelled) {
+      hasSession = true;
+      const attSnap = await fdb.collection('attendanceRecords')
+        .where('sessionId', '==', sessSnap.docs[0].id).get();
+      attSnap.docs.forEach(d => attSet.add(d.data().devoteeId));
+    }
+
+    const active = raw.filter(d => d.callingBy && !d.isNotInterested);
+    const STAT_KEYS = ['called','yes','maybe','no','shift','notCalled','came','yesAndCame','yesNotCame','noButCame'];
+    const zeroStats = () => Object.fromEntries(STAT_KEYS.map(k => [k, 0]));
+
+    const result = { _hasSession: hasSession, _totalPresent: attSet.size };
+    TEAMS.forEach(team => {
+      const members = active.filter(d => d.teamName === team);
+      if (!members.length) return;
+      const callers = [...new Set(members.map(d => d.callingBy).filter(Boolean))].sort();
+      result[team] = { total: members.length, ...zeroStats(), callers: {} };
+      callers.forEach(caller => {
+        const sub = members.filter(d => d.callingBy === caller);
+        const s = { total: sub.length, ...zeroStats() };
+        sub.forEach(d => {
+          const cs = csMap[d.id];
+          const came = attSet.has(d.id);
+          if (came) s.came++;
+          if (!cs) { s.notCalled++; return; }
+          s.called++;
+          if      (cs.comingStatus === 'Yes')   { s.yes++;   came ? s.yesAndCame++ : s.yesNotCame++; }
+          else if (cs.comingStatus === 'Maybe')  { s.maybe++; }
+          else if (cs.comingStatus === 'No')     { s.no++;    if (came) s.noButCame++; }
+          else if (cs.comingStatus === 'Shift')  { s.shift++; }
+        });
+        result[team].callers[caller] = s;
+        STAT_KEYS.forEach(k => { result[team][k] += s[k]; });
+      });
+    });
+    return result;
+  },
+
+  // Returns devotees who said Yes but didn't attend for a given weekDate
+  async getYesAbsentList(weekDate) {
+    const [all, csSnap, sessSnap] = await Promise.all([
+      DevoteeCache.all(),
+      fdb.collection('callingStatus').where('weekDate','==',weekDate).where('comingStatus','==','Yes').get(),
+      fdb.collection('sessions').where('sessionDate','==',weekDate).limit(1).get()
+    ]);
+    const devMap = {};
+    all.forEach(d => { devMap[d.id] = d; });
+    const yesIds = csSnap.docs.map(d => d.data().devoteeId);
+    if (sessSnap.empty || sessSnap.docs[0].data().isCancelled) return { hasSession:false, list:[] };
+    const attSnap = await fdb.collection('attendanceRecords').where('sessionId','==',sessSnap.docs[0].id).get();
+    const attSet = new Set(attSnap.docs.map(d => d.data().devoteeId));
+    const list = yesIds.filter(id => !attSet.has(id)).map(id => {
+      const d = devMap[id] || {};
+      return { id, name:d.name||'—', teamName:d.teamName||'', callingBy:d.callingBy||'', mobile:d.mobile||'' };
+    }).sort((a,b) => (a.teamName||'').localeCompare(b.teamName||'') || a.name.localeCompare(b.name));
+    return { hasSession:true, list };
   },
 
   /* REPORTS */
@@ -824,7 +1087,7 @@ const DB = {
   },
 
   async getTeamsReport(weekDate, sessionId) {
-    const teams = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata'];
+    const teams = TEAMS;
     const raw = await DevoteeCache.all();
     const [csSnap, atSnap] = await Promise.all([
       fdb.collection('callingStatus').where('weekDate', '==', weekDate).get(),
@@ -835,7 +1098,7 @@ const DB = {
     const presentSet = new Set(atSnap.docs.map(d => d.data().devoteeId));
     return teams.map(team => {
       const td = raw.filter(d => d.teamName === team);
-      const callingList = td.filter(d => { const cs = csMap[d.id]; return !cs || !['Shifted','Not Interested'].includes(cs.comingStatus); });
+      const callingList = td.filter(d => { const cs = csMap[d.id]; return !cs || !['Shift','Not Interested'].includes(cs.comingStatus); });
       const target = td.filter(d => csMap[d.id]?.comingStatus === 'Yes');
       const actual = td.filter(d => presentSet.has(d.id));
       return { team, total: td.length, callingList: callingList.length, target: target.length, actualPresent: actual.length, percentage: target.length > 0 ? Math.round(actual.length / target.length * 100) : 0 };
@@ -843,7 +1106,7 @@ const DB = {
   },
 
   async getSeriousReport(weekDate, sessionId) {
-    const teams = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata'];
+    const teams = TEAMS;
     const statuses = ['Expected to be Serious','Serious','Most Serious'];
     const raw = await DevoteeCache.all();
     const [csSnap, atSnap] = await Promise.all([
@@ -1050,25 +1313,50 @@ function downloadExcel(rows, filename) {
 
 // ══════════════════════════════════════════════════════
 // UTILITIES
+// ── TEAMS LIST (single source of truth) ───────────────
+const TEAMS = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata','Nilachal','New Devotees'];
+
+// ── ATTENDANCE TIME COLOUR ─────────────────────────────
+function attTimeStyle(markedAtISO) {
+  if (!markedAtISO) return { card: '', badge: '' };
+  const d = new Date(markedAtISO);
+  const mins = d.getHours() * 60 + d.getMinutes();
+  const t1230 = 12 * 60 + 30, t1245 = 12 * 60 + 45, t1300 = 13 * 60;
+  if (mins >= t1300) return { card: 'background:#c62828;color:#fff', badge: 'color:#fff' };
+  if (mins >= t1245) return { card: 'background:#ef9a9a', badge: '' };
+  if (mins >= t1230) return { card: 'background:#ffcdd2', badge: '' };
+  return { card: '', badge: '' };
+}
+
 // ══════════════════════════════════════════════════════
-function getToday()         { return new Date().toISOString().split('T')[0]; }
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function getToday() { return localDateStr(new Date()); }
 function getCurrentSunday() {
+  // Last Sunday (or today if Sunday)
   const now = new Date(), day = now.getDay();
   const sun = new Date(now); sun.setDate(now.getDate() - day);
-  return sun.toISOString().split('T')[0];
+  return localDateStr(sun);
 }
 function getUpcomingSunday() {
-  const now = new Date(), day = now.getDay(); // 0=Sun
+  const now = new Date(), day = now.getDay();
   const daysUntilSunday = day === 0 ? 0 : 7 - day;
   const sun = new Date(now); sun.setDate(now.getDate() + daysUntilSunday);
-  return sun.toISOString().split('T')[0];
+  return localDateStr(sun);
+}
+function getCallingWeekDefault() {
+  // Coordinators always call for the UPCOMING class.
+  // getUpcomingSunday() returns today if today IS Sunday, otherwise next Sunday.
+  return getUpcomingSunday();
 }
 function snapToSunday(dateStr) {
-  // Given a YYYY-MM-DD, return the nearest Sunday (same day if already Sunday, else next Sunday)
-  const d = new Date(dateStr + 'T00:00:00'), day = d.getDay();
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  const day = dt.getDay();
   if (day === 0) return dateStr;
-  d.setDate(d.getDate() + (7 - day));
-  return d.toISOString().split('T')[0];
+  dt.setDate(dt.getDate() + (7 - day));
+  return localDateStr(dt);
 }
 function initials(name = '') { return name.split(' ').slice(0, 2).map(w => w[0]?.toUpperCase() || '').join(''); }
 function formatDate(iso) {
@@ -1320,6 +1608,11 @@ function switchTab(tab, btn) {
   document.getElementById('tab-' + tab).classList.add('active');
   btn.classList.add('active');
   AppState.currentTab = tab;
+  // Reset select mode when leaving devotees tab
+  if (tab !== 'devotees' && AppState.devoteeSelectMode) {
+    AppState.devoteeSelectMode = false;
+    AppState.selectedDevotees.clear();
+  }
   if (tab === 'calling')    loadCallingStatus();
   if (tab === 'attendance') loadAttendanceTab();
   if (tab === 'reports')    loadReports();
@@ -1350,112 +1643,207 @@ async function exportAttendance() {
 }
 
 // ── EXPORT CALLING LIST ───────────────────────────────
+// ── Excel style helpers ────────────────────────────────────────────────────────
+function _xls() {
+  const thin = { style: 'thin', color: { rgb: 'AAAAAA' } };
+  const border = { top: thin, bottom: thin, left: thin, right: thin };
+  const mkFill = rgb => ({ fgColor: { rgb }, patternType: 'solid' });
+  const center = { horizontal: 'center', vertical: 'center', wrapText: true };
+  const left   = { horizontal: 'left',   vertical: 'center', wrapText: false };
+  const hdr = (bg = '1A5C3A', fg = 'FFFFFF') => ({
+    font: { bold: true, color: { rgb: fg }, sz: 9 },
+    fill: mkFill(bg), alignment: center, border
+  });
+  const cell = (opts = {}) => ({
+    font: { sz: 9, bold: !!opts.bold, color: opts.fg ? { rgb: opts.fg } : undefined },
+    fill: opts.bg ? mkFill(opts.bg) : undefined,
+    alignment: opts.left ? left : center,
+    border
+  });
+  return { border, center, left, hdr, cell, mkFill };
+}
+
+function _xlsSheet(data, colWidths, styleMatrix) {
+  // data: array of arrays of { v, s? } objects or plain values
+  const ws = {};
+  let maxC = 0;
+  data.forEach((row, r) => {
+    row.forEach((val, c) => {
+      maxC = Math.max(maxC, c);
+      const addr = XLSX.utils.encode_cell({ r, c });
+      if (val !== null && val !== undefined && typeof val === 'object' && 'v' in val) {
+        ws[addr] = { v: val.v, t: typeof val.v === 'number' ? 'n' : 's' };
+        if (val.s) ws[addr].s = val.s;
+      } else {
+        ws[addr] = { v: val === null || val === undefined ? '' : val,
+                     t: typeof val === 'number' ? 'n' : 's' };
+        if (styleMatrix?.[r]?.[c]) ws[addr].s = styleMatrix[r][c];
+      }
+    });
+  });
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: data.length - 1, c: maxC } });
+  if (colWidths) ws['!cols'] = colWidths;
+  return ws;
+}
+
 async function exportCallingList() {
-  showToast('Preparing Calling List Excel…');
+  showToast('Preparing FY Calling & Attendance Report…');
   try {
-    const teams = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata'];
-
-    // Get last 2 completed sessions (sessionDate <= today, not cancelled, ordered desc)
     const today = getToday();
-    const sessSnap = await fdb.collection('sessions')
-      .where('sessionDate', '<=', today)
-      .orderBy('sessionDate', 'desc')
-      .limit(5)
-      .get();
-    const completedSessions = sessSnap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .filter(s => !s.isCancelled)
-      .slice(0, 2)
-      .reverse(); // oldest first → [sess1, sess2]
-
-    // For each session: get CS and AT records
-    const csData = [], atData = [];
-    for (const sess of completedSessions) {
-      const [csSnap, atSnap] = await Promise.all([
-        fdb.collection('callingStatus').where('weekDate', '==', sess.sessionDate).get(),
-        fdb.collection('attendanceRecords').where('sessionId', '==', sess.id).get()
-      ]);
-      const csMap = {};
-      csSnap.docs.forEach(d => { csMap[d.data().devoteeId] = d.data().comingStatus; });
-      const presentSet = new Set(atSnap.docs.map(d => d.data().devoteeId));
-      csData.push(csMap);
-      atData.push(presentSet);
-    }
-
-    // Get all active devotees with callingBy set AND not isNotInterested
-    const allDevotees = await DevoteeCache.all();
-    const activeDevotees = allDevotees.filter(d => d.callingBy && d.callingBy.trim() && !d.isNotInterested);
-
-    // Not interested devotees
-    const notInterestedDevotees = await DB.getNotInterestedDevotees();
-
-    // FY label — dynamic
-    const now = new Date();
+    const now   = new Date();
     const fyStartYear = (now.getMonth() + 1) >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+    const fyStart = `${fyStartYear}-04-01`;
     const fyLabel = `Apr-${String(fyStartYear).slice(-2)} to Mar-${String(fyStartYear + 1).slice(-2)}`;
 
-    // Column headers for CS/AT
-    const s1 = completedSessions[0];
-    const s2 = completedSessions[1];
-    const cs1Hdr = s1 ? `CS ${sheetFmtDDMMYY(shiftDateDay(s1.sessionDate, -1))}` : 'CS (prev)';
-    const at1Hdr = s1 ? `AT ${sheetFmtDDMMYY(s1.sessionDate)}` : 'AT (prev)';
-    const cs2Hdr = s2 ? `CS ${sheetFmtDDMMYY(shiftDateDay(s2.sessionDate, -1))}` : 'CS (latest)';
-    const at2Hdr = s2 ? `AT ${sheetFmtDDMMYY(s2.sessionDate)}` : 'AT (latest)';
+    const XS = _xls();
 
-    const mainHeaders = [
-      'Sno', 'Name', 'Mobile Number', 'Ref-2', 'C.R', 'Active', 'Team Wise',
-      'Calling By', `Attendance ${fyLabel}`,
-      cs1Hdr, at1Hdr, cs2Hdr, at2Hdr, 'TOTAL'
-    ];
+    // ── FY sessions (past, non-cancelled) ─────────────────────────────
+    const fySessionSnap = await fdb.collection('sessions')
+      .where('sessionDate', '>=', fyStart)
+      .where('sessionDate', '<=', today)
+      .orderBy('sessionDate', 'asc').get();
+    const fySessions = fySessionSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => !s.isCancelled);
+
+    // Include upcoming calling week if calling already done (so coordinators see it)
+    const upcomingWeek = getCallingWeekDefault();
+    const upcomingCSSnap = await fdb.collection('callingStatus').where('weekDate', '==', upcomingWeek).limit(1).get();
+    const includeUpcoming = !upcomingCSSnap.empty && upcomingWeek > today;
+
+    // All FY calling status (past + upcoming if applicable)
+    const fyCSEnd = includeUpcoming ? upcomingWeek : today;
+    const fyCSSnap = await fdb.collection('callingStatus')
+      .where('weekDate', '>=', fyStart).where('weekDate', '<=', fyCSEnd).get();
+    const fyCSByWeek = {};
+    fyCSSnap.docs.forEach(d => {
+      const { weekDate, devoteeId, comingStatus, callingNotes } = d.data();
+      if (!fyCSByWeek[weekDate]) fyCSByWeek[weekDate] = {};
+      fyCSByWeek[weekDate][devoteeId] = { status: comingStatus, notes: callingNotes || '' };
+    });
+
+    // Attendance per session
+    const fyAttPerSession = {};
+    for (let i = 0; i < fySessions.length; i += 10) {
+      const batch = fySessions.slice(i, i + 10);
+      const aSnap = await fdb.collection('attendanceRecords').where('sessionId', 'in', batch.map(s => s.id)).get();
+      aSnap.docs.forEach(d => {
+        const { sessionId, devoteeId } = d.data();
+        if (!fyAttPerSession[sessionId]) fyAttPerSession[sessionId] = new Set();
+        fyAttPerSession[sessionId].add(devoteeId);
+      });
+    }
+    const sessionByDate = {};
+    fySessions.forEach(s => { sessionByDate[s.sessionDate] = s.id; });
+
+    // FY attendance total per devotee
+    const fyAttMap = {};
+    Object.values(fyAttPerSession).forEach(set => set.forEach(did => { fyAttMap[did] = (fyAttMap[did]||0)+1; }));
+
+    // All weeks (session dates + calling-only weeks), sorted
+    const allFyWeeks = [...new Set([
+      ...fySessions.map(s => s.sessionDate),
+      ...Object.keys(fyCSByWeek)
+    ])].sort();
+
+    const allDevotees = await DevoteeCache.all();
+    const activeDevotees = allDevotees.filter(d => d.callingBy && d.callingBy.trim() && !d.isNotInterested);
+    const notInterestedDevotees = await DB.getNotInterestedDevotees();
+
+    // ── Style helpers ────────────────────────────────────────────────
+    function csCell(entry) {
+      if (!entry) return '';
+      const label = csLabel(entry.status);
+      return entry.notes ? `${label} - ${entry.notes}` : label;
+    }
+    function csCellStyle(entry) {
+      if (!entry?.status) return XS.cell();
+      const bg = { Yes:'C8E6C9', No:'FFCDD2', Maybe:'FFF9C4', Shift:'FFE0B2' }[entry.status] || 'FFFFFF';
+      return { ...XS.cell(), fill: XS.mkFill(bg) };
+    }
+    const atStyle  = { ...XS.cell(), fill: XS.mkFill('BBDEFB'), font: { bold:true, sz:9, color:{rgb:'0D47A1'} } };
+    const abStyle  = XS.cell();
+    const snoStyle = { ...XS.cell(), font: { sz:9, color:{rgb:'888888'} } };
+    const nameStyle = { ...XS.cell({ left:true }), font: { sz:9, bold:false } };
+    const coordStyle = { ...XS.cell({ left:true }), font: { sz:9, color:{rgb:'444444'} } };
 
     const wb = XLSX.utils.book_new();
 
-    teams.forEach(team => {
+    // ── Per-Team Sheets ────────────────────────────────────────────────
+    TEAMS.forEach(team => {
       const members = activeDevotees.filter(d => d.teamName === team);
-      members.sort((a, b) => (a.callingBy || '').localeCompare(b.callingBy || '') || a.name.localeCompare(b.name));
+      members.sort((a,b) => (a.callingBy||'').localeCompare(b.callingBy||'') || a.name.localeCompare(b.name));
+      if (!members.length) return;
 
-      const rows = members.map((d, i) => {
-        const cs1 = s1 ? (csData[0]?.[d.id] ? csLabel(csData[0][d.id]) : '') : '';
-        const at1 = s1 ? (atData[0]?.has(d.id) ? 'P' : '') : '';
-        const cs2 = s2 ? (csData[1]?.[d.id] ? csLabel(csData[1][d.id]) : '') : '';
-        const at2 = s2 ? (atData[1]?.has(d.id) ? 'P' : '') : '';
-        return [
-          i + 1, d.name, d.mobile || '', d.referenceBy || '',
-          d.chantingRounds || 0, d.isActive !== false ? 'Active' : '',
-          d.teamName || '', d.callingBy || '',
-          d.lifetimeAttendance || 0,
-          cs1, at1, cs2, at2,
-          d.lifetimeAttendance || 0
-        ];
+      // Fixed columns: Sno Name Mobile Ref CR Active CallingBy FY-Total | then per-week: CS AT
+      const fixedHdrs = ['#','Name','Mobile','Ref','CR','Active','Calling By',`FY Total\n(${fyLabel})`];
+      const weekHdrs  = [];
+      allFyWeeks.forEach(w => {
+        weekHdrs.push(`CS\n${sheetFmtDDMMYY(shiftDateDay(w,-1))}`); // Saturday
+        weekHdrs.push(`AT\n${sheetFmtDDMMYY(w)}`);                   // Sunday
       });
 
-      const ws = XLSX.utils.aoa_to_sheet([mainHeaders, ...rows]);
-      ws['!cols'] = [
-        { wch: 5 }, { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 5 },
-        { wch: 8 }, { wch: 14 }, { wch: 20 }, { wch: 22 },
-        { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 8 }
+      // Header row
+      const hdrRow = [...fixedHdrs, ...weekHdrs].map(h => ({ v: h, s: XS.hdr() }));
+      // Title row (merged)
+      const totalCols = fixedHdrs.length + weekHdrs.length;
+      const titleRow  = [{ v: `${team} — FY ${fyLabel}`, s: XS.hdr('0D5E35') }];
+      for (let i = 1; i < totalCols; i++) titleRow.push({ v: '', s: XS.hdr('0D5E35') });
+
+      // Data rows
+      const dataRows = members.map((d, i) => {
+        const even = i % 2 === 0;
+        const rowBg = even ? 'F9FBF9' : 'FFFFFF';
+        const baseSt = { ...XS.cell(), fill: XS.mkFill(rowBg) };
+        const row = [
+          { v: i+1, s: { ...snoStyle, fill: XS.mkFill(rowBg) } },
+          { v: d.name, s: { ...nameStyle, fill: XS.mkFill(rowBg) } },
+          { v: d.mobile||'', s: { ...baseSt, alignment:{...XS.center} } },
+          { v: d.referenceBy||'', s: { ...baseSt, alignment:{...XS.left} } },
+          { v: d.chantingRounds||0, s: baseSt },
+          { v: d.isActive!==false?'Active':'', s: { ...baseSt, font:{sz:9,color:{rgb:d.isActive!==false?'1A5C3A':'888888'},bold:d.isActive!==false} } },
+          { v: d.callingBy||'', s: { ...coordStyle, fill: XS.mkFill(rowBg) } },
+          { v: fyAttMap[d.id]||0, s: { ...baseSt, font:{bold:true,sz:9} } },
+        ];
+        allFyWeeks.forEach(w => {
+          const csEntry = fyCSByWeek[w]?.[d.id];
+          const sessId  = sessionByDate[w];
+          const came    = sessId && fyAttPerSession[sessId]?.has(d.id);
+          row.push({ v: csCell(csEntry), s: { ...csCellStyle(csEntry), fill: XS.mkFill(csEntry?.status ? ({Yes:'C8E6C9',No:'FFCDD2',Maybe:'FFF9C4',Shift:'FFE0B2'}[csEntry.status]||rowBg) : rowBg) } });
+          row.push(sessId ? { v: came?'P':'', s: came ? atStyle : { ...abStyle, fill:XS.mkFill(rowBg) } } : { v:'—', s:{ ...baseSt, font:{sz:9,color:{rgb:'BBBBBB'}} } });
+        });
+        return row;
+      });
+
+      const sheetData = [titleRow, hdrRow, ...dataRows];
+      const colWidths = [
+        {wch:4},{wch:22},{wch:13},{wch:16},{wch:5},{wch:7},{wch:18},{wch:10},
+        ...allFyWeeks.flatMap(()=>[{wch:18},{wch:6}])
       ];
-      XLSX.utils.book_append_sheet(wb, ws, team.slice(0, 31));
+      const ws = _xlsSheet(sheetData, colWidths);
+      ws['!merges'] = [{ s:{r:0,c:0}, e:{r:0,c:totalCols-1} }];
+      ws['!rows'] = [{ hpt:18 }, { hpt:30 }];
+      ws['!views'] = [{ state:'frozen', xSplit:8, ySplit:2, topLeftCell:'I3' }]; // freeze info cols + header rows
+      XLSX.utils.book_append_sheet(wb, ws, team.slice(0,31));
     });
 
-    // Not Interested sheet
-    const niHeaders = ['Sno', 'Name', 'Mobile Number', 'Ref-2', 'C.R', 'Team Wise', 'Calling By', 'Date of Joining', 'Moved to Not Interested On', 'Lifetime Attendance'];
-    const niRows = notInterestedDevotees.map((d, i) => [
-      i + 1, d.name, d.mobile || '', d.reference_by || '',
-      d.chanting_rounds || 0, d.team_name || '', d.calling_by || '',
-      d.date_of_joining || '',
-      d.not_interested_at ? new Date(d.not_interested_at).toLocaleDateString('en-IN') : '',
-      d.lifetime_attendance || 0
-    ]);
-    const wsNI = XLSX.utils.aoa_to_sheet([niHeaders, ...niRows]);
-    wsNI['!cols'] = [
-      { wch: 5 }, { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 5 },
-      { wch: 14 }, { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 10 }
-    ];
+    // ── Not Interested Sheet ──────────────────────────────────────────
+    const niHdrs = ['#','Name','Mobile','Ref','CR','Team','Calling By','Date of Joining','Moved Not Interested On','Lifetime Att'].map(h=>({v:h,s:XS.hdr('7B3F00','FFFFFF')}));
+    const niRows = notInterestedDevotees.map((d,i) => {
+      const bg = i%2===0?'FFF8E1':'FFFFFF';
+      const b = {...XS.cell(),fill:XS.mkFill(bg)};
+      return [
+        {v:i+1,s:b},{v:d.name,s:{...b,alignment:XS.left}},
+        {v:d.mobile||'',s:b},{v:d.reference_by||'',s:{...b,alignment:XS.left}},
+        {v:d.chanting_rounds||0,s:b},{v:d.team_name||'',s:b},
+        {v:d.calling_by||'',s:{...b,alignment:XS.left}},{v:d.date_of_joining||'',s:b},
+        {v:d.not_interested_at?new Date(d.not_interested_at).toLocaleDateString('en-IN'):'',s:b},
+        {v:d.lifetime_attendance||0,s:{...b,font:{bold:true,sz:9}}}
+      ];
+    });
+    const wsNI = _xlsSheet([niHdrs,...niRows],[{wch:4},{wch:22},{wch:13},{wch:16},{wch:5},{wch:13},{wch:18},{wch:13},{wch:22},{wch:10}]);
     XLSX.utils.book_append_sheet(wb, wsNI, 'Not Interested');
 
-    XLSX.writeFile(wb, `calling_list_${getToday()}.xlsx`);
-    showToast('Calling list exported!', 'success');
+    XLSX.writeFile(wb, `sakhi_sang_fy${fyStartYear}_${today}.xlsx`);
+    showToast(`FY ${fyLabel} export complete! ${allFyWeeks.length} weeks of data.`, 'success');
   } catch (e) {
     console.error('exportCallingList error', e);
     showToast('Export failed: ' + (e.message || 'Unknown error'), 'error');
@@ -1607,8 +1995,10 @@ function buildSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
 }
 
 function shiftDateDay(dateStr, days) {
-  const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
+  // Use local-date arithmetic to avoid UTC timezone shifts (IST = UTC+5:30)
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + days);
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
 }
 function sheetFmtDate(dateStr) {
   if (!dateStr) return '';
@@ -1625,14 +2015,14 @@ function sheetFmtDDMMYY(dateStr) {
   return sheetFmtShort(dateStr);
 }
 function csLabel(status) {
-  return { Yes: 'Coming', No: 'No', Maybe: 'Maybe', Shifted: 'Shifted', 'Not Interested': 'N/I' }[status] || '';
+  return { Yes: 'Coming', No: 'No', Maybe: 'Maybe', Shift: 'Shift', 'Not Interested': 'N/I' }[status] || '';
 }
 function csColor(status) {
   if (!status) return '';
   if (status === 'Yes')             return 'background:#c8e6c9';
   if (status === 'Maybe')           return 'background:#fff9c4';
   if (status === 'No')              return 'background:#ffcdd2';
-  if (status === 'Shifted')         return 'background:#ffe0b2';
+  if (status === 'Shift')         return 'background:#ffe0b2';
   if (status === 'Not Interested')  return 'background:#ffccbc';
   return '';
 }
@@ -1684,7 +2074,7 @@ async function exportDevoteeDatabase() {
   showToast('Building database export…');
   try {
     const allDevotees = await DevoteeCache.all();
-    const teams = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata'];
+    const teams = TEAMS;
 
     const levels = [
       { label: 'Level 1 – (0–4 Rounds)  Well Wishers  (Yet to start chanting)', min: 0, max: 4 },
@@ -1842,7 +2232,7 @@ async function exportDevoteeDatabase() {
 }
 
 function downloadImportTemplate() {
-  const teams  = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata'];
+  const teams  = TEAMS;
   const statuses = ['Expected to be Serious','Serious','Most Serious'];
 
   // ── Sheet 1: DATA (import-ready) ──
@@ -2259,19 +2649,105 @@ async function loadDevotees() {
 }
 
 function renderDevoteeItem(d) {
+  const selectMode = AppState.devoteeSelectMode;
+  const isSelected = AppState.selectedDevotees?.has(d.id);
   return `
-    <div class="devotee-item${d.inactivity_flag ? ' flagged' : ''}" onclick="openProfileModal('${d.id}')">
+    <div class="devotee-item${isSelected ? ' selected' : ''}" onclick="${selectMode ? `toggleDevoteeSelect('${d.id}',this)` : `openProfileModal('${d.id}')`}">
+      ${selectMode ? `<input type="checkbox" class="devotee-checkbox"${isSelected ? ' checked' : ''} onclick="event.stopPropagation();toggleDevoteeSelect('${d.id}',this.closest('.devotee-item'))">` : ''}
       <div class="devotee-avatar">${initials(d.name)}</div>
       <div class="devotee-info">
         <div class="devotee-name">${d.name}
           ${isBirthdayWeek(d.dob) ? '<i class="fas fa-birthday-cake birthday-icon" title="Birthday this week!"></i>' : ''}
-          ${d.inactivity_flag ? '<i class="fas fa-flag flag-icon" title="Inactive 3+ weeks"></i>' : ''}
         </div>
-        <div class="devotee-meta">${d.mobile || '—'}${d.team_name ? ' · ' + d.team_name : ''}</div>
+        <div class="devotee-meta">${d.mobile || '—'}</div>
         <div class="devotee-badges">${statusBadge(d.devotee_status)} ${teamBadge(d.team_name)}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:.5rem">${contactIcons(d.mobile)}</div>
+      <div style="display:flex;align-items:center;gap:.5rem">${selectMode ? '' : contactIcons(d.mobile)}</div>
     </div>`;
+}
+
+function toggleDevoteeSelectMode() {
+  AppState.devoteeSelectMode = !AppState.devoteeSelectMode;
+  AppState.selectedDevotees.clear();
+  const btn = document.getElementById('devotee-select-btn');
+  if (btn) {
+    btn.classList.toggle('active', AppState.devoteeSelectMode);
+    btn.innerHTML = AppState.devoteeSelectMode
+      ? '<i class="fas fa-times"></i> Cancel'
+      : '<i class="fas fa-check-square"></i> Select';
+  }
+  updateSelectionBar();
+  loadDevotees();
+}
+
+function toggleDevoteeSelect(id, el) {
+  if (AppState.selectedDevotees.has(id)) {
+    AppState.selectedDevotees.delete(id);
+    el.classList.remove('selected');
+    el.querySelector('.devotee-checkbox').checked = false;
+  } else {
+    AppState.selectedDevotees.add(id);
+    el.classList.add('selected');
+    el.querySelector('.devotee-checkbox').checked = true;
+  }
+  updateSelectionBar();
+}
+
+function updateSelectionBar() {
+  const bar = document.getElementById('devotee-selection-bar');
+  if (!bar) return;
+  const n = AppState.selectedDevotees.size;
+  if (!AppState.devoteeSelectMode || n === 0) {
+    bar.classList.add('hidden');
+    return;
+  }
+  bar.classList.remove('hidden');
+  document.getElementById('selection-count').textContent = `${n} selected`;
+}
+
+async function copySelectedNumbers() {
+  const ids = [...AppState.selectedDevotees];
+  if (!ids.length) return;
+  const all = await DevoteeCache.all();
+  const nums = all.filter(d => ids.includes(d.id) && d.mobile).map(d => d.mobile);
+  if (!nums.length) { showToast('No mobile numbers in selection', 'error'); return; }
+  await navigator.clipboard.writeText(nums.join(', '));
+  showToast(`${nums.length} numbers copied to clipboard!`, 'success');
+}
+
+function openWhatsAppGroupHelper() {
+  const ids = [...AppState.selectedDevotees];
+  if (!ids.length) { showToast('Select devotees first', 'error'); return; }
+  DevoteeCache.all().then(all => {
+    const selected = all.filter(d => ids.includes(d.id) && d.mobile);
+    const nums = selected.map(d => d.mobile.replace(/\D/g,''));
+    const modal = document.getElementById('wa-group-modal');
+    document.getElementById('wa-group-count').textContent = `${nums.length} number${nums.length !== 1 ? 's' : ''} selected`;
+    document.getElementById('wa-numbers-display').value = nums.join('\n');
+    document.getElementById('wa-numbers-csv').value = nums.map(n => `+91${n}`).join(', ');
+    modal.classList.remove('hidden');
+  });
+}
+
+function closeWaGroupModal() {
+  document.getElementById('wa-group-modal').classList.add('hidden');
+}
+
+async function copyWaNumbers(fieldId) {
+  const val = document.getElementById(fieldId).value;
+  await navigator.clipboard.writeText(val);
+  showToast('Copied!', 'success');
+}
+
+async function unCancelSession() {
+  if (!AppState.currentSessionId) return;
+  const s = AppState.sessionsCache[AppState.currentSessionId];
+  try {
+    await DB.configureSunday(AppState.currentSessionId, { topic: s?.topic || '', isCancelled: false });
+    AppState.sessionsCache[AppState.currentSessionId] = { ...s, is_cancelled: false };
+    showSessionInfo(AppState.currentSessionId);
+    showToast('Class restored! Hare Krishna 🙏', 'success');
+  } catch (_) { showToast('Failed to restore', 'error'); }
 }
 
 async function openProfileModal(id) {
@@ -2513,13 +2989,23 @@ async function openHistoryModal() {
 // ══════════════════════════════════════════════════════
 // TAB 2 – CALLING STATUS
 // ══════════════════════════════════════════════════════
-function switchCallingSubTab(tab, btn) {
-  document.querySelectorAll('#calling-sub-tabs .att-sub-tab').forEach(b => b.classList.remove('active'));
+let _callingActiveTab = 'list';
+
+function switchCallingTab(tab, btn) {
+  _callingActiveTab = tab;
+  document.querySelectorAll('#calling-main-tabs .att-sub-tab').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  document.getElementById('calling-panel-active').classList.toggle('hidden', tab !== 'active');
-  document.getElementById('calling-panel-notinterested').classList.toggle('hidden', tab !== 'notinterested');
+  ['list','reports','late','notinterested'].forEach(p => {
+    const el = document.getElementById(`calling-panel-${p}`);
+    if (el) el.classList.toggle('active', p === tab);
+  });
+  if (tab === 'list') loadCallingStatus();
+  if (tab === 'reports')       loadCallingReports();
+  if (tab === 'late')          loadLateReports();
   if (tab === 'notinterested') loadNotInterestedList();
 }
+
+function onCallingWeekChange() { /* date picker removed — week is always auto-calculated */ }
 
 async function loadNotInterestedList() {
   const wrap = document.getElementById('not-interested-list');
@@ -2555,17 +3041,75 @@ async function loadNotInterestedList() {
 }
 
 async function loadCallingStatus() {
-  const inp = document.getElementById('calling-week');
-  if (!inp.value) inp.value = getCurrentSunday();
-  const week = inp.value;
+  // Calling is always for the upcoming Sunday — no manual override
+  const week = getCallingWeekDefault();
+  document.getElementById('calling-week').value = week;
+  // Show "Calling for: Sat, 25 Apr 2026" label
+  const satDate = shiftDateDay(week, -1);
+  const [sy, sm, sd] = satDate.split('-').map(Number);
+  const satLabel = new Date(sy, sm-1, sd).toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' });
+  const lbl = document.getElementById('calling-week-label');
+  if (lbl) lbl.innerHTML = `<i class="fas fa-phone-alt"></i> Calling for: <strong>${satLabel}</strong>`;
   document.getElementById('calling-list').innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
-    const devotees = await DB.getCallingStatus(week);
+    const [devotees, mySubmission] = await Promise.all([
+      DB.getCallingStatus(week),
+      DB.getMyCallingSubmission(week, AppState.userId).catch(() => null)
+    ]);
     AppState.callingData = devotees;
+    // Populate Team filter
+    const teamSel = document.getElementById('calling-filter-team');
+    const prevTeam = teamSel.value;
+    teamSel.innerHTML = '<option value="">All Teams</option>' +
+      TEAMS.filter(t => devotees.some(d => d.team_name === t))
+           .map(t => `<option value="${t}"${prevTeam===t?' selected':''}>${t}</option>`).join('');
+    // Populate Calling By filter
+    const bySel = document.getElementById('calling-filter-callingby');
+    const prevBy = bySel.value;
+    const callers = [...new Set(devotees.map(d => d.calling_by).filter(Boolean))].sort();
+    bySel.innerHTML = '<option value="">All Calling By</option>' +
+      callers.map(c => `<option value="${c}"${prevBy===c?' selected':''}>${c}</option>`).join('');
     renderCallingStats(devotees);
-    renderCallingList(devotees);
+    // Show/update submit bar
+    _renderCallingSubmitBar(week, mySubmission);
+    filterCallingList();
   } catch (_) {
     document.getElementById('calling-list').innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+  }
+}
+
+function _renderCallingSubmitBar(week, existing) {
+  const bar = document.getElementById('calling-submit-bar');
+  if (!bar) return;
+  if (existing && existing.submittedAtClient) {
+    const t = new Date(existing.submittedAtClient);
+    const time = t.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const isLate = t.getHours() >= 21;
+    bar.innerHTML = `
+      <span style="font-size:.85rem;color:${isLate ? '#c62828' : 'var(--success)'}">
+        <i class="fas fa-${isLate ? 'clock' : 'check-circle'}"></i>
+        Calling submitted at <strong>${time}</strong>${isLate ? ' (Late)' : ''}
+      </span>
+      <button class="btn btn-secondary" style="padding:.3rem .8rem;font-size:.8rem" onclick="doSubmitCallingWeek('${week}')">
+        <i class="fas fa-redo"></i> Re-submit
+      </button>`;
+  } else {
+    bar.innerHTML = `
+      <span style="font-size:.85rem;color:var(--text-muted)"><i class="fas fa-info-circle"></i> Done calling for this week?</span>
+      <button class="btn btn-primary" style="padding:.35rem 1rem;font-size:.85rem" onclick="doSubmitCallingWeek('${week}')">
+        <i class="fas fa-paper-plane"></i> Submit Calling
+      </button>`;
+  }
+}
+
+async function doSubmitCallingWeek(week) {
+  try {
+    await DB.submitCallingWeek(week, AppState.userId, AppState.userName, AppState.userTeam);
+    const sub = await DB.getMyCallingSubmission(week, AppState.userId);
+    _renderCallingSubmitBar(week, sub);
+    showToast('Calling submitted!', 'success');
+  } catch (e) {
+    showToast('Submit failed', 'error');
   }
 }
 
@@ -2573,22 +3117,26 @@ function renderCallingStats(devotees) {
   const yes     = devotees.filter(d => d.coming_status === 'Yes').length;
   const maybe   = devotees.filter(d => d.coming_status === 'Maybe').length;
   const no      = devotees.filter(d => d.coming_status === 'No').length;
-  const shift   = devotees.filter(d => d.coming_status === 'Shifted').length;
+  const shift   = devotees.filter(d => d.coming_status === 'Shift').length;
   const uncalled = devotees.filter(d => !d.coming_status).length;
   document.getElementById('calling-stats').innerHTML = `
     <div class="calling-stat"><i class="fas fa-check" style="color:var(--success)"></i> <strong>${yes}</strong> Coming</div>
     <div class="calling-stat"><i class="fas fa-question" style="color:var(--warning)"></i> <strong>${maybe}</strong> Maybe</div>
     <div class="calling-stat"><i class="fas fa-times" style="color:var(--danger)"></i> <strong>${no}</strong> No</div>
-    <div class="calling-stat"><i class="fas fa-user-slash" style="color:var(--text-muted)"></i> <strong>${shift}</strong> Shifted</div>
+    <div class="calling-stat"><i class="fas fa-user-slash" style="color:var(--text-muted)"></i> <strong>${shift}</strong> Shift</div>
     <div class="calling-stat"><i class="fas fa-phone-slash" style="color:var(--text-muted)"></i> <strong>${uncalled}</strong> Not Called</div>`;
 }
 
 function filterCallingList() {
-  const q = document.getElementById('calling-search').value.toLowerCase();
-  const s = document.getElementById('calling-filter-status').value;
+  const q    = document.getElementById('calling-search').value.toLowerCase();
+  const s    = document.getElementById('calling-filter-status').value;
+  const team = document.getElementById('calling-filter-team').value;
+  const by   = document.getElementById('calling-filter-callingby').value;
   renderCallingList(AppState.callingData.filter(d =>
-    (!q || d.name.toLowerCase().includes(q) || (d.mobile || '').includes(q)) &&
-    (!s || d.coming_status === s || (!d.coming_status && s === ''))
+    (!q    || d.name.toLowerCase().includes(q) || (d.mobile || '').includes(q)) &&
+    (!s    || (s === '_none' ? !d.coming_status : d.coming_status === s)) &&
+    (!team || d.team_name === team) &&
+    (!by   || d.calling_by === by)
   ));
 }
 
@@ -2596,40 +3144,91 @@ function renderCallingList(devotees) {
   const wrap = document.getElementById('calling-list');
   if (!devotees.length) { wrap.innerHTML = '<div class="empty-state"><i class="fas fa-phone-slash"></i><p>No devotees found</p></div>'; return; }
   wrap.innerHTML = `<table class="calling-table">
-    <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Coming?</th><th>Notes</th></tr></thead>
+    <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>Coming?</th><th>Notes</th></tr></thead>
     <tbody>${devotees.map((d, i) => renderCallingRow(d, i + 1)).join('')}</tbody>
   </table>`;
 }
 
 function renderCallingRow(d, i) {
-  const statuses = ['Yes','No','Maybe','Shifted'];
+  const statuses = ['Yes','No','Maybe','Shift'];
   const cur = d.coming_status || '';
   const btns = statuses.map(s => `<button class="status-btn ${s.toLowerCase()}${cur === s ? ' active' : ''}" onclick="updateCallingStatus('${d.id}', '${s}', this)">${s}</button>`).join('');
-  return `<tr class="${cur === 'Shifted' ? 'status-shifted' : ''}">
+  const updTime = d.updated_at_client
+    ? `<span class="calling-upd-time" title="Last updated">${new Date(d.updated_at_client).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true})}</span>` : '';
+  return `<tr class="${cur === 'Shift' ? 'status-shift' : ''}">
     <td style="color:var(--text-muted)">${i}</td>
-    <td><div style="display:flex;align-items:center;gap:.4rem">
-      <div class="devotee-avatar" style="width:30px;height:30px;font-size:.7rem">${initials(d.name)}</div>
-      <span style="font-weight:600">${d.name}</span>
-      ${isBirthdayWeek(d.dob) ? '<i class="fas fa-birthday-cake" style="color:var(--gold);font-size:.8rem"></i>' : ''}
-    </div></td>
+    <td>
+      <div style="display:flex;align-items:center;gap:.4rem">
+        <div class="devotee-avatar" style="width:30px;height:30px;font-size:.7rem">${initials(d.name)}</div>
+        <span class="calling-name-link" onclick="openCallingHistory('${d.id}','${d.name.replace(/'/g,"\\'")}')">
+          ${d.name}${isBirthdayWeek(d.dob) ? ' <i class="fas fa-birthday-cake" style="color:var(--gold);font-size:.75rem"></i>' : ''}
+        </span>
+      </div>
+    </td>
     <td>${contactIcons(d.mobile)}</td>
     <td>${teamBadge(d.team_name)}</td>
-    <td><div class="status-btns">${btns}</div></td>
+    <td style="font-size:.82rem;color:var(--text-muted)">${d.calling_by || '—'}</td>
+    <td>
+      <div class="status-btns">${btns}</div>
+      ${updTime}
+    </td>
     <td><input class="calling-notes-input" type="text" placeholder="Notes…" value="${d.calling_notes || ''}"
       onchange="updateCallingNotes('${d.id}', this.value)" onclick="event.stopPropagation()"></td>
   </tr>`;
 }
 
+async function openCallingHistory(devoteeId, devoteeName) {
+  const modal = document.getElementById('calling-history-modal');
+  document.getElementById('calling-history-name').innerHTML = `<i class="fas fa-history"></i> ${devoteeName}`;
+  document.getElementById('calling-history-content').innerHTML =
+    '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  modal.classList.remove('hidden');
+  try {
+    const history = await DB.getCallingHistory(devoteeId, 4);
+    document.getElementById('calling-history-content').innerHTML = history.map(h => {
+      const label = formatDate(h.weekDate);
+      const cs = h.comingStatus || '—';
+      const color = cs === 'Yes' ? 'var(--success)' : cs === 'No' ? 'var(--danger)' : cs === 'Maybe' ? 'var(--warning)' : 'var(--text-muted)';
+      const note = h.callingNotes ? `<div style="font-size:.8rem;color:var(--text-muted);margin-top:.2rem">${h.callingNotes}</div>` : '';
+      return `<div style="display:flex;align-items:flex-start;gap:.75rem;padding:.6rem 0;border-bottom:1px solid var(--border)">
+        <div style="min-width:90px;font-size:.82rem;color:var(--text-muted)">${label}</div>
+        <div>
+          <span style="font-weight:600;color:${color}">${cs}</span>
+          ${note}
+        </div>
+      </div>`;
+    }).join('') || '<div class="empty-state"><p>No calling history</p></div>';
+  } catch (_) {
+    document.getElementById('calling-history-content').innerHTML = '<div class="empty-state"><p>Failed to load history</p></div>';
+  }
+}
+
 async function updateCallingStatus(devoteeId, status, btn) {
   const week = document.getElementById('calling-week').value;
+  const row = btn.closest('tr');
+  const notesInput = row?.querySelector('.calling-notes-input');
+  const typedNotes = notesInput?.value?.trim() || '';
+  const savedNotes  = AppState.callingData.find(x => x.id === devoteeId)?.calling_notes || '';
+  const effectiveNotes = typedNotes || savedNotes;
+
+  // Notes required for all statuses except Yes
+  if (status !== 'Yes' && !effectiveNotes) {
+    showToast('Please add calling notes before saving status', 'error');
+    notesInput?.focus();
+    return;
+  }
+
   try {
-    await DB.updateCallingStatus(devoteeId, week, { coming_status: status });
+    // Save status + notes together (avoids race condition with debounced note-save)
+    const payload = { coming_status: status };
+    if (typedNotes) payload.calling_notes = typedNotes; // include typed notes in same write
+    await DB.updateCallingStatus(devoteeId, week, payload);
+
     const d = AppState.callingData.find(x => x.id === devoteeId);
-    if (d) d.coming_status = status;
-    const row = btn.closest('tr');
+    if (d) { d.coming_status = status; if (typedNotes) d.calling_notes = typedNotes; }
     row.querySelectorAll('.status-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    row.className = status === 'Shifted' ? 'status-shifted' : '';
+    row.className = status === 'Shift' ? 'status-shift' : '';
     renderCallingStats(AppState.callingData);
   } catch (_) { showToast('Update failed', 'error'); }
 }
@@ -2641,6 +3240,394 @@ function updateCallingNotes(devoteeId, notes) {
     const week = document.getElementById('calling-week').value;
     const d = AppState.callingData.find(x => x.id === devoteeId);
     try { await DB.updateCallingStatus(devoteeId, week, { coming_status: d?.coming_status || 'Maybe', calling_notes: notes }); } catch (_) {}
+  }, 800);
+}
+
+let _reportType = 'summary'; // 'summary' | 'accuracy'
+
+function switchReportType(type, btn) {
+  _reportType = type;
+  document.getElementById('rpt-tab-summary' ).classList.toggle('btn-primary',   type === 'summary');
+  document.getElementById('rpt-tab-summary' ).classList.toggle('btn-secondary',  type !== 'summary');
+  document.getElementById('rpt-tab-accuracy').classList.toggle('btn-primary',   type === 'accuracy');
+  document.getElementById('rpt-tab-accuracy').classList.toggle('btn-secondary',  type !== 'accuracy');
+  loadCallingReports();
+}
+
+async function loadCallingReports() {
+  const inp = document.getElementById('calling-report-week');
+  if (inp && !inp.value) inp.value = getCurrentSunday();
+  const week = (inp && inp.value) || getCurrentSunday();
+  const el = document.getElementById('calling-reports-content');
+  el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  if (_reportType === 'summary') return _loadCallingSummary(week, el);
+  return _loadAccuracyReport(week, el);
+}
+
+async function _loadCallingSummary(week, el) {
+  try {
+    const report = await DB.getCallingReport(week);
+    const teams = Object.keys(report).filter(k => !k.startsWith('_'));
+    if (!teams.length) {
+      el.innerHTML = '<div class="empty-state"><i class="fas fa-chart-bar"></i><p>No calling data for this week</p></div>';
+      return;
+    }
+    const weekLabel = formatDate(week);
+    let grandTotal=0, grandCalled=0, grandNotCalled=0, grandYes=0, grandMaybe=0, grandNo=0, grandShift=0;
+    let bodyRows = '';
+
+    teams.forEach(team => {
+      const t = report[team];
+      grandTotal += t.total; grandCalled += t.called; grandNotCalled += t.notCalled;
+      grandYes += t.yes; grandMaybe += t.maybe; grandNo += t.no; grandShift += t.shift;
+
+      bodyRows += `<tr style="background:var(--accent-light);font-weight:700;font-size:.83rem">
+        <td>${teamBadge(team)}</td>
+        <td style="text-align:center">${t.total}</td>
+        <td style="text-align:center">${t.called}</td>
+        <td style="text-align:center;color:#c62828">${t.notCalled}</td>
+        <td style="text-align:center;color:var(--success)">${t.yes}</td>
+        <td style="text-align:center;color:var(--warning)">${t.maybe}</td>
+        <td style="text-align:center;color:var(--danger)">${t.no}</td>
+        <td style="text-align:center;color:var(--text-muted)">${t.shift}</td>
+      </tr>`;
+
+      Object.entries(t.callers).forEach(([caller, s]) => {
+        bodyRows += `<tr style="font-size:.82rem">
+          <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}</td>
+          <td style="text-align:center">${s.total}</td>
+          <td style="text-align:center">${s.called}</td>
+          <td style="text-align:center;color:#c62828">${s.notCalled}</td>
+          <td style="text-align:center;color:var(--success);font-weight:600">${s.yes}</td>
+          <td style="text-align:center;color:var(--warning)">${s.maybe}</td>
+          <td style="text-align:center;color:var(--danger)">${s.no}</td>
+          <td style="text-align:center;color:var(--text-muted)">${s.shift}</td>
+        </tr>`;
+      });
+    });
+
+    el.innerHTML = `<div style="font-size:.84rem;margin-bottom:.6rem">
+      <strong><i class="fas fa-phone-alt"></i> Calling Summary — ${weekLabel}</strong>
+    </div>
+    <div style="overflow-x:auto">
+    <table class="calling-table" style="margin:0">
+      <thead><tr>
+        <th style="min-width:160px">Team / Calling By</th>
+        <th style="text-align:center">Total</th>
+        <th style="text-align:center">Called</th>
+        <th style="text-align:center;color:#c62828">Not Called</th>
+        <th style="text-align:center;color:var(--success)">Yes</th>
+        <th style="text-align:center;color:var(--warning)">Maybe</th>
+        <th style="text-align:center;color:var(--danger)">No</th>
+        <th style="text-align:center">Shift</th>
+      </tr></thead>
+      <tbody>
+        ${bodyRows}
+        <tr style="background:#1a5c3a;color:#fff;font-weight:700;font-size:.83rem">
+          <td>Grand Total</td>
+          <td style="text-align:center">${grandTotal}</td>
+          <td style="text-align:center">${grandCalled}</td>
+          <td style="text-align:center">${grandNotCalled}</td>
+          <td style="text-align:center">${grandYes}</td>
+          <td style="text-align:center">${grandMaybe}</td>
+          <td style="text-align:center">${grandNo}</td>
+          <td style="text-align:center">${grandShift}</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>`;
+  } catch (e) {
+    console.error('_loadCallingSummary', e);
+    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load report</p></div>';
+  }
+}
+
+async function _loadAccuracyReport(week, el) {
+  try {
+    const report = await DB.getCallingReport(week);
+    const teams = Object.keys(report).filter(k => !k.startsWith('_'));
+    if (!teams.length) {
+      el.innerHTML = '<div class="empty-state"><i class="fas fa-chart-bar"></i><p>No calling data for this week</p></div>';
+      return;
+    }
+    const hasSession = report._hasSession;
+    const weekLabel = formatDate(week);
+
+    if (!hasSession) {
+      el.innerHTML = `<div class="empty-state"><i class="fas fa-clock"></i><p>Class not yet held for ${weekLabel} — accuracy report available after attendance is marked</p></div>`;
+      return;
+    }
+
+    let grandYes=0, grandAbsent=0;
+    let bodyRows = '';
+
+    teams.forEach(team => {
+      const t = report[team];
+      grandYes += t.yes; grandAbsent += t.yesNotCame;
+      const teamAbsent = t.yesNotCame;
+      const teamAbsentBtn = teamAbsent > 0
+        ? `<button style="background:#fce4ec;color:#c62828;font-weight:700;border:none;cursor:pointer;padding:.1rem .6rem;border-radius:4px;font-size:.82rem"
+             onclick='openAbsentModal("${week}",null,"${team.replace(/"/g,'&quot;')}")'>${teamAbsent}</button>`
+        : `<span style="color:var(--text-muted)">0</span>`;
+
+      bodyRows += `<tr style="background:var(--accent-light);font-weight:700;font-size:.83rem">
+        <td>${teamBadge(team)}</td>
+        <td style="text-align:center">${t.yes}</td>
+        <td style="text-align:center;color:var(--success)">${t.yesAndCame}</td>
+        <td style="text-align:center">${teamAbsentBtn}</td>
+      </tr>`;
+
+      Object.entries(t.callers).forEach(([caller, s]) => {
+        const absentBtn = s.yesNotCame > 0
+          ? `<button style="background:#fce4ec;color:#c62828;font-weight:700;border:none;cursor:pointer;padding:.1rem .6rem;border-radius:4px;font-size:.82rem"
+               onclick='openAbsentModal("${week}","${caller.replace(/"/g,'&quot;')}","${team.replace(/"/g,'&quot;')}")'>${s.yesNotCame}</button>`
+          : `<span style="color:var(--text-muted)">0</span>`;
+        bodyRows += `<tr style="font-size:.82rem">
+          <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}</td>
+          <td style="text-align:center">${s.yes}</td>
+          <td style="text-align:center;color:var(--success)">${s.yesAndCame}</td>
+          <td style="text-align:center">${absentBtn}</td>
+        </tr>`;
+      });
+    });
+
+    const grandAbsentBtn = grandAbsent > 0
+      ? `<button style="background:#fce4ec;color:#c62828;font-weight:700;border:none;cursor:pointer;padding:.1rem .6rem;border-radius:4px;font-size:.82rem"
+           onclick='openAbsentModal("${week}",null,null)'>${grandAbsent}</button>`
+      : `<span>0</span>`;
+
+    el.innerHTML = `<div style="font-size:.84rem;margin-bottom:.6rem">
+      <strong><i class="fas fa-user-times"></i> Said Coming But Absent — ${weekLabel}</strong>
+      <span style="margin-left:.75rem;font-size:.8rem;color:var(--text-muted)">Click a number to see the list</span>
+    </div>
+    <div style="overflow-x:auto">
+    <table class="calling-table" style="margin:0">
+      <thead><tr>
+        <th style="min-width:160px">Team / Calling By</th>
+        <th style="text-align:center;color:var(--success)">Said Yes</th>
+        <th style="text-align:center;color:var(--success)">Came</th>
+        <th style="text-align:center;color:#c62828">Absent</th>
+      </tr></thead>
+      <tbody>
+        ${bodyRows}
+        <tr style="background:#1a5c3a;color:#fff;font-weight:700;font-size:.83rem">
+          <td>Grand Total</td>
+          <td style="text-align:center">${grandYes}</td>
+          <td style="text-align:center">${grandYes - grandAbsent}</td>
+          <td style="text-align:center">${grandAbsentBtn}</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>`;
+  } catch (e) {
+    console.error('_loadAccuracyReport', e);
+    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load report</p></div>';
+  }
+}
+
+async function openAbsentModal(week, callingBy, team) {
+  const modal = document.getElementById('absent-list-modal');
+  const titleEl = document.getElementById('absent-list-title');
+  const contentEl = document.getElementById('absent-list-content');
+  modal.classList.remove('hidden');
+  contentEl.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+
+  let label = 'Said Coming — Didn\'t Attend';
+  if (team && callingBy) label += ` · ${callingBy} (${team})`;
+  else if (team) label += ` · ${team}`;
+  titleEl.textContent = label + ` · ${formatDate(week)}`;
+
+  try {
+    const { hasSession, list } = await DB.getYesAbsentList(week);
+    if (!hasSession) {
+      contentEl.innerHTML = '<p style="text-align:center;color:var(--text-muted)">Class not held yet for this week.</p>';
+      return;
+    }
+    let filtered = list;
+    if (team) filtered = filtered.filter(d => d.teamName === team);
+    if (callingBy) filtered = filtered.filter(d => d.callingBy === callingBy);
+    if (!filtered.length) {
+      contentEl.innerHTML = '<p style="text-align:center;color:var(--success)"><i class="fas fa-check-circle"></i> Everyone came!</p>';
+      return;
+    }
+    contentEl.innerHTML = `<table class="calling-table" style="margin:0">
+      <thead><tr>
+        <th>#</th><th>Name</th><th>Team</th><th>Calling By</th><th>Mobile</th>
+      </tr></thead>
+      <tbody>${filtered.map((d,i) => `<tr>
+        <td style="text-align:center;color:var(--text-muted)">${i+1}</td>
+        <td style="font-weight:500">${d.name}</td>
+        <td>${teamBadge(d.teamName)}</td>
+        <td style="font-size:.82rem;color:var(--text-muted)">${d.callingBy||'—'}</td>
+        <td style="font-size:.82rem">${d.mobile||'—'}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  } catch (e) {
+    contentEl.innerHTML = '<p style="color:var(--danger)">Failed to load list.</p>';
+  }
+}
+
+async function downloadCurrentReportExcel() {
+  const inp = document.getElementById('calling-report-week');
+  const week = (inp && inp.value) || getCurrentSunday();
+  if (_reportType === 'summary') return _downloadSummaryExcel([week], `Calling_Summary_${week}.xlsx`);
+  return _downloadAccuracyExcel([week], `Accuracy_Report_${week}.xlsx`);
+}
+
+async function downloadCompleteReportExcel() {
+  showToast('Preparing complete FY report…');
+  const now = new Date();
+  const fyStartYear = (now.getMonth() + 1) >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+  const fyStart = `${fyStartYear}-04-01`;
+  const today = getToday();
+  // Get all unique calling weeks in FY
+  const csSnap = await fdb.collection('callingStatus').where('weekDate','>=',fyStart).where('weekDate','<=',today).get();
+  const weeks = [...new Set(csSnap.docs.map(d => d.data().weekDate))].sort();
+  if (!weeks.length) { showToast('No data found for this FY'); return; }
+  const fname = `FY_${fyStartYear}-${String(fyStartYear+1).slice(-2)}_${_reportType === 'summary' ? 'Calling_Summary' : 'Accuracy_Report'}.xlsx`;
+  if (_reportType === 'summary') return _downloadSummaryExcel(weeks, fname);
+  return _downloadAccuracyExcel(weeks, fname);
+}
+
+async function _downloadSummaryExcel(weeks, filename) {
+  showToast('Building Excel…');
+  const XS = _xls();
+  const wb = XLSX.utils.book_new();
+
+  for (const week of weeks) {
+    const report = await DB.getCallingReport(week);
+    const teams = Object.keys(report).filter(k => !k.startsWith('_'));
+    const sheetName = week.slice(5).replace('-','.');  // e.g. "04.06"
+    const HDR_S = XS.hdr('1A5C3A','FFFFFF');
+    const SUB_S = XS.hdr('C8E6C9','1B5E20');
+    const GRD_S = XS.hdr('0D3B22','FFFFFF');
+    const headers = ['Team / Calling By','Total','Called','Not Called','Yes','Maybe','No','Shift'];
+    const colW = [{wch:24},{wch:8},{wch:8},{wch:10},{wch:8},{wch:8},{wch:8},{wch:8}];
+    const rows = [headers.map(h => ({ v:h, s:HDR_S }))];
+
+    let gT=0,gCalled=0,gNC=0,gY=0,gM=0,gNo=0,gSh=0;
+    teams.forEach(team => {
+      const t = report[team];
+      gT+=t.total; gCalled+=t.called; gNC+=t.notCalled; gY+=t.yes; gM+=t.maybe; gNo+=t.no; gSh+=t.shift;
+      rows.push([team,t.total,t.called,t.notCalled,t.yes,t.maybe,t.no,t.shift].map((v,i) => ({ v, s: i===0 ? SUB_S : XS.hdr('E8F5E9','1B5E20') })));
+      Object.entries(t.callers).forEach(([caller, s]) => {
+        rows.push([caller,s.total,s.called,s.notCalled,s.yes,s.maybe,s.no,s.shift].map(v => ({ v, s:XS.cell() })));
+      });
+    });
+    rows.push(['Grand Total',gT,gCalled,gNC,gY,gM,gNo,gSh].map(v => ({ v, s:GRD_S })));
+
+    const ws = _xlsSheet(rows, colW);
+    ws['!freeze'] = { xSplit:0, ySplit:1, topLeftCell:'A2' };
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  }
+  XLSX.writeFile(wb, filename);
+  showToast('Downloaded: ' + filename);
+}
+
+async function _downloadAccuracyExcel(weeks, filename) {
+  showToast('Building Excel…');
+  const XS = _xls();
+  const wb = XLSX.utils.book_new();
+
+  for (const week of weeks) {
+    const report = await DB.getCallingReport(week);
+    const teams = Object.keys(report).filter(k => !k.startsWith('_'));
+    if (!report._hasSession) continue; // skip weeks without class
+    const sheetName = week.slice(5).replace('-','.');
+    const HDR_S = XS.hdr('1A5C3A','FFFFFF');
+    const SUB_S = XS.hdr('FFCDD2','B71C1C');
+    const GRD_S = XS.hdr('0D3B22','FFFFFF');
+    const headers = ['Team / Calling By','Said Yes','Came','Absent'];
+    const colW = [{wch:24},{wch:10},{wch:10},{wch:10}];
+    const rows = [headers.map(h => ({ v:h, s:HDR_S }))];
+
+    let gY=0, gAbsent=0;
+    teams.forEach(team => {
+      const t = report[team];
+      gY += t.yes; gAbsent += t.yesNotCame;
+      rows.push([team,t.yes,t.yesAndCame,t.yesNotCame].map((v,i) => ({ v, s: i===0 ? SUB_S : XS.hdr('FFCDD2','B71C1C') })));
+      Object.entries(t.callers).forEach(([caller, s]) => {
+        rows.push([caller,s.yes,s.yesAndCame,s.yesNotCame].map(v => ({ v, s:XS.cell() })));
+      });
+    });
+    rows.push(['Grand Total',gY,gY-gAbsent,gAbsent].map(v => ({ v, s:GRD_S })));
+
+    const ws = _xlsSheet(rows, colW);
+    ws['!freeze'] = { xSplit:0, ySplit:1, topLeftCell:'A2' };
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  }
+  XLSX.writeFile(wb, filename);
+  showToast('Downloaded: ' + filename);
+}
+
+const _lateRemarksTimers = {};
+async function loadLateReports() {
+  // 4 weeks: current calling week + last 3
+  const week3 = getCallingWeekDefault();
+  const week2 = shiftDateDay(week3, -7);
+  const week1 = shiftDateDay(week3, -14);
+  const week0 = shiftDateDay(week3, -21);
+  const fourWeeks = [week0, week1, week2, week3];
+
+  const el = document.getElementById('calling-late-content');
+  el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  try {
+    const [allDevotees, submissions] = await Promise.all([
+      DevoteeCache.all(),
+      DB.getCallingSubmissions(fourWeeks)
+    ]);
+
+    // Collect all unique calling coordinators from active devotees
+    const coordMap = {}; // name → teamName
+    allDevotees.filter(d => d.callingBy && !d.isNotInterested).forEach(d => {
+      if (!coordMap[d.callingBy]) coordMap[d.callingBy] = d.teamName || '';
+    });
+    const coords = Object.entries(coordMap).sort(([a], [b]) => a.localeCompare(b));
+
+    function fmtSubmission(sub) {
+      if (!sub || !sub.submittedAtClient) {
+        return `<span style="color:var(--text-muted);font-size:.78rem">—</span>`;
+      }
+      const t = new Date(sub.submittedAtClient);
+      const time = t.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+      const isLate = t.getHours() >= 21;
+      return isLate
+        ? `<span style="color:#c62828;font-weight:600;font-size:.82rem"><i class="fas fa-clock"></i> ${time}</span>`
+        : `<span style="color:var(--success);font-size:.82rem"><i class="fas fa-check"></i> ${time}</span>`;
+    }
+
+    el.innerHTML = `
+      <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:.75rem">
+        <i class="fas fa-info-circle"></i>
+        Time shown = when coordinator pressed <strong>Submit Calling</strong>.
+        <span style="color:#c62828"><i class="fas fa-clock"></i> Red = after 9 PM (late).</span>
+      </div>
+      <div style="overflow-x:auto">
+      <table class="calling-table">
+        <thead><tr>
+          <th>#</th>
+          <th>Calling By</th>
+          <th>Team</th>
+          ${fourWeeks.map(w => `<th style="text-align:center">${sheetFmtDDMMYY(w)}</th>`).join('')}
+        </tr></thead>
+        <tbody>${coords.length ? coords.map(([name, team], i) => `<tr>
+          <td style="color:var(--text-muted)">${i + 1}</td>
+          <td style="font-weight:600">${name}</td>
+          <td>${teamBadge(team)}</td>
+          ${fourWeeks.map(w => `<td style="text-align:center">${fmtSubmission(submissions[w]?.[name])}</td>`).join('')}
+        </tr>`).join('') : `<tr><td colspan="${4 + fourWeeks.length}" style="text-align:center;color:var(--text-muted)">No calling coordinators found</td></tr>`}
+        </tbody>
+      </table>
+      </div>`;
+  } catch (_) {
+    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+  }
+}
+
+function saveLateRemark(statusId, remarks) {
+  clearTimeout(_lateRemarksTimers[statusId]);
+  _lateRemarksTimers[statusId] = setTimeout(async () => {
+    try { await DB.saveCallingRemarks(statusId, remarks); } catch (_) {}
   }, 800);
 }
 
@@ -2692,10 +3679,15 @@ async function loadAttendanceCandidates() {
     const isServiceDev = AppState.userRole === 'serviceDevotee';
     list.innerHTML = candidates.map((d, idx) => {
       const isPresent = !!d.attendance_id;
-      const canEdit   = !isServiceDev || isPresent; // service devotee can only edit present ones
+      const canEdit   = !isServiceDev || isPresent;
+      const ts        = attTimeStyle(d.marked_at);
+      const cardStyle = isPresent && ts.card ? ts.card : '';
+      const timeLabel = isPresent && d.marked_at
+        ? ` <span style="font-size:.7rem;opacity:.85">${new Date(d.marked_at).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true})}</span>` : '';
       return `
         <div class="attendance-card${isPresent ? ' is-present' : ''}" id="att-card-${d.id}"
-             ${canEdit ? `onclick="openProfileModal('${d.id}')" style="cursor:pointer"` : ''}>
+             style="${cardStyle}${canEdit ? ';cursor:pointer' : ''}"
+             ${canEdit ? `onclick="openProfileModal('${d.id}')"` : ''}>
           <div class="devotee-avatar" style="width:40px;height:40px;font-size:.9rem">${initials(d.name)}</div>
           <div class="attendance-card-info">
             <div class="attendance-card-name">${d.name}
@@ -2707,7 +3699,7 @@ async function loadAttendanceCandidates() {
           </div>
           <div onclick="event.stopPropagation()">
             ${isPresent
-              ? `<span style="color:var(--success);font-weight:700;font-size:.85rem"><i class="fas fa-check-circle"></i> Present</span>
+              ? `<span style="font-weight:700;font-size:.85rem;${ts.card.includes('c62828') ? 'color:#fff' : 'color:var(--success)'}"><i class="fas fa-check-circle"></i> P${timeLabel}</span>
                  <button class="undo-btn" onclick="undoPresent('${d.id}')">Undo</button>`
               : `<button class="present-btn" onclick="markPresent('${d.id}', false)">PRESENT</button>`}
           </div>
@@ -2791,7 +3783,7 @@ async function loadSeriousAnalysis() {
   c.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
   try {
     const data = await DB.getSeriousReport(getWeekDate(), AppState.currentSessionId);
-    const teams    = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata'];
+    const teams    = TEAMS;
     const statuses = ['Most Serious','Serious','Expected to be Serious'];
     c.innerHTML = `<div style="overflow-x:auto"><table class="report-table">
       <thead>

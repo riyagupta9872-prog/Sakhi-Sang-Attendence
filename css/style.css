@@ -75,7 +75,14 @@ h3 { font-size: 1rem; }
 }
 .header-text h1 { color: #fff; font-size: 1.3rem; letter-spacing: .5px; }
 .header-text p { color: rgba(255,255,255,.75); font-size: .75rem; font-weight: 300; }
-.header-date { color: rgba(255,255,255,.85); font-size: .85rem; display: flex; align-items: center; gap: .4rem; }
+.header-right {
+  display: flex; align-items: center; gap: .75rem; flex-shrink: 0;
+}
+.header-date {
+  color: rgba(255,255,255,.85); font-size: .82rem;
+  display: flex; align-items: center; gap: .4rem; white-space: nowrap;
+}
+@media (max-width: 640px) { .header-date { display: none; } }
 
 /* ── TAB NAVIGATION ── */
 .tab-nav {
@@ -182,7 +189,37 @@ h3 { font-size: 1rem; }
   cursor: pointer; transition: all .18s; gap: .75rem;
 }
 .devotee-item:hover { border-color: var(--secondary); box-shadow: var(--shadow); transform: translateX(2px); }
-.devotee-item.flagged { border-left: 4px solid var(--danger); }
+.devotee-item.selected { border-color: var(--secondary); background: var(--accent-light); }
+.devotee-checkbox { width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer; flex-shrink: 0; }
+
+/* Selection bar */
+.selection-bar {
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  background: var(--primary); color: #fff; border-radius: var(--radius);
+  padding: .6rem 1rem; margin-bottom: .75rem; font-weight: 600; font-size: .88rem;
+}
+.selection-bar.hidden { display: none; }
+
+/* Calling submit bar */
+.calling-submit-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: .75rem; flex-wrap: wrap;
+  background: var(--accent-light); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: .6rem 1rem; margin-top: .75rem;
+  min-height: 2.4rem;
+}
+
+/* WhatsApp button */
+.btn-wa {
+  background: #25d366; color: #fff; border: none;
+  padding: .45rem 1rem; border-radius: var(--radius-sm); cursor: pointer;
+  font-family: inherit; font-size: .85rem; font-weight: 600;
+  display: inline-flex; align-items: center; gap: .4rem; transition: background .2s;
+}
+.btn-wa:hover { background: #1da851; }
+
+/* Select mode button active state */
+#devotee-select-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 
 .devotee-avatar {
   width: 44px; height: 44px; border-radius: 50%;
@@ -242,7 +279,7 @@ h3 { font-size: 1rem; }
 }
 .calling-table td { padding: .6rem 1rem; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: .88rem; }
 .calling-table tr:hover td { background: var(--bg); }
-.calling-table tr.status-shifted td { opacity: .55; }
+.calling-table tr.status-shift td { opacity: .55; }
 
 .status-btns { display: flex; gap: .3rem; flex-wrap: wrap; }
 .status-btn {
@@ -256,8 +293,8 @@ h3 { font-size: 1rem; }
 .status-btn.no.active   { background: var(--danger); color: #fff; }
 .status-btn.maybe { border-color: var(--warning); color: var(--warning); }
 .status-btn.maybe.active { background: var(--warning); color: #fff; }
-.status-btn.shifted { border-color: var(--text-muted); color: var(--text-muted); }
-.status-btn.shifted.active { background: var(--text-muted); color: #fff; }
+.status-btn.shift { border-color: var(--text-muted); color: var(--text-muted); }
+.status-btn.shift.active { background: var(--text-muted); color: #fff; }
 
 .calling-notes-input {
   border: 1.5px solid var(--border); border-radius: var(--radius-sm);
@@ -265,6 +302,25 @@ h3 { font-size: 1rem; }
   width: 140px; outline: none; transition: border-color .2s;
 }
 .calling-notes-input:focus { border-color: var(--secondary); }
+
+.calling-name-link {
+  font-weight: 600; cursor: pointer; color: var(--primary);
+  text-decoration: underline dotted; text-underline-offset: 2px;
+}
+.calling-name-link:hover { color: var(--secondary); }
+
+.calling-upd-time {
+  display: block; font-size: .72rem; color: var(--text-muted); margin-top: .15rem;
+}
+
+.status-badge {
+  display: inline-block; padding: .15rem .5rem; border-radius: 999px;
+  font-size: .78rem; font-weight: 600; background: var(--accent-light);
+}
+.status-badge.yes    { background: #e8f5e9; color: #2e7d32; }
+.status-badge.no     { background: #ffebee; color: #c62828; }
+.status-badge.maybe  { background: #fff8e1; color: #f57f17; }
+.status-badge.shift { background: #f3e5f5; color: #6a1b9a; }
 
 /* ── ATTENDANCE DASHBOARD ── */
 .attendance-dashboard {
@@ -725,25 +781,56 @@ h3 { font-size: 1rem; }
 
 /* ── HEADER USER INFO ── */
 .header-user {
-  display: flex; align-items: center; gap: .6rem;
+  display: flex; align-items: center; gap: .5rem;
+}
+.header-user-info {
+  display: flex; flex-direction: column; line-height: 1.25; max-width: 120px;
 }
 .header-user-name {
-  color: rgba(255,255,255,.9); font-size: .82rem; font-weight: 600;
+  color: rgba(255,255,255,.95); font-size: .8rem; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.header-actions {
+  display: flex; align-items: center; gap: .35rem;
+}
+@media (max-width: 520px) {
+  .header-user-info { display: none; }
+}
+
+/* Header avatar (profile pic or initials) */
+.header-avatar {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: rgba(255,255,255,.2); border: 2px solid rgba(255,255,255,.5);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; flex-shrink: 0; overflow: hidden;
+  transition: border-color .2s, transform .15s;
+  font-size: .75rem; font-weight: 700; color: #fff;
+}
+.header-avatar:hover { border-color: var(--gold); transform: scale(1.05); }
+
+/* Edit Profile modal – profile pic preview */
+.profile-pic-preview {
+  width: 100px; height: 100px; border-radius: 50%;
+  background: var(--primary); border: 3px solid var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; flex-shrink: 0;
 }
 .role-pill {
   padding: .15rem .55rem; border-radius: 20px; font-size: .7rem; font-weight: 700;
   background: rgba(255,255,255,.2); color: #fff; white-space: nowrap;
 }
 .btn-logout {
-  padding: .35rem .75rem; border-radius: var(--radius-sm); border: 1.5px solid rgba(255,255,255,.4);
-  background: transparent; color: #fff; font-family: inherit; font-size: .8rem;
-  font-weight: 600; cursor: pointer; transition: all .18s;
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,.4);
+  background: transparent; color: #fff; font-size: .85rem;
+  cursor: pointer; transition: all .18s;
+  display: flex; align-items: center; justify-content: center;
 }
 .btn-logout:hover { background: rgba(255,255,255,.15); }
 .btn-admin-gear {
   width: 32px; height: 32px; border-radius: 50%; border: none;
   background: rgba(255,255,255,.15); color: #fff;
-  cursor: pointer; font-size: .9rem; transition: all .18s;
+  cursor: pointer; font-size: .85rem; transition: all .18s;
   display: flex; align-items: center; justify-content: center;
 }
 .btn-admin-gear:hover { background: rgba(255,255,255,.3); transform: rotate(30deg); }
