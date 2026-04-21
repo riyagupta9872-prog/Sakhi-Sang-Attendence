@@ -141,6 +141,36 @@ async function doSignup(e) {
   }
 }
 
+function togglePw(inputId, btn) {
+  const inp = document.getElementById(inputId);
+  const showing = inp.type === 'text';
+  inp.type = showing ? 'password' : 'text';
+  btn.querySelector('i').className = showing ? 'fas fa-eye' : 'fas fa-eye-slash';
+}
+
+async function doForgotPassword() {
+  const email = document.getElementById('login-email').value.trim();
+  if (!email) {
+    const err = document.getElementById('login-error');
+    err.textContent = 'Enter your email address above, then click Forgot password.';
+    err.classList.add('show');
+    document.getElementById('login-email').focus();
+    return;
+  }
+  try {
+    await auth.sendPasswordResetEmail(email);
+    const err = document.getElementById('login-error');
+    err.style.cssText = 'background:#e8f5e9;color:#2e7d32;border:1.5px solid #a5d6a7;display:block';
+    err.textContent = `Password reset email sent to ${email}. Check your inbox.`;
+    err.classList.add('show');
+  } catch (ex) {
+    const err = document.getElementById('login-error');
+    err.style.cssText = '';
+    err.textContent = ex.code === 'auth/user-not-found' ? 'No account found with this email.' : ex.message;
+    err.classList.add('show');
+  }
+}
+
 async function doLogout() {
   if (!confirm('Log out?')) return;
   await auth.signOut();
@@ -402,6 +432,8 @@ function toSnake(d) {
     hobbies:             d.hobbies || null,
     skills:              d.skills || null,
     tilak:               d.tilak || 0,
+    is_not_interested:   d.isNotInterested || false,
+    not_interested_at:   tsToISO(d.notInterestedAt),
   };
 }
 
@@ -429,6 +461,8 @@ function toCamel(f) {
     hobbies:           (f.hobbies || '').trim() || null,
     skills:            (f.skills || '').trim() || null,
     tilak:             parseInt(f.tilak) || 0,
+    isNotInterested:   f.is_not_interested || false,
+    notInterestedAt:   f.not_interested_at || null,
   };
 }
 
@@ -534,23 +568,23 @@ const DB = {
   },
 
   async importDevotees(rows, mode = 'add') {
-    let imported = 0, updated = 0, skipped = 0, errors = [];
+    let imported = 0, updated = 0, skipped = [], errors = [];
     const list = await DevoteeCache.all();
-    const mobileMap = {}; // mobile → docId
-    const nameMap  = {}; // lower name → docId (fallback)
+    const mobileMap = {}, nameMap = {};
     list.forEach(d => {
-      if (d.mobile) mobileMap[d.mobile] = d.id;
-      nameMap[d.name.toLowerCase()] = d.id;
+      if (d.mobile) mobileMap[d.mobile] = { id: d.id, name: d.name };
+      nameMap[d.name.toLowerCase()] = { id: d.id, name: d.name };
     });
 
     for (let ci = 0; ci < rows.length; ci += 400) {
       const chunk = rows.slice(ci, ci + 400);
       const batch = fdb.batch(); let any = false;
       chunk.forEach((row, i) => {
+        const rowNum = ci + i + 2;
         try {
           const name   = importCol(row, ['Name','name','Full Name','Devotee Name','NAAM']).trim();
           const mobile = importCol(row, ['Mobile','Contact','Phone','Mobile Number','Mobile (10 digits)','Contact Number','Mob','Ph No','Ph.No','mob no','contact']).replace(/\D/g,'').slice(0,10);
-          if (!name) { skipped++; return; }
+          if (!name) { skipped.push({ row: rowNum, name: '(blank)', mobile: mobile || '', reason: 'Name is empty' }); return; }
 
           const payload = {
             name,
@@ -578,21 +612,26 @@ const DB = {
             isActive: true, inactivityFlag: false, updatedAt: TS(),
           };
 
-          // Determine existing doc
-          const existingId = (mobile && mobileMap[mobile]) || (mode === 'upsert' && nameMap[name.toLowerCase()]) || null;
+          const byMobile = mobile && mobileMap[mobile];
+          const byName   = nameMap[name.toLowerCase()];
+          const existingId = (byMobile || (mode === 'upsert' && byName))?.id || null;
 
           if (mode === 'upsert' && existingId) {
             batch.update(fdb.collection('devotees').doc(existingId), payload);
             updated++; any = true;
           } else if (existingId) {
-            skipped++; // add-only mode
+            const matchedName = (byMobile || byName)?.name || '';
+            const reason = byMobile
+              ? `Duplicate mobile — already registered as "${matchedName}"`
+              : `Duplicate name — already exists as "${matchedName}"`;
+            skipped.push({ row: rowNum, name, mobile: mobile || '', reason });
           } else {
             batch.set(fdb.collection('devotees').doc(), { ...payload, lifetimeAttendance: 0, createdAt: TS() });
-            if (mobile) mobileMap[mobile] = 'new';
-            nameMap[name.toLowerCase()] = 'new';
+            if (mobile) mobileMap[mobile] = { id: 'new', name };
+            nameMap[name.toLowerCase()] = { id: 'new', name };
             imported++; any = true;
           }
-        } catch (e) { errors.push(`Row ${ci + i + 2}: ${e.message}`); }
+        } catch (e) { errors.push({ row: rowNum, name: '', mobile: '', reason: e.message }); }
       });
       if (any) await batch.commit();
     }
@@ -744,12 +783,32 @@ const DB = {
     ]);
     const csMap = {};
     csSnap.docs.forEach(d => { csMap[d.data().devoteeId] = { id: d.id, ...d.data() }; });
-    return raw.map(d => ({
+    // Filter out devotees with no callingBy assigned, and those marked Not Interested
+    const filtered = raw.filter(d => d.callingBy && d.callingBy.trim() && !d.isNotInterested);
+    return filtered.map(d => ({
       ...toSnake(d),
       coming_status: csMap[d.id]?.comingStatus || null,
       calling_notes: csMap[d.id]?.callingNotes || null,
       calling_id:    csMap[d.id]?.id            || null,
     }));
+  },
+
+  async getNotInterestedDevotees() {
+    const snap = await fdb.collection('devotees').where('isNotInterested', '==', true).get();
+    return snap.docs.map(d => toSnake({ id: d.id, ...d.data() }));
+  },
+
+  async markNotInterested(id) {
+    const updates = { isNotInterested: true, notInterestedAt: TS(), updatedAt: TS() };
+    const batch = fdb.batch();
+    batch.update(fdb.collection('devotees').doc(id), updates);
+    batch.set(fdb.collection('profileChanges').doc(), {
+      devoteeId: id, fieldName: 'is_not_interested',
+      oldValue: 'false', newValue: 'true',
+      changedAt: TS(), changedBy: AppState.userName || 'Admin'
+    });
+    await batch.commit();
+    DevoteeCache.bust();
   },
 
   async updateCallingStatus(devoteeId, weekDate, data) {
@@ -1290,9 +1349,123 @@ async function exportAttendance() {
   } catch (_) { showToast('Export failed', 'error'); }
 }
 
+// ── EXPORT CALLING LIST ───────────────────────────────
+async function exportCallingList() {
+  showToast('Preparing Calling List Excel…');
+  try {
+    const teams = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata'];
+
+    // Get last 2 completed sessions (sessionDate <= today, not cancelled, ordered desc)
+    const today = getToday();
+    const sessSnap = await fdb.collection('sessions')
+      .where('sessionDate', '<=', today)
+      .orderBy('sessionDate', 'desc')
+      .limit(5)
+      .get();
+    const completedSessions = sessSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(s => !s.isCancelled)
+      .slice(0, 2)
+      .reverse(); // oldest first → [sess1, sess2]
+
+    // For each session: get CS and AT records
+    const csData = [], atData = [];
+    for (const sess of completedSessions) {
+      const [csSnap, atSnap] = await Promise.all([
+        fdb.collection('callingStatus').where('weekDate', '==', sess.sessionDate).get(),
+        fdb.collection('attendanceRecords').where('sessionId', '==', sess.id).get()
+      ]);
+      const csMap = {};
+      csSnap.docs.forEach(d => { csMap[d.data().devoteeId] = d.data().comingStatus; });
+      const presentSet = new Set(atSnap.docs.map(d => d.data().devoteeId));
+      csData.push(csMap);
+      atData.push(presentSet);
+    }
+
+    // Get all active devotees with callingBy set AND not isNotInterested
+    const allDevotees = await DevoteeCache.all();
+    const activeDevotees = allDevotees.filter(d => d.callingBy && d.callingBy.trim() && !d.isNotInterested);
+
+    // Not interested devotees
+    const notInterestedDevotees = await DB.getNotInterestedDevotees();
+
+    // FY label — dynamic
+    const now = new Date();
+    const fyStartYear = (now.getMonth() + 1) >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+    const fyLabel = `Apr-${String(fyStartYear).slice(-2)} to Mar-${String(fyStartYear + 1).slice(-2)}`;
+
+    // Column headers for CS/AT
+    const s1 = completedSessions[0];
+    const s2 = completedSessions[1];
+    const cs1Hdr = s1 ? `CS ${sheetFmtDDMMYY(shiftDateDay(s1.sessionDate, -1))}` : 'CS (prev)';
+    const at1Hdr = s1 ? `AT ${sheetFmtDDMMYY(s1.sessionDate)}` : 'AT (prev)';
+    const cs2Hdr = s2 ? `CS ${sheetFmtDDMMYY(shiftDateDay(s2.sessionDate, -1))}` : 'CS (latest)';
+    const at2Hdr = s2 ? `AT ${sheetFmtDDMMYY(s2.sessionDate)}` : 'AT (latest)';
+
+    const mainHeaders = [
+      'Sno', 'Name', 'Mobile Number', 'Ref-2', 'C.R', 'Active', 'Team Wise',
+      'Calling By', `Attendance ${fyLabel}`,
+      cs1Hdr, at1Hdr, cs2Hdr, at2Hdr, 'TOTAL'
+    ];
+
+    const wb = XLSX.utils.book_new();
+
+    teams.forEach(team => {
+      const members = activeDevotees.filter(d => d.teamName === team);
+      members.sort((a, b) => (a.callingBy || '').localeCompare(b.callingBy || '') || a.name.localeCompare(b.name));
+
+      const rows = members.map((d, i) => {
+        const cs1 = s1 ? (csData[0]?.[d.id] ? csLabel(csData[0][d.id]) : '') : '';
+        const at1 = s1 ? (atData[0]?.has(d.id) ? 'P' : '') : '';
+        const cs2 = s2 ? (csData[1]?.[d.id] ? csLabel(csData[1][d.id]) : '') : '';
+        const at2 = s2 ? (atData[1]?.has(d.id) ? 'P' : '') : '';
+        return [
+          i + 1, d.name, d.mobile || '', d.referenceBy || '',
+          d.chantingRounds || 0, d.isActive !== false ? 'Active' : '',
+          d.teamName || '', d.callingBy || '',
+          d.lifetimeAttendance || 0,
+          cs1, at1, cs2, at2,
+          d.lifetimeAttendance || 0
+        ];
+      });
+
+      const ws = XLSX.utils.aoa_to_sheet([mainHeaders, ...rows]);
+      ws['!cols'] = [
+        { wch: 5 }, { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 5 },
+        { wch: 8 }, { wch: 14 }, { wch: 20 }, { wch: 22 },
+        { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 8 }
+      ];
+      XLSX.utils.book_append_sheet(wb, ws, team.slice(0, 31));
+    });
+
+    // Not Interested sheet
+    const niHeaders = ['Sno', 'Name', 'Mobile Number', 'Ref-2', 'C.R', 'Team Wise', 'Calling By', 'Date of Joining', 'Moved to Not Interested On', 'Lifetime Attendance'];
+    const niRows = notInterestedDevotees.map((d, i) => [
+      i + 1, d.name, d.mobile || '', d.reference_by || '',
+      d.chanting_rounds || 0, d.team_name || '', d.calling_by || '',
+      d.date_of_joining || '',
+      d.not_interested_at ? new Date(d.not_interested_at).toLocaleDateString('en-IN') : '',
+      d.lifetime_attendance || 0
+    ]);
+    const wsNI = XLSX.utils.aoa_to_sheet([niHeaders, ...niRows]);
+    wsNI['!cols'] = [
+      { wch: 5 }, { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 5 },
+      { wch: 14 }, { wch: 20 }, { wch: 14 }, { wch: 22 }, { wch: 10 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsNI, 'Not Interested');
+
+    XLSX.writeFile(wb, `calling_list_${getToday()}.xlsx`);
+    showToast('Calling list exported!', 'success');
+  } catch (e) {
+    console.error('exportCallingList error', e);
+    showToast('Export failed: ' + (e.message || 'Unknown error'), 'error');
+  }
+}
+
 // ── ATTENDANCE SUB-TAB ────────────────────────────────
 function switchAttTab(tab, btn) {
-  document.querySelectorAll('.att-sub-tab').forEach(b => b.classList.remove('active'));
+  // Scope to attendance tab only (not calling sub-tabs)
+  document.querySelectorAll('#tab-attendance .att-sub-tab').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.att-sub-panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('att-panel-' + tab).classList.add('active');
@@ -1446,6 +1619,10 @@ function sheetFmtShort(dateStr) {
   if (!dateStr) return '';
   const [y, m, d] = dateStr.split('-');
   return `${d}.${m}.${y.slice(-2)}`;
+}
+// DD.MM.YY format for calling list export column headers
+function sheetFmtDDMMYY(dateStr) {
+  return sheetFmtShort(dateStr);
 }
 function csLabel(status) {
   return { Yes: 'Coming', No: 'No', Maybe: 'Maybe', Shifted: 'Shifted', 'Not Interested': 'N/I' }[status] || '';
@@ -1887,11 +2064,7 @@ async function confirmMappingImport() {
 
   try {
     const data = await importWithMapping(_importRows, colMap, _importMode);
-    const updLine = data.updated ? ` | Updated: ${data.updated}` : '';
-    result.className = 'import-result success';
-    result.innerHTML = `<strong>Done!</strong> Added: ${data.imported}${updLine} | Skipped: ${data.skipped}` +
-      (data.errors.length ? `<br><small style="color:#c62828">${data.errors.slice(0,5).join('<br>')}</small>` : '');
-    result.classList.remove('hidden');
+    showImportReport(data, result);
     loadDevotees(); loadCallingPersonsFilter();
     showToast(`Import complete — ${data.imported} added${data.updated ? ', ' + data.updated + ' updated' : ''}`, 'success');
   } catch (err) {
@@ -1908,32 +2081,33 @@ async function confirmMappingImport() {
 }
 
 async function importWithMapping(rows, colMap, mode = 'add') {
-  // colMap: { excelColName: appFieldKey }
   function getField(row, fieldKey) {
     const excelCol = Object.keys(colMap).find(c => colMap[c] === fieldKey);
     return excelCol ? (row[excelCol] ?? '') : '';
   }
 
-  let imported = 0, updated = 0, skipped = 0, errors = [];
+  let imported = 0, updated = 0, skipped = [], errors = [];
   const list = await DevoteeCache.all();
   const mobileMap = {}, nameMap = {};
   list.forEach(d => {
-    if (d.mobile) mobileMap[d.mobile] = d.id;
-    nameMap[d.name.toLowerCase()] = d.id;
+    if (d.mobile) mobileMap[d.mobile] = { id: d.id, name: d.name };
+    nameMap[d.name.toLowerCase()] = { id: d.id, name: d.name };
   });
 
   const chunks = [];
   for (let i = 0; i < rows.length; i += 20) chunks.push(rows.slice(i, i + 20));
+  let globalRow = 2;
 
   for (const chunk of chunks) {
     const batch = fdb.batch();
     let batchHasWrites = false;
 
-    chunk.forEach((row, i) => {
+    chunk.forEach((row) => {
+      const rowNum = globalRow++;
       try {
         const name   = String(getField(row, 'name')).trim();
         const mobile = String(getField(row, 'mobile')).replace(/\D/g, '').slice(0, 10);
-        if (!name) { skipped++; return; }
+        if (!name) { skipped.push({ row: rowNum, name: '(blank)', mobile: mobile || '', reason: 'Name is empty' }); return; }
 
         const payload = {
           name,
@@ -1960,26 +2134,33 @@ async function importWithMapping(rows, colMap, mode = 'add') {
           skills:           String(getField(row, 'skills')) || null,
           isActive: true, inactivityFlag: false, updatedAt: TS(),
         };
-
-        // Clean up null strings
         Object.keys(payload).forEach(k => { if (payload[k] === 'null' || payload[k] === '') payload[k] = null; });
 
-        const existId = (mobile && mobileMap[mobile]) || nameMap[name.toLowerCase()];
+        const byMobile = mobile && mobileMap[mobile];
+        const byName   = nameMap[name.toLowerCase()];
+        const existId  = (byMobile || (mode === 'upsert' && byName))?.id || null;
+
         if (existId) {
           if (mode === 'upsert') {
             batch.update(fdb.collection('devotees').doc(existId), payload);
             updated++;
-          } else { skipped++; }
+          } else {
+            const matchedName = (byMobile || byName)?.name || '';
+            const reason = byMobile
+              ? `Duplicate mobile — already registered as "${matchedName}"`
+              : `Duplicate name — already exists as "${matchedName}"`;
+            skipped.push({ row: rowNum, name, mobile: mobile || '', reason });
+          }
         } else {
           const ref = fdb.collection('devotees').doc();
           batch.set(ref, { ...payload, lifetimeAttendance: 0, createdAt: TS() });
-          if (mobile) mobileMap[mobile] = ref.id;
-          nameMap[name.toLowerCase()] = ref.id;
+          if (mobile) mobileMap[mobile] = { id: ref.id, name };
+          nameMap[name.toLowerCase()] = { id: ref.id, name };
           imported++;
         }
         batchHasWrites = true;
       } catch (err) {
-        errors.push(`Row ${i + 1}: ${err.message}`);
+        errors.push({ row: rowNum, name: '', mobile: '', reason: err.message });
       }
     });
 
@@ -1988,6 +2169,67 @@ async function importWithMapping(rows, colMap, mode = 'add') {
 
   DevoteeCache.bust();
   return { imported, updated, skipped, errors };
+}
+
+let _lastSkipReport = [];
+
+function showImportReport(data, resultEl) {
+  const allSkipped = [...(data.skipped || []), ...(data.errors || [])];
+  _lastSkipReport = allSkipped;
+
+  const updLine = data.updated ? ` &nbsp;|&nbsp; Updated: <b>${data.updated}</b>` : '';
+  const skipCount = allSkipped.length;
+
+  let html = `<div style="margin-bottom:.5rem">
+    ✅ Added: <b>${data.imported}</b>${updLine} &nbsp;|&nbsp; ⚠️ Skipped: <b>${skipCount}</b>
+  </div>`;
+
+  if (skipCount > 0) {
+    html += `<details style="margin-top:.4rem">
+      <summary style="cursor:pointer;font-weight:600;font-size:.83rem;color:var(--danger)">
+        Show ${skipCount} skipped / error rows ▾
+      </summary>
+      <div style="max-height:200px;overflow-y:auto;margin-top:.4rem">
+        <table style="width:100%;border-collapse:collapse;font-size:.78rem">
+          <thead><tr style="background:var(--primary);color:#fff">
+            <th style="padding:.3rem .5rem;text-align:left">Row</th>
+            <th style="padding:.3rem .5rem;text-align:left">Name</th>
+            <th style="padding:.3rem .5rem;text-align:left">Mobile</th>
+            <th style="padding:.3rem .5rem;text-align:left">Reason</th>
+          </tr></thead>
+          <tbody>
+            ${allSkipped.map((s, i) => `<tr style="background:${i%2?'#fff':'#fafafa'}">
+              <td style="padding:.25rem .5rem;color:var(--text-muted)">${s.row}</td>
+              <td style="padding:.25rem .5rem;font-weight:600">${s.name || ''}</td>
+              <td style="padding:.25rem .5rem">${s.mobile || ''}</td>
+              <td style="padding:.25rem .5rem;color:var(--danger)">${s.reason}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <button class="btn btn-secondary" style="margin-top:.5rem;font-size:.8rem;padding:.35rem .75rem"
+        onclick="downloadSkipReport()"><i class="fas fa-download"></i> Download Skip Report (.xlsx)</button>
+    </details>`;
+  }
+
+  resultEl.className = skipCount > 0 ? 'import-result' : 'import-result success';
+  resultEl.style.cssText = skipCount > 0
+    ? 'background:#fff8e1;border:1.5px solid #f9a825;color:#5d4037'
+    : '';
+  resultEl.innerHTML = html;
+  resultEl.classList.remove('hidden');
+}
+
+function downloadSkipReport() {
+  if (!_lastSkipReport.length) return;
+  const ws = XLSX.utils.aoa_to_sheet([
+    ['Row #', 'Name', 'Mobile', 'Reason Skipped'],
+    ..._lastSkipReport.map(s => [s.row, s.name || '', s.mobile || '', s.reason])
+  ]);
+  ws['!cols'] = [{ wch: 6 }, { wch: 30 }, { wch: 14 }, { wch: 55 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Skipped Rows');
+  XLSX.writeFile(wb, `import_skip_report_${getToday()}.xlsx`);
 }
 
 // ══════════════════════════════════════════════════════
@@ -2091,7 +2333,9 @@ async function openProfileModal(id) {
           <div class="profile-field"><label>Gopi Dress</label><span>${d.gopi_dress ? '✓ Yes' : '✗ No'}</span></div>
         </div>
       </div>` : ''}
-      <div class="profile-section" style="display:flex;gap:.6rem;justify-content:flex-end">
+      <div class="profile-section" style="display:flex;gap:.6rem;justify-content:flex-end;flex-wrap:wrap">
+        ${AppState.userRole === 'superAdmin' && !d.is_not_interested ? `<button class="btn" style="background:#ff6f00;color:#fff" onclick="markNotInterested('${d.id}')"><i class="fas fa-ban"></i> Mark Not Interested</button>` : ''}
+        ${d.is_not_interested ? `<span class="badge" style="background:#bf360c;color:#fff;padding:.35rem .7rem;align-self:center"><i class="fas fa-ban"></i> Not Interested</span>` : ''}
         <button class="btn btn-secondary" onclick="editCurrentDevotee()"><i class="fas fa-pencil-alt"></i> Edit</button>
         <button class="btn btn-danger" onclick="deleteDevotee('${d.id}')"><i class="fas fa-trash"></i> Remove</button>
       </div>`;
@@ -2238,6 +2482,17 @@ async function deleteDevotee(id) {
   } catch (_) { showToast('Delete failed', 'error'); }
 }
 
+async function markNotInterested(id) {
+  if (AppState.userRole !== 'superAdmin') return showToast('Only Super Admin can mark Not Interested', 'error');
+  if (!confirm('Mark this devotee as "Not Interested"? They will be removed from all calling lists permanently. This can be undone by editing their profile.')) return;
+  try {
+    await DB.markNotInterested(id);
+    showToast('Marked as Not Interested', 'success');
+    closeModal('profile-modal');
+    loadDevotees();
+  } catch (e) { showToast('Failed: ' + (e.message || 'Unknown error'), 'error'); }
+}
+
 async function openHistoryModal() {
   openModal('history-modal');
   const content = document.getElementById('history-content');
@@ -2258,6 +2513,47 @@ async function openHistoryModal() {
 // ══════════════════════════════════════════════════════
 // TAB 2 – CALLING STATUS
 // ══════════════════════════════════════════════════════
+function switchCallingSubTab(tab, btn) {
+  document.querySelectorAll('#calling-sub-tabs .att-sub-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('calling-panel-active').classList.toggle('hidden', tab !== 'active');
+  document.getElementById('calling-panel-notinterested').classList.toggle('hidden', tab !== 'notinterested');
+  if (tab === 'notinterested') loadNotInterestedList();
+}
+
+async function loadNotInterestedList() {
+  const wrap = document.getElementById('not-interested-list');
+  wrap.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  try {
+    const list = await DB.getNotInterestedDevotees();
+    if (!list.length) {
+      wrap.innerHTML = '<div class="empty-state"><i class="fas fa-ban"></i><p>No devotees marked as Not Interested</p></div>';
+      return;
+    }
+    wrap.innerHTML = `<table class="calling-table">
+      <thead><tr>
+        <th>#</th><th>Name</th><th>Mobile</th><th>Team</th>
+        <th>Date of Joining</th><th>Moved Not Interested On</th>
+        <th>C.R</th><th>Ref</th><th>Calling By</th>
+      </tr></thead>
+      <tbody>${list.map((d, i) => `<tr>
+        <td style="color:var(--text-muted)">${i + 1}</td>
+        <td><span style="font-weight:600">${d.name}</span></td>
+        <td>${d.mobile || '—'}</td>
+        <td>${teamBadge(d.team_name)}</td>
+        <td>${formatDate(d.date_of_joining)}</td>
+        <td>${d.not_interested_at ? formatDateTime(d.not_interested_at) : '—'}</td>
+        <td>${d.chanting_rounds || 0}</td>
+        <td>${d.reference_by || '—'}</td>
+        <td>${d.calling_by || '—'}</td>
+      </tr>`).join('')}
+      </tbody>
+    </table>`;
+  } catch (e) {
+    wrap.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+  }
+}
+
 async function loadCallingStatus() {
   const inp = document.getElementById('calling-week');
   if (!inp.value) inp.value = getCurrentSunday();

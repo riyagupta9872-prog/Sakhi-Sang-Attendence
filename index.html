@@ -35,7 +35,13 @@
       </div>
       <div class="auth-field">
         <label>Password</label>
-        <input type="password" id="login-password" required placeholder="Password" autocomplete="current-password">
+        <div class="pw-wrap">
+          <input type="password" id="login-password" required placeholder="Password" autocomplete="current-password">
+          <button type="button" class="pw-eye" onclick="togglePw('login-password',this)" tabindex="-1"><i class="fas fa-eye"></i></button>
+        </div>
+      </div>
+      <div style="text-align:right;margin-top:-.4rem">
+        <button type="button" class="forgot-link" onclick="doForgotPassword()">Forgot password?</button>
       </div>
       <button type="submit" class="auth-btn"><i class="fas fa-sign-in-alt"></i> Login — Hare Krishna!</button>
     </form>
@@ -53,7 +59,10 @@
       </div>
       <div class="auth-field">
         <label>Password <span class="req">*</span></label>
-        <input type="password" id="signup-password" required placeholder="Min 6 characters" autocomplete="new-password">
+        <div class="pw-wrap">
+          <input type="password" id="signup-password" required placeholder="Min 6 characters" autocomplete="new-password">
+          <button type="button" class="pw-eye" onclick="togglePw('signup-password',this)" tabindex="-1"><i class="fas fa-eye"></i></button>
+        </div>
       </div>
       <div class="auth-field">
         <label>Your Role</label>
@@ -177,25 +186,42 @@
     <div class="panel-header">
       <h2><i class="fas fa-phone-alt"></i> Calling Status</h2>
       <div class="panel-actions">
+        <button class="btn btn-secondary" onclick="exportCallingList()"><i class="fas fa-file-excel"></i> Export</button>
         <label style="font-size:.85rem;color:var(--text-muted)">Week of:</label>
         <input type="date" id="calling-week" class="filter-select" onchange="loadCallingStatus()">
       </div>
     </div>
-    <div id="calling-stats" class="calling-stats-row"></div>
-    <div class="search-filter-bar">
-      <div class="search-box">
-        <i class="fas fa-search"></i>
-        <input type="text" id="calling-search" placeholder="Search devotee…" oninput="filterCallingList()">
-      </div>
-      <select id="calling-filter-status" class="filter-select" onchange="filterCallingList()">
-        <option value="">All Statuses</option>
-        <option value="Yes">Yes – Coming</option>
-        <option value="No">No</option>
-        <option value="Maybe">Maybe</option>
-        <option value="Shifted">Shifted</option>
-      </select>
+    <!-- Calling sub-tabs -->
+    <div class="att-sub-tabs" id="calling-sub-tabs">
+      <button class="att-sub-tab active" id="calling-subtab-active" onclick="switchCallingSubTab('active', this)">
+        <i class="fas fa-phone-alt"></i> Active Calling List
+      </button>
+      <button class="att-sub-tab super-admin-only" id="calling-subtab-notinterested" onclick="switchCallingSubTab('notinterested', this)">
+        <i class="fas fa-ban"></i> Not Interested
+      </button>
     </div>
-    <div id="calling-list" class="calling-table-wrap"></div>
+    <!-- Active calling panel -->
+    <div id="calling-panel-active">
+      <div id="calling-stats" class="calling-stats-row"></div>
+      <div class="search-filter-bar">
+        <div class="search-box">
+          <i class="fas fa-search"></i>
+          <input type="text" id="calling-search" placeholder="Search devotee…" oninput="filterCallingList()">
+        </div>
+        <select id="calling-filter-status" class="filter-select" onchange="filterCallingList()">
+          <option value="">All Statuses</option>
+          <option value="Yes">Yes – Coming</option>
+          <option value="No">No</option>
+          <option value="Maybe">Maybe</option>
+          <option value="Shifted">Shifted</option>
+        </select>
+      </div>
+      <div id="calling-list" class="calling-table-wrap"></div>
+    </div>
+    <!-- Not Interested panel -->
+    <div id="calling-panel-notinterested" class="hidden">
+      <div id="not-interested-list" class="calling-table-wrap"></div>
+    </div>
   </section>
 
   <!-- ──────── TAB 3: ATTENDANCE ──────── -->

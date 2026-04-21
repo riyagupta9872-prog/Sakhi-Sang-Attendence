@@ -694,6 +694,20 @@ h3 { font-size: 1rem; }
   background: var(--bg);
 }
 .auth-field input:focus, .auth-field select:focus { border-color: var(--secondary); background: #fff; }
+.pw-wrap { position: relative; display: flex; align-items: center; }
+.pw-wrap input { flex: 1; padding-right: 2.5rem; }
+.pw-eye {
+  position: absolute; right: .65rem; background: none; border: none;
+  cursor: pointer; color: var(--text-muted); font-size: .95rem; padding: 0;
+  line-height: 1; transition: color .15s;
+}
+.pw-eye:hover { color: var(--primary); }
+.forgot-link {
+  background: none; border: none; cursor: pointer;
+  font-size: .8rem; color: var(--secondary); font-weight: 600;
+  padding: 0; text-decoration: underline; font-family: inherit;
+}
+.forgot-link:hover { color: var(--primary); }
 .auth-btn {
   padding: .75rem; border-radius: var(--radius-sm); border: none;
   background: linear-gradient(135deg, var(--primary), var(--secondary));
