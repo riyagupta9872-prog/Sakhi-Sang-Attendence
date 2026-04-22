@@ -20,19 +20,30 @@ No build step — this is a pure static site. Any HTTP server works (VS Code Liv
 - **Vanilla JS + HTML + CSS** — no framework, no bundler, no transpilation
 - **Firebase** — Firestore (database) + Authentication (email/password)
 - **Chart.js** — analytics charts in Reports tab
-- **SheetJS (XLSX)** — Excel export/import
+- **xlsx-js-style** — Excel export/import with cell-level styling (bold, fill, borders); same API as SheetJS but supports the `.s` property on cells
 - **PWA** — service worker (`sw.js`) caches app shell; Firebase data always fetched live
 
 ## Architecture
 
-All application logic lives in two files:
-- [app.js](app.js) (~4,000 lines) — entire app logic
+All application logic is split across 8 JS files in [js/](js/), loaded in order via `<script>` tags (no bundler — all global scope):
+
+| File | Contents |
+|---|---|
+| [js/config.js](js/config.js) | Firebase init, `AppState`, `TEAMS`, date utils, format helpers, `DevoteeCache` |
+| [js/db.js](js/db.js) | Full `DB` object — all Firestore operations |
+| [js/excel.js](js/excel.js) | `_xls`, `_xlsSheet`, all export/import functions, `IMPORT_FIELDS` |
+| [js/ui-core.js](js/ui-core.js) | Auth flow, `applyRoleUI`, admin panel, tab switching, pickers, session init |
+| [js/ui-devotees.js](js/ui-devotees.js) | Devotee list, form modal (5-tab), profile modal |
+| [js/ui-calling.js](js/ui-calling.js) | Calling list, reports, late-submission tracker |
+| [js/ui-attendance.js](js/ui-attendance.js) | Attendance sheet, Sunday config, live session marking |
+| [js/ui-analytics.js](js/ui-analytics.js) | Reports tab, Care tab, Events tab |
+
 - [css/style.css](css/style.css) — all styling
 - [index.html](index.html) — single HTML template with all tab panels
 
 ### Global State
 
-`AppState` (app.js ~line 22) is the single source of truth:
+`AppState` ([js/config.js](js/config.js)) is the single source of truth:
 - `userRole` / `userTeam` / `userId` — set on login, drive all permission checks
 - `currentTab` / `currentSessionId` / `currentDevoteeId` — UI navigation state
 - `devoteeSelectMode` / `selectedDevotees` — bulk-action state
@@ -60,36 +71,19 @@ Three roles with hardcoded permission gates throughout the UI:
 ### Caching
 
 - `DevoteeCache` — 90-second TTL in-memory cache of active devotees
-- `SessionsCache` — maps session IDs to session metadata
-- Service worker version string is `sakhi-sang-v3` in `sw.js` — bump this to invalidate cached assets
-
-### Key Code Regions in app.js
-
-| Lines (approx) | Module |
-|---|---|
-| 7–14 | Firebase config |
-| 22–40 | AppState |
-| 42–182 | Auth (login / signup / password reset) |
-| 183–269 | User profile |
-| 271–327 | Tab visibility / role-based rendering |
-| 582–648 | DevoteeDB (CRUD) |
-| 814–872 | AttendanceDB |
-| 875–989 | CallingDB |
-| 1084–1139 | ReportsDB |
-| 1317 | `TEAMS` constant (hardcoded list of 10 teams) |
-| 1332–1384 | DateUtils |
-| 1634–2301 | Excel export/import (multi-sheet, formatted) |
+- `sessionsCache` on `AppState` — maps session IDs to session metadata
+- Service worker version string is `sakhi-sang-v11` in `sw.js` — bump this to invalidate cached assets
 
 ## Firebase Setup
 
-To run against a new Firebase project, replace `firebaseConfig` in `app.js` lines 7–14 and:
+To run against a new Firebase project, replace `firebaseConfig` in [js/config.js](js/config.js) and:
 1. Enable Email/Password auth in Firebase Console
 2. Set Firestore security rules: `allow read, write: if request.auth != null;`
 3. Create the first `superAdmin` user via the app's signup flow, then manually set `role: 'superAdmin'` in the `users` Firestore collection
 
 ## Important Conventions
 
-- **No modules/imports** — everything is global in `app.js`. New functions go in the appropriate section by feature area.
+- **No modules/imports** — everything is global. New functions go in the `js/` file matching their feature area.
 - **Soft-delete only** — devotees are never hard-deleted; set `status: 'inactive'`.
 - **Team scoping** — `teamAdmin` queries always include `.where('team', '==', AppState.userTeam)`. Don't add unscoped queries for `teamAdmin` role.
 - **Fiscal year** — Apr–Mar (not Jan–Dec). The calling list export uses this for date filtering.

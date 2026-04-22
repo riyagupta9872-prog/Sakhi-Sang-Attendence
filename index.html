@@ -170,16 +170,8 @@
       <div class="panel-actions">
         <button class="btn btn-secondary" id="btn-import-excel" onclick="openImportModal()"><i class="fas fa-file-excel"></i> Import Excel</button>
         <button class="btn btn-secondary admin-coordinator-only" onclick="exportDevoteeDatabase()" title="Export team-wise devotee database"><i class="fas fa-database"></i> Export DB</button>
-        <button class="btn btn-secondary" id="devotee-select-btn" onclick="toggleDevoteeSelectMode()" title="Select devotees for WhatsApp group"><i class="fas fa-check-square"></i> Select</button>
         <button class="btn btn-primary" onclick="openDevoteeFormModal()"><i class="fas fa-user-plus"></i> Add Devotee</button>
       </div>
-    </div>
-    <!-- Selection action bar -->
-    <div id="devotee-selection-bar" class="selection-bar hidden">
-      <span id="selection-count">0 selected</span>
-      <button class="btn btn-secondary" onclick="copySelectedNumbers()"><i class="fas fa-copy"></i> Copy Numbers</button>
-      <button class="btn btn-wa" onclick="openWhatsAppGroupHelper()"><i class="fab fa-whatsapp"></i> WhatsApp Group</button>
-      <button class="btn btn-secondary" onclick="AppState.selectedDevotees.clear();loadDevotees();updateSelectionBar()"><i class="fas fa-times"></i> Clear</button>
     </div>
     <div class="search-filter-bar">
       <div class="search-box">
@@ -205,13 +197,11 @@
 
   <!-- ──────── TAB 2: CALLING ──────── -->
   <section id="tab-calling" class="tab-panel">
-    <!-- hidden — JS reads/writes this, never shown to user -->
     <input type="hidden" id="calling-week">
     <div class="panel-header">
       <h2><i class="fas fa-phone-alt"></i> Calling Status</h2>
       <div class="panel-actions">
-        <span id="calling-week-label" class="calling-week-label"></span>
-        <button class="btn btn-secondary" onclick="exportCallingList()"><i class="fas fa-file-excel"></i> Export FY</button>
+        <span id="calling-dates-display" class="calling-dates-display"></span>
       </div>
     </div>
 
@@ -219,8 +209,9 @@
     <div class="att-sub-tabs" id="calling-main-tabs">
       <button class="att-sub-tab active" onclick="switchCallingTab('list',this)"><i class="fas fa-phone-alt"></i> Calling List</button>
       <button class="att-sub-tab" onclick="switchCallingTab('reports',this)"><i class="fas fa-chart-bar"></i> Reports</button>
-      <button class="att-sub-tab" onclick="switchCallingTab('late',this)"><i class="fas fa-clock"></i> Late Reports</button>
+      <button class="att-sub-tab" onclick="switchCallingTab('late',this)"><i class="fas fa-chart-line"></i> Submission Reports</button>
       <button class="att-sub-tab super-admin-only" onclick="switchCallingTab('notinterested',this)"><i class="fas fa-ban"></i> Not Interested</button>
+      <button class="att-sub-tab super-admin-only" onclick="switchCallingTab('mgmt',this)"><i class="fas fa-table"></i> Management</button>
     </div>
 
     <!-- ── CALLING LIST PANEL ── -->
@@ -234,7 +225,7 @@
         <select id="calling-filter-team" class="filter-select" onchange="filterCallingList()">
           <option value="">All Teams</option>
         </select>
-        <select id="calling-filter-callingby" class="filter-select" onchange="filterCallingList()">
+        <select id="calling-filter-callingby" class="filter-select super-admin-only" onchange="filterCallingList()">
           <option value="">All Calling By</option>
         </select>
         <select id="calling-filter-status" class="filter-select" onchange="filterCallingList()">
@@ -247,6 +238,8 @@
           <option value="out_of_service">Temporarily out of service</option>
           <option value="out_of_station">Out of station</option>
           <option value="exams">Exams</option>
+          <option value="festival_calling">Festival Calling</option>
+          <option value="not_interested_now">Not Interested (this week)</option>
           <option value="_none">Not Called</option>
         </select>
       </div>
@@ -254,22 +247,45 @@
       <div id="calling-submit-bar" class="calling-submit-bar"></div>
     </div>
 
+    <!-- ── MANAGEMENT PANEL (superAdmin only) ── -->
+    <div id="calling-panel-mgmt" class="att-sub-panel">
+      <!-- Config + Export toolbar -->
+      <div class="calling-config-row" style="margin-bottom:.75rem">
+        <div class="calling-config-fields">
+          <div class="calling-config-field">
+            <label><i class="fas fa-phone-alt"></i> Calling Date</label>
+            <input type="date" id="config-calling-date" class="filter-select">
+          </div>
+          <div class="calling-config-field">
+            <label><i class="fas fa-chalkboard-teacher"></i> Session Date</label>
+            <input type="date" id="config-calling-session-date" class="filter-select">
+          </div>
+          <button class="btn btn-primary" onclick="saveCallingWeekConfig()">
+            <i class="fas fa-save"></i> Save Dates
+          </button>
+          <button class="btn btn-secondary" onclick="exportCallingList()" style="margin-left:auto">
+            <i class="fas fa-file-excel"></i> Export FY
+          </button>
+        </div>
+      </div>
+      <!-- Management content rendered by JS -->
+      <div id="calling-mgmt-content"></div>
+    </div>
+
     <!-- ── REPORTS PANEL ── -->
     <div id="calling-panel-reports" class="att-sub-panel">
       <div class="rpt-controls-row">
         <div class="rpt-week-group">
           <span class="rpt-week-label-static"><i class="fas fa-calendar-week"></i> Week</span>
-          <input type="date" id="calling-report-week" class="filter-select" onchange="loadCallingReports()">
-          <span id="rpt-week-label" class="rpt-active-week"></span>
+          <select id="calling-report-week" class="filter-select" onchange="loadCallingReports()" style="min-width:160px">
+            <option value="">— loading… —</option>
+          </select>
+          <button class="btn btn-icon" title="Download this week's Excel" onclick="downloadCurrentReportExcel()" style="padding:.35rem .55rem;border:1px solid var(--border)"><i class="fas fa-file-excel" style="color:#1e7e34;font-size:.95rem"></i></button>
+          <button class="btn btn-icon" title="Download complete FY history" onclick="downloadCompleteReportExcel()" style="padding:.35rem .55rem;border:1px solid var(--border)"><i class="fas fa-download" style="font-size:.95rem"></i></button>
         </div>
         <div class="rpt-type-btns">
-          <button id="rpt-tab-summary"  class="btn btn-primary rpt-type-btn"   onclick="switchReportType('summary',this)"><i class="fas fa-phone-alt"></i> Calling Summary</button>
           <button id="rpt-tab-accuracy" class="btn btn-secondary rpt-type-btn" onclick="switchReportType('accuracy',this)"><i class="fas fa-bullseye"></i> Attendance Accuracy</button>
         </div>
-      </div>
-      <div id="rpt-download-bar" class="rpt-download-bar">
-        <button class="btn btn-secondary" style="padding:.28rem .75rem;font-size:.8rem" onclick="downloadCurrentReportExcel()"><i class="fas fa-file-excel"></i> Download This Date</button>
-        <button class="btn btn-secondary" style="padding:.28rem .75rem;font-size:.8rem" onclick="downloadCompleteReportExcel()"><i class="fas fa-download"></i> Download Complete History</button>
       </div>
       <div id="calling-reports-content"></div>
     </div>
@@ -308,10 +324,7 @@
         <div class="panel-actions">
           <input type="date" id="session-date-picker" class="filter-select session-date-picker"
             title="Pick a Sunday date" onchange="loadSessionByDate(this.value)">
-          <button class="btn btn-secondary admin-coordinator-only" onclick="openSundayConfig()" title="Configure this Sunday class">
-            <i class="fas fa-cog"></i> Configure
-          </button>
-          <button class="btn btn-secondary admin-coordinator-only" onclick="exportAttendance()">
+<button class="btn btn-secondary admin-coordinator-only" onclick="exportAttendance()">
             <i class="fas fa-file-excel"></i> Export
           </button>
         </div>
@@ -829,31 +842,51 @@
   </div>
 </div>
 
-<!-- Sunday Config Modal -->
-<div id="sunday-config-modal" class="modal-overlay hidden">
+
+<!-- Team Change History Modal -->
+<div id="team-history-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2><i class="fas fa-pencil-alt"></i> Team Change History — <span id="team-history-name"></span></h2>
+      <button class="btn-icon close" onclick="closeModal('team-history-modal')"><i class="fas fa-times"></i></button>
+    </div>
+    <div id="team-history-content" style="padding:1rem;max-height:60vh;overflow-y:auto"></div>
+  </div>
+</div>
+
+<!-- Quick Status Update Modal -->
+<div id="quick-status-modal" class="modal-overlay hidden">
   <div class="modal-box small">
     <div class="modal-header">
-      <h2><i class="fas fa-cog"></i> Configure Sunday Class</h2>
-      <button class="btn-icon close" onclick="closeModal('sunday-config-modal')"><i class="fas fa-times"></i></button>
+      <h2><i class="fas fa-bolt"></i> Quick Update — <span id="qs-devotee-name"></span></h2>
+      <button class="btn-icon close" onclick="closeModal('quick-status-modal')"><i class="fas fa-times"></i></button>
     </div>
+    <input type="hidden" id="qs-devotee-id">
+    <input type="hidden" id="qs-week">
     <div style="padding:1.25rem;display:flex;flex-direction:column;gap:1rem">
       <div class="form-group full">
-        <label>Session Date</label>
-        <input type="text" id="config-session-date" readonly style="background:var(--bg-card);color:var(--text-muted);font-weight:600">
+        <label>Coming?</label>
+        <select id="qs-coming" class="filter-select">
+          <option value="">—</option>
+          <option value="Yes">✓ Yes — Confirmed Coming</option>
+        </select>
       </div>
       <div class="form-group full">
-        <label>Topic / Kirtan Agenda</label>
-        <input type="text" id="config-topic" placeholder="e.g. Bhagavad Gita 2.20, Nityananda Trayodashi kirtan…">
+        <label>Reason (if not coming)</label>
+        <select id="qs-reason" class="filter-select">
+          <option value="">— No reason —</option>
+          <option value="did_not_pick">Did not pick call</option>
+          <option value="incoming_na">Incoming not available</option>
+          <option value="wrong_number">Wrong number</option>
+          <option value="online_class">Shifted to online class</option>
+          <option value="out_of_service">Temporarily out of service</option>
+          <option value="out_of_station">Out of station</option>
+          <option value="exams">Exams</option>
+          <option value="festival_calling">Festival Calling</option>
+          <option value="not_interested_now">Not Interested (this week)</option>
+        </select>
       </div>
-      <div style="display:flex;align-items:center;gap:.75rem;padding:.5rem .75rem;background:#fff5f5;border-radius:var(--radius-sm);border:1.5px solid #ffcdd2">
-        <input type="checkbox" id="config-cancelled" style="width:18px;height:18px;accent-color:#e53935;flex-shrink:0">
-        <label for="config-cancelled" style="font-weight:600;color:#c62828;cursor:pointer;margin:0">
-          <i class="fas fa-times-circle"></i> Mark this Sunday as Cancelled
-        </label>
-      </div>
-      <button class="btn btn-primary" style="width:100%" onclick="saveSundayConfig()">
-        <i class="fas fa-save"></i> Save Configuration
-      </button>
+      <button class="btn btn-primary" onclick="saveQuickStatus()"><i class="fas fa-save"></i> Save</button>
     </div>
   </div>
 </div>
@@ -943,45 +976,6 @@
   </div>
 </div>
 
-<!-- WhatsApp Group Helper Modal -->
-<div id="wa-group-modal" class="modal-overlay hidden">
-  <div class="modal-box small">
-    <div class="modal-header">
-      <h2><i class="fab fa-whatsapp" style="color:#25d366"></i> WhatsApp Group Helper</h2>
-      <button class="btn-icon close" onclick="closeWaGroupModal()"><i class="fas fa-times"></i></button>
-    </div>
-    <div style="padding:1.25rem">
-      <p style="font-size:.85rem;color:var(--text-muted);margin:0 0 1rem">
-        <span id="wa-group-count"></span> — Copy the numbers below and paste them into WhatsApp when adding group members.
-      </p>
-
-      <div class="form-group">
-        <label>Numbers (one per line — paste directly in WhatsApp)</label>
-        <div style="position:relative">
-          <textarea id="wa-numbers-display" rows="6" class="form-control" readonly style="font-family:monospace;font-size:.82rem;resize:none"></textarea>
-          <button onclick="copyWaNumbers('wa-numbers-display')" style="position:absolute;top:.4rem;right:.4rem;background:var(--primary);color:#fff;border:none;border-radius:6px;padding:.25rem .6rem;cursor:pointer;font-size:.78rem"><i class="fas fa-copy"></i> Copy</button>
-        </div>
-      </div>
-
-      <div class="form-group" style="margin-top:.75rem">
-        <label>With +91 prefix (for international format)</label>
-        <div style="position:relative">
-          <textarea id="wa-numbers-csv" rows="3" class="form-control" readonly style="font-family:monospace;font-size:.82rem;resize:none"></textarea>
-          <button onclick="copyWaNumbers('wa-numbers-csv')" style="position:absolute;top:.4rem;right:.4rem;background:var(--primary);color:#fff;border:none;border-radius:6px;padding:.25rem .6rem;cursor:pointer;font-size:.78rem"><i class="fas fa-copy"></i> Copy</button>
-        </div>
-      </div>
-
-      <div style="background:#e8f5e9;border-radius:8px;padding:.75rem;font-size:.8rem;color:#2e7d32;margin-top:.75rem;line-height:1.6">
-        <strong>How to add to WhatsApp group:</strong><br>
-        1. Open WhatsApp → your group → Add Members<br>
-        2. Paste a number in the search box → Add<br>
-        3. Repeat for each number
-      </div>
-
-      <button class="btn btn-primary" style="width:100%;margin-top:1rem" onclick="closeWaGroupModal()">Done</button>
-    </div>
-  </div>
-</div>
 
 <!-- Edit Profile Modal -->
 <div id="edit-profile-modal" class="modal-overlay hidden">
@@ -1048,11 +1042,18 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<!-- SheetJS for Excel import/export -->
-<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<!-- xlsx-js-style: SheetJS + cell styling support (bold, fill, borders) — served locally -->
+<script src="js/xlsx-js-style.bundle.js"></script>
 <!-- Chart.js -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <!-- App -->
-<script src="app.js"></script>
+<script src="js/config.js"></script>
+<script src="js/db.js"></script>
+<script src="js/excel.js"></script>
+<script src="js/ui-core.js"></script>
+<script src="js/ui-devotees.js"></script>
+<script src="js/ui-calling.js"></script>
+<script src="js/ui-attendance.js"></script>
+<script src="js/ui-analytics.js"></script>
 </body>
 </html>

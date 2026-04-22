@@ -19,7 +19,11 @@
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
       "Read(//c/Users/User/.claude/projects/d--riya-personal-RAPP-Sadhana-Tracker-Sadhana-Tracker--Coordinators-Position-based-based-Sakhi-Sang-Attendence//**)",
-      "Read(//d/riya/ personal/RAPP/Sadhana/ Tracker/Sadhana/ Tracker-/ Coordinators/ Position/ based/ based/Sakhi-Sang-Attendence/**)"
+      "Read(//d/riya/ personal/RAPP/Sadhana/ Tracker/Sadhana/ Tracker-/ Coordinators/ Position/ based/ based/Sakhi-Sang-Attendence/**)",
+      "Bash(sed \"s/['\\\\\"].*//\")",
+      "Bash(grep -En \"^\\\\s{0,4}\\(function|async function\\) [a-zA-Z_][a-zA-Z0-9_]*\\\\\\(.*\\\\\\) \\\\{\" \"d:/riya personal/RAPP/Sadhana Tracker/Sadhana Tracker- Coordinators Position based based/Sakhi-Sang-Attendence/app.js\" -A 200)",
+      "Bash(curl -I \"https://unpkg.com/xlsx-js-style@1.2.0/dist/xlsx.bundle.js\")",
+      "PowerShell(Invoke-WebRequest -Uri \"https://unpkg.com/xlsx-js-style@1.2.0/dist/xlsx.bundle.js\" -OutFile \"d:\\\\riya personal\\\\RAPP\\\\Sadhana Tracker\\\\Sadhana Tracker- Coordinators Position based based\\\\Sakhi-Sang-Attendence\\\\js\\\\xlsx-js-style.bundle.js\"; Write-Host \"Downloaded. Size: $\\(\\(Get-Item 'd:\\\\riya personal\\\\RAPP\\\\Sadhana Tracker\\\\Sadhana Tracker- Coordinators Position based based\\\\Sakhi-Sang-Attendence\\\\js\\\\xlsx-js-style.bundle.js'\\).Length\\) bytes\")"
     ]
   }
 }

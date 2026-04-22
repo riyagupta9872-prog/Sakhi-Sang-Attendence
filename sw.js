@@ -1,14 +1,21 @@
 /* ══ SERVICE WORKER – Sakhi Sang ══ */
-const CACHE = 'sakhi-sang-v8';
+const CACHE = 'sakhi-sang-v20';
 const SHELL = [
   './index.html',
-  './app.js',
+  './js/config.js',
+  './js/db.js',
+  './js/excel.js',
+  './js/ui-core.js',
+  './js/ui-devotees.js',
+  './js/ui-calling.js',
+  './js/ui-attendance.js',
+  './js/ui-analytics.js',
+  './js/xlsx-js-style.bundle.js',
   './css/style.css',
   './icons/icon.svg',
   'https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito:wght@300;400;500;600;700&display=swap',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css',
-  'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js',
-  'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js'
+  'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js'
 ];
 
 self.addEventListener('install', e => {
