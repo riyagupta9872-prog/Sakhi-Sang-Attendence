@@ -239,10 +239,14 @@
         </select>
         <select id="calling-filter-status" class="filter-select" onchange="filterCallingList()">
           <option value="">All Statuses</option>
-          <option value="Yes">Yes – Coming</option>
-          <option value="No">No</option>
-          <option value="Maybe">Maybe</option>
-          <option value="Shift">Shift</option>
+          <option value="Yes">✓ Confirmed Coming</option>
+          <option value="did_not_pick">Did not pick call</option>
+          <option value="incoming_na">Incoming not available</option>
+          <option value="wrong_number">Wrong number</option>
+          <option value="online_class">Shifted to online class</option>
+          <option value="out_of_service">Temporarily out of service</option>
+          <option value="out_of_station">Out of station</option>
+          <option value="exams">Exams</option>
           <option value="_none">Not Called</option>
         </select>
       </div>
@@ -505,149 +509,227 @@
 
 <!-- Devotee Form Modal (Add / Edit) -->
 <div id="devotee-form-modal" class="modal-overlay hidden">
-  <div class="modal-box">
+  <div class="modal-box profile-form-modal">
     <div class="modal-header">
       <h2 id="devotee-form-title">Add New Devotee</h2>
       <button class="btn-icon close" onclick="closeModal('devotee-form-modal')"><i class="fas fa-times"></i></button>
     </div>
+
+    <!-- ── Profile Section Tabs ── -->
+    <div class="profile-sec-tabs">
+      <button class="psec-tab psec-identity active" onclick="switchProfileTab('identity',this)">
+        <i class="fas fa-user"></i><span>Identity</span>
+      </button>
+      <button class="psec-tab psec-professional" onclick="switchProfileTab('professional',this)">
+        <i class="fas fa-briefcase"></i><span>Professional</span>
+      </button>
+      <button class="psec-tab psec-sadhana" onclick="switchProfileTab('sadhana',this)">
+        <i class="fas fa-dharmachakra"></i><span>Sadhana</span>
+      </button>
+      <button class="psec-tab psec-family" onclick="switchProfileTab('family',this)">
+        <i class="fas fa-home"></i><span>Family</span>
+      </button>
+      <button class="psec-tab psec-team" onclick="switchProfileTab('team',this)">
+        <i class="fas fa-users"></i><span>Team</span>
+      </button>
+    </div>
+
     <form id="devotee-form" onsubmit="saveDevotee(event)" autocomplete="off">
       <input type="hidden" id="f-id">
-      <div class="form-grid">
-        <div class="form-group">
-          <label>Full Name <span class="req">*</span></label>
-          <input type="text" id="f-name" required placeholder="Enter full name">
-        </div>
-        <div class="form-group">
-          <label>Mobile Number <span class="req">*</span></label>
-          <input type="tel" id="f-mobile" placeholder="10-digit mobile number"
-            inputmode="numeric" maxlength="10" pattern="[0-9]{10}"
-            oninput="this.value=this.value.replace(/\D/g,'').slice(0,10)">
-          <span class="field-error" id="err-mobile">Mobile must be exactly 10 digits</span>
-        </div>
-        <div class="form-group full">
-          <label>Address <span class="req">*</span></label>
-          <textarea id="f-address" rows="2" placeholder="Full address"></textarea>
-        </div>
-        <div class="form-group">
-          <label>Date of Birth <span class="req">*</span></label>
-          <input type="date" id="f-dob">
-        </div>
-        <div class="form-group">
-          <label>Date of Joining</label>
-          <input type="date" id="f-joining">
-        </div>
-        <div class="form-group">
-          <label>Chanting Rounds</label>
-          <input type="number" id="f-chanting" min="0" max="64" value="0">
-        </div>
-        <div class="form-group">
-          <label>Team Name</label>
-          <select id="f-team">
-            <option value="">Select Team</option>
-            <option>Lalita</option><option>Vishakha</option><option>Tungavidya</option><option>Indulekha</option>
-            <option>Sudevi</option><option>Rangadevi</option><option>Chitralekha</option><option>Champaklata</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Devotee Status</label>
-          <select id="f-status">
-            <option>Expected to be Serious</option><option>Serious</option><option>Most Serious</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Facilitator <span style="font-size:.72rem;color:var(--text-muted)">(search devotee)</span></label>
-          <div class="devotee-picker" id="picker-facilitator">
-            <input type="text" class="picker-input" placeholder="Search facilitator name…" autocomplete="off">
-            <div class="picker-dropdown hidden"></div>
-          </div>
-          <input type="hidden" id="f-facilitator">
-        </div>
-        <div class="form-group">
-          <label>Reference By <span class="req">*</span> <span style="font-size:.72rem;color:var(--text-muted)">(search devotee)</span></label>
-          <div class="devotee-picker" id="picker-reference">
-            <input type="text" class="picker-input" placeholder="Search who referred them…" autocomplete="off">
-            <div class="picker-dropdown hidden"></div>
-          </div>
-          <input type="hidden" id="f-reference">
-        </div>
-        <div class="form-group">
-          <label>Calling By <span style="font-size:.72rem;color:var(--text-muted)">(search devotee)</span></label>
-          <div class="devotee-picker" id="picker-calling-by">
-            <input type="text" class="picker-input" placeholder="Search who calls them…" autocomplete="off">
-            <div class="picker-dropdown hidden"></div>
-          </div>
-          <input type="hidden" id="f-calling-by">
-        </div>
 
-        <!-- ── PERSONAL DETAILS SECTION ── -->
-        <div class="form-section-divider full">
-          <span><i class="fas fa-user-graduate"></i> Personal Details</span>
+      <!-- ── Panel 1: Personal Identity ── -->
+      <div class="psec-panel active" id="psec-identity">
+        <div class="psec-panel-header psec-identity">
+          <i class="fas fa-user"></i> Personal Identity
+          <span class="psec-note">Name, contact, and location details</span>
         </div>
-        <div class="form-group">
-          <label>Education</label>
-          <input type="text" id="f-education" placeholder="e.g. B.Com, M.A., 12th Pass…">
-        </div>
-        <div class="form-group">
-          <label>Email</label>
-          <input type="email" id="f-email" placeholder="email@example.com" autocomplete="off">
-        </div>
-        <div class="form-group">
-          <label>Profession / Occupation</label>
-          <input type="text" id="f-profession" placeholder="e.g. Teacher, Housewife, Student…">
-        </div>
-        <div class="form-group">
-          <label>Family Favourable?</label>
-          <select id="f-family-favourable">
-            <option value="">Not specified</option>
-            <option value="Yes">Yes – Fully supportive</option>
-            <option value="Partial">Partial – Some support</option>
-            <option value="No">No – Not supportive</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Reading <span style="font-size:.72rem;color:var(--text-muted)">(spiritual books)</span></label>
-          <select id="f-reading">
-            <option value="">Not specified</option>
-            <option value="None">None</option>
-            <option value="Occasionally">Occasionally</option>
-            <option value="Regular">Regular</option>
-            <option value="Daily">Daily</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Hearing <span style="font-size:.72rem;color:var(--text-muted)">(classes/Bhagavatam)</span></label>
-          <select id="f-hearing">
-            <option value="">Not specified</option>
-            <option value="None">None</option>
-            <option value="Occasionally">Occasionally</option>
-            <option value="Regular">Regular</option>
-            <option value="Daily">Daily</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Hobbies</label>
-          <input type="text" id="f-hobbies" placeholder="e.g. Singing, Dance, Cooking…">
-        </div>
-        <div class="form-group">
-          <label>Skills</label>
-          <input type="text" id="f-skills" placeholder="e.g. Graphic Design, Teaching, Music…">
-        </div>
-        <div class="form-group">
-          <label>Tilak</label>
-          <select id="f-tilak"><option value="0">No</option><option value="1">Yes</option></select>
-        </div>
-        <div class="form-group">
-          <label>Kanthi</label>
-          <select id="f-kanthi"><option value="0">No</option><option value="1">Yes</option></select>
-        </div>
-        <div class="form-group">
-          <label>Gopi Dress</label>
-          <select id="f-gopi"><option value="0">No</option><option value="1">Yes</option></select>
+        <div class="form-grid">
+          <div class="form-group full">
+            <label>Full Name <span class="req">*</span></label>
+            <input type="text" id="f-name" required placeholder="Enter full name">
+          </div>
+          <div class="form-group">
+            <label>Date of Birth <span class="req">*</span></label>
+            <input type="date" id="f-dob">
+          </div>
+          <div class="form-group">
+            <label>Mobile Number <span class="req">*</span></label>
+            <input type="tel" id="f-mobile" placeholder="10-digit number"
+              inputmode="numeric" maxlength="10" pattern="[0-9]{10}"
+              oninput="this.value=this.value.replace(/\D/g,'').slice(0,10)">
+            <span class="field-error" id="err-mobile">Mobile must be exactly 10 digits</span>
+          </div>
+          <div class="form-group full">
+            <label>Residential Address <span class="req">*</span></label>
+            <textarea id="f-address" rows="2" placeholder="Full residential address"></textarea>
+          </div>
+          <div class="form-group full">
+            <label>Email Address</label>
+            <input type="email" id="f-email" placeholder="email@example.com" autocomplete="off">
+          </div>
         </div>
       </div>
-      <div class="form-actions">
+
+      <!-- ── Panel 2: Professional Profile ── -->
+      <div class="psec-panel" id="psec-professional">
+        <div class="psec-panel-header psec-professional">
+          <i class="fas fa-briefcase"></i> Professional Profile
+          <span class="psec-note">Education and occupation details</span>
+        </div>
+        <div class="form-grid">
+          <div class="form-group full">
+            <label>Education / Qualification</label>
+            <input type="text" id="f-education" placeholder="e.g. B.Com, M.A., 12th Pass…">
+          </div>
+          <div class="form-group full">
+            <label>Profession / Occupation</label>
+            <input type="text" id="f-profession" placeholder="e.g. Teacher, Housewife, Student…">
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Panel 3: Sadhana & Practices ── -->
+      <div class="psec-panel" id="psec-sadhana">
+        <div class="psec-panel-header psec-sadhana">
+          <i class="fas fa-dharmachakra"></i> Sadhana &amp; Practices
+          <span class="psec-note">Daily spiritual practice details</span>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Daily Chanting Rounds</label>
+            <input type="number" id="f-chanting" min="0" max="64" value="0">
+          </div>
+          <div class="form-group">
+            <label>Reading <span class="field-hint">(spiritual books)</span></label>
+            <select id="f-reading">
+              <option value="">Not specified</option>
+              <option value="None">None</option>
+              <option value="Occasionally">Occasionally</option>
+              <option value="Regular">Regular</option>
+              <option value="Daily">Daily</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Hearing <span class="field-hint">(classes / Bhagavatam)</span></label>
+            <select id="f-hearing">
+              <option value="">Not specified</option>
+              <option value="None">None</option>
+              <option value="Occasionally">Occasionally</option>
+              <option value="Regular">Regular</option>
+              <option value="Daily">Daily</option>
+            </select>
+          </div>
+          <div class="form-group full">
+            <label>Vaisnava Attire</label>
+            <div class="attire-grid">
+              <div class="attire-item">
+                <span class="attire-label">Tilak</span>
+                <select id="f-tilak"><option value="0">No</option><option value="1">Yes</option></select>
+              </div>
+              <div class="attire-item">
+                <span class="attire-label">Kanthi</span>
+                <select id="f-kanthi"><option value="0">No</option><option value="1">Yes</option></select>
+              </div>
+              <div class="attire-item">
+                <span class="attire-label">Gopi Dress</span>
+                <select id="f-gopi"><option value="0">No</option><option value="1">Yes</option></select>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Panel 4: Social & Family ── -->
+      <div class="psec-panel" id="psec-family">
+        <div class="psec-panel-header psec-family">
+          <i class="fas fa-home"></i> Social &amp; Family
+          <span class="psec-note">Family background and interests</span>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Total Family Members</label>
+            <input type="number" id="f-family-members" min="1" max="30" placeholder="e.g. 4">
+          </div>
+          <div class="form-group">
+            <label>Family Members in Class</label>
+            <input type="number" id="f-family-participants" min="0" max="20" placeholder="e.g. 2">
+          </div>
+          <div class="form-group full">
+            <label>Favorable to Devotion</label>
+            <select id="f-family-favourable">
+              <option value="">Not specified</option>
+              <option value="Yes">Yes – Fully supportive</option>
+              <option value="Partial">Partial – Some support</option>
+              <option value="No">No – Not supportive</option>
+            </select>
+          </div>
+          <div class="form-group full">
+            <label>Hobbies &amp; Interests</label>
+            <input type="text" id="f-hobbies" placeholder="e.g. Singing, Dance, Cooking…">
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Panel 5: Team Management ── -->
+      <div class="psec-panel" id="psec-team">
+        <div class="psec-panel-header psec-team">
+          <i class="fas fa-users"></i> Team Management
+          <span class="psec-note">Team assignment and connections</span>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Team Name</label>
+            <select id="f-team">
+              <option value="">Select Team</option>
+              <option>Lalita</option><option>Vishakha</option><option>Tungavidya</option><option>Indulekha</option>
+              <option>Sudevi</option><option>Rangadevi</option><option>Chitralekha</option><option>Champaklata</option>
+              <option>Nilachal</option><option>New Devotees</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Devotee Status</label>
+            <select id="f-status">
+              <option>Expected to be Serious</option><option>Serious</option><option>Most Serious</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Date of Joining</label>
+            <input type="date" id="f-joining">
+          </div>
+          <div class="form-group full">
+            <label>Reference By <span class="req">*</span> <span class="field-hint">(who referred this devotee)</span></label>
+            <div class="devotee-picker" id="picker-reference">
+              <input type="text" class="picker-input" placeholder="Search who referred them…" autocomplete="off">
+              <div class="picker-dropdown hidden"></div>
+            </div>
+            <input type="hidden" id="f-reference">
+          </div>
+          <div class="form-group">
+            <label>Facilitator <span class="field-hint">(search devotee)</span></label>
+            <div class="devotee-picker" id="picker-facilitator">
+              <input type="text" class="picker-input" placeholder="Search facilitator…" autocomplete="off">
+              <div class="picker-dropdown hidden"></div>
+            </div>
+            <input type="hidden" id="f-facilitator">
+          </div>
+          <div class="form-group">
+            <label>Calling By <span class="field-hint">(search devotee)</span></label>
+            <div class="devotee-picker" id="picker-calling-by">
+              <input type="text" class="picker-input" placeholder="Search who calls them…" autocomplete="off">
+              <div class="picker-dropdown hidden"></div>
+            </div>
+            <input type="hidden" id="f-calling-by">
+          </div>
+        </div>
+      </div>
+
+      <div class="form-actions psec-actions">
         <button type="button" class="btn btn-secondary" onclick="closeModal('devotee-form-modal')">Cancel</button>
-        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save</button>
+        <div class="psec-nav-btns">
+          <button type="button" class="btn btn-secondary" id="psec-prev" onclick="stepProfileTab(-1)" style="display:none"><i class="fas fa-chevron-left"></i> Back</button>
+          <button type="button" class="btn btn-secondary" id="psec-next" onclick="stepProfileTab(1)">Next <i class="fas fa-chevron-right"></i></button>
+          <button type="submit" class="btn btn-primary" id="psec-save" style="display:none"><i class="fas fa-save"></i> Save</button>
+        </div>
       </div>
     </form>
   </div>

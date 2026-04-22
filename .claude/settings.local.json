@@ -17,7 +17,9 @@
       "Bash(powershell.exe -Command \"Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force\")",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Read(//c/Users/User/.claude/projects/d--riya-personal-RAPP-Sadhana-Tracker-Sadhana-Tracker--Coordinators-Position-based-based-Sakhi-Sang-Attendence//**)",
+      "Read(//d/riya/ personal/RAPP/Sadhana/ Tracker/Sadhana/ Tracker-/ Coordinators/ Position/ based/ based/Sakhi-Sang-Attendence/**)"
     ]
   }
 }

@@ -916,6 +916,8 @@ const DB = {
       ...toSnake(d),
       coming_status:     csMap[d.id]?.comingStatus    || null,
       calling_notes:     csMap[d.id]?.callingNotes    || null,
+      calling_reason:    csMap[d.id]?.callingReason   || null,
+      available_from:    csMap[d.id]?.availableFrom   || null,
       calling_id:        csMap[d.id]?.id              || null,
       updated_at_client: csMap[d.id]?.updatedAtClient || null,
       late_remarks:      csMap[d.id]?.lateRemarks     || null,
@@ -957,12 +959,14 @@ const DB = {
     const snap = await fdb.collection('callingStatus').where('devoteeId', '==', devoteeId).where('weekDate', '==', weekDate).limit(1).get();
     const payload = {
       devoteeId, weekDate,
-      comingStatus:    data.coming_status || 'Maybe',
+      comingStatus:    data.coming_status || '',
       updatedAt:       TS(),
       updatedAtClient: now.toISOString(),
     };
-    if (data.calling_notes !== undefined) payload.callingNotes = data.calling_notes ?? null;
-    if (data.late_remarks  !== undefined) payload.lateRemarks  = data.late_remarks  ?? null;
+    if (data.calling_notes   !== undefined) payload.callingNotes   = data.calling_notes   ?? null;
+    if (data.calling_reason  !== undefined) payload.callingReason  = data.calling_reason  ?? null;
+    if (data.available_from  !== undefined) payload.availableFrom  = data.available_from  ?? null;
+    if (data.late_remarks    !== undefined) payload.lateRemarks    = data.late_remarks    ?? null;
     if (snap.empty) {
       payload.createdAt = TS();
       payload.createdAtClient = now.toISOString();
@@ -1795,9 +1799,9 @@ async function exportCallingList() {
       .where('weekDate', '>=', fyStart).where('weekDate', '<=', fyCSEnd).get();
     const fyCSByWeek = {};
     fyCSSnap.docs.forEach(d => {
-      const { weekDate, devoteeId, comingStatus, callingNotes } = d.data();
+      const { weekDate, devoteeId, comingStatus, callingNotes, callingReason, availableFrom } = d.data();
       if (!fyCSByWeek[weekDate]) fyCSByWeek[weekDate] = {};
-      fyCSByWeek[weekDate][devoteeId] = { status: comingStatus, notes: callingNotes || '' };
+      fyCSByWeek[weekDate][devoteeId] = { status: comingStatus, notes: callingNotes || '', reason: callingReason || '', availableFrom: availableFrom || '' };
     });
 
     // Attendance per session
@@ -1829,14 +1833,10 @@ async function exportCallingList() {
     const notInterestedDevotees = await DB.getNotInterestedDevotees();
 
     // ── Style helpers ────────────────────────────────────────────────
-    function csCell(entry) {
-      if (!entry) return '';
-      const label = csLabel(entry.status);
-      return entry.notes ? `${label} - ${entry.notes}` : label;
-    }
+    function csCell(entry) { return csEntryText(entry); }
     function csCellStyle(entry) {
-      if (!entry?.status) return XS.cell();
-      const bg = { Yes:'C8E6C9', No:'FFCDD2', Maybe:'FFF9C4', Shift:'FFE0B2' }[entry.status] || 'FFFFFF';
+      if (!entry?.status && !entry?.reason) return XS.cell();
+      const bg = csEntryBg(entry) || 'FFFFFF';
       return { ...XS.cell(), fill: XS.mkFill(bg) };
     }
     const atStyle  = { ...XS.cell(), fill: XS.mkFill('BBDEFB'), font: { bold:true, sz:9, color:{rgb:'0D47A1'} } };
@@ -1887,7 +1887,7 @@ async function exportCallingList() {
           const csEntry = fyCSByWeek[w]?.[d.id];
           const sessId  = sessionByDate[w];
           const came    = sessId && fyAttPerSession[sessId]?.has(d.id);
-          row.push({ v: csCell(csEntry), s: { ...csCellStyle(csEntry), fill: XS.mkFill(csEntry?.status ? ({Yes:'C8E6C9',No:'FFCDD2',Maybe:'FFF9C4',Shift:'FFE0B2'}[csEntry.status]||rowBg) : rowBg) } });
+          row.push({ v: csCell(csEntry), s: { ...csCellStyle(csEntry), fill: XS.mkFill(csEntryBg(csEntry) || rowBg) } });
           row.push(sessId ? { v: came?'P':'', s: came ? atStyle : { ...abStyle, fill:XS.mkFill(rowBg) } } : { v:'—', s:{ ...baseSt, font:{sz:9,color:{rgb:'BBBBBB'}} } });
         });
         return row;
@@ -2098,16 +2098,30 @@ function sheetFmtDDMMYY(dateStr) {
   return sheetFmtShort(dateStr);
 }
 function csLabel(status) {
-  return { Yes: 'Coming', No: 'No', Maybe: 'Maybe', Shift: 'Shift', 'Not Interested': 'N/I' }[status] || '';
+  return { Yes: 'Coming', 'Not Interested': 'N/I' }[status] || (status || '');
 }
 function csColor(status) {
   if (!status) return '';
-  if (status === 'Yes')             return 'background:#c8e6c9';
-  if (status === 'Maybe')           return 'background:#fff9c4';
-  if (status === 'No')              return 'background:#ffcdd2';
-  if (status === 'Shift')         return 'background:#ffe0b2';
-  if (status === 'Not Interested')  return 'background:#ffccbc';
-  return '';
+  if (status === 'Yes')            return 'background:#c8e6c9';
+  if (status === 'Not Interested') return 'background:#ffccbc';
+  return 'background:#ffcdd2';
+}
+// Build cell text from a calling status record (status + reason + notes + date)
+function csEntryText(entry) {
+  if (!entry) return '';
+  if (entry.status === 'Yes') return entry.notes ? `Coming — ${entry.notes}` : 'Coming';
+  const reasonLbl = _reasonLabel(entry.reason || '');
+  const avail = entry.availableFrom ? ` (from ${entry.availableFrom})` : '';
+  const parts = [reasonLbl + avail, entry.notes].filter(Boolean);
+  return parts.join(' | ');
+}
+function csEntryBg(entry) {
+  if (!entry?.status) return null;
+  if (entry.status === 'Yes') return 'C8E6C9';
+  if (entry.reason === 'online_class') return 'E3F2FD';
+  if (['out_of_station','exams'].includes(entry.reason)) return 'EDE7F6';
+  if (entry.reason) return 'FFCDD2';
+  return 'FFF9C4'; // has notes but no reason
 }
 
 async function exportSheetExcel() {
@@ -2396,28 +2410,34 @@ function downloadImportTemplate() {
 
 // ── IMPORT FIELD DEFINITIONS (for column mapping UI) ──
 const IMPORT_FIELDS = [
-  { key: 'name',             label: 'Name *',             aliases: ['Name','name','Full Name','Devotee Name','NAAM'] },
-  { key: 'mobile',           label: 'Mobile',             aliases: ['Mobile','Contact','Phone','Mobile Number','Mobile (10 digits)','Contact Number','Mob','Ph No','mob no','contact'] },
-  { key: 'address',          label: 'Address',            aliases: ['Address','address','Addr','ADDRESS'] },
-  { key: 'dob',              label: 'Date of Birth',      aliases: ['DOB','D.O.B','Date of Birth','Birth Date','dob','D.O.B.','DOB (DD/MM/YYYY)'] },
-  { key: 'dateOfJoining',    label: 'Date of Joining',    aliases: ['Date of Joining','Date Of Joining','Joining Date','DOJ','Date of joining'] },
-  { key: 'chantingRounds',   label: 'Chanting Rounds',    aliases: ['Chanting Rounds','CHANTING','Chanting','CR','chanting','Rounds','rounds','chanting rounds'] },
-  { key: 'teamName',         label: 'Team',               aliases: ['Team','Team Wise','Team Name','TEAM','Group','team','Team wise','Teamwise'] },
-  { key: 'devoteeStatus',    label: 'Devotee Status',     aliases: ['Status','Devotee Status','Dev Status','status','ETS','devotee status'] },
-  { key: 'facilitator',      label: 'Facilitator',        aliases: ['Facilitator','facilitator','Faciltr'] },
-  { key: 'referenceBy',      label: 'Reference By',       aliases: ['Reference','Ref','Reference By','Referred By','Ref-2','ref','Ref 2','reference'] },
-  { key: 'callingBy',        label: 'Calling By',         aliases: ['Calling By','Called By','Caller','Calling by','calling by','CallingBy'] },
-  { key: 'kanthi',           label: 'Kanthi (Y/N)',       aliases: ['Kanthi','kanthi','KANTHI'] },
-  { key: 'gopiDress',        label: 'Gopi Dress (Y/N)',   aliases: ['Gopi Dress','Gopi','GOPI','gopi dress','Gopi dress'] },
-  { key: 'tilak',            label: 'Tilak (Y/N)',        aliases: ['Tilak','tilak','TILAK'] },
-  { key: 'education',        label: 'Education',          aliases: ['Education','education','EDUCATION'] },
-  { key: 'email',            label: 'Email',              aliases: ['Email','E-Mail','email','E Mail','e-mail','EMAIL'] },
-  { key: 'profession',       label: 'Profession',         aliases: ['Profession','Occupation','profession','PROFESSION'] },
-  { key: 'familyFavourable', label: 'Family Favourable',  aliases: ['Family Favourable','Family Favorable','Family','family favourable','Family Favourable?'] },
-  { key: 'reading',          label: 'Reading',            aliases: ['Reading','reading','READING'] },
-  { key: 'hearing',          label: 'Hearing',            aliases: ['Hearing','hearing','HEARING'] },
-  { key: 'hobbies',          label: 'Hobbies',            aliases: ['Hobbies','hobbies','Hobby','HOBBIES'] },
-  { key: 'skills',           label: 'Skills',             aliases: ['Skills','skills','Skill','SKILLS'] },
+  // 01 Personal Identity
+  { key: 'name',               label: 'Name *',                  aliases: ['Name','name','Full Name','Devotee Name','NAAM'] },
+  { key: 'dob',                label: 'Date of Birth',           aliases: ['DOB','D.O.B','Date of Birth','Birth Date','dob','D.O.B.','DOB (DD/MM/YYYY)'] },
+  { key: 'mobile',             label: 'Mobile',                  aliases: ['Mobile','Contact','Phone','Mobile Number','Mobile (10 digits)','Contact Number','Mob','Ph No','mob no','contact'] },
+  { key: 'address',            label: 'Residential Address',     aliases: ['Address','address','Addr','ADDRESS','Residential Address'] },
+  { key: 'email',              label: 'Email',                   aliases: ['Email','E-Mail','email','E Mail','e-mail','EMAIL'] },
+  // 02 Professional Profile
+  { key: 'education',          label: 'Education / Qualification', aliases: ['Education','education','EDUCATION','Qualification'] },
+  { key: 'profession',         label: 'Profession / Occupation', aliases: ['Profession','Occupation','profession','PROFESSION'] },
+  // 03 Sadhana & Practices
+  { key: 'chantingRounds',     label: 'Chanting Rounds',         aliases: ['Chanting Rounds','CHANTING','Chanting','CR','chanting','Rounds','rounds','chanting rounds'] },
+  { key: 'reading',            label: 'Reading',                 aliases: ['Reading','reading','READING'] },
+  { key: 'hearing',            label: 'Hearing',                 aliases: ['Hearing','hearing','HEARING'] },
+  { key: 'tilak',              label: 'Tilak (Y/N)',             aliases: ['Tilak','tilak','TILAK'] },
+  { key: 'kanthi',             label: 'Kanthi (Y/N)',            aliases: ['Kanthi','kanthi','KANTHI'] },
+  { key: 'gopiDress',          label: 'Gopi Dress (Y/N)',        aliases: ['Gopi Dress','Gopi','GOPI','gopi dress','Gopi dress'] },
+  // 04 Social & Family
+  { key: 'familyMembers',      label: 'Total Family Members',    aliases: ['Family Members','Total Family Members','Family Size','family members','familyMembers'] },
+  { key: 'familyParticipants', label: 'Family Members in Class', aliases: ['Family in Class','Family Participants','Members in Class','familyParticipants','Family Members in Class'] },
+  { key: 'familyFavourable',   label: 'Favorable to Devotion',   aliases: ['Family Favourable','Family Favorable','Family','family favourable','Family Favourable?','Favorable to Devotion'] },
+  { key: 'hobbies',            label: 'Hobbies & Interests',     aliases: ['Hobbies','hobbies','Hobby','HOBBIES','Hobbies & Interests'] },
+  // 05 Team Management
+  { key: 'teamName',           label: 'Team',                    aliases: ['Team','Team Wise','Team Name','TEAM','Group','team','Team wise','Teamwise'] },
+  { key: 'devoteeStatus',      label: 'Devotee Status',          aliases: ['Status','Devotee Status','Dev Status','status','ETS','devotee status'] },
+  { key: 'dateOfJoining',      label: 'Date of Joining',         aliases: ['Date of Joining','Date Of Joining','Joining Date','DOJ','Date of joining'] },
+  { key: 'referenceBy',        label: 'Reference By',            aliases: ['Reference','Ref','Reference By','Referred By','Ref-2','ref','Ref 2','reference'] },
+  { key: 'facilitator',        label: 'Facilitator',             aliases: ['Facilitator','facilitator','Faciltr'] },
+  { key: 'callingBy',          label: 'Calling By',              aliases: ['Calling By','Called By','Caller','Calling by','calling by','CallingBy'] },
 ];
 
 // Temp storage for mapping modal
@@ -2582,29 +2602,37 @@ async function importWithMapping(rows, colMap, mode = 'add') {
         const mobile = String(getField(row, 'mobile')).replace(/\D/g, '').slice(0, 10);
         if (!name) { skipped.push({ row: rowNum, name: '(blank)', mobile: mobile || '', reason: 'Name is empty' }); return; }
 
+        const rawFamM = parseInt(getField(row, 'familyMembers'));
+        const rawFamP = parseInt(getField(row, 'familyParticipants'));
         const payload = {
           name,
-          mobile:           mobile || null,
-          address:          String(getField(row, 'address')) || null,
-          dob:              importDate(getField(row, 'dob')) || null,
-          dateOfJoining:    importDate(getField(row, 'dateOfJoining')) || null,
-          chantingRounds:   Math.abs(parseInt(getField(row, 'chantingRounds')) || 0),
-          kanthi:           importYN(getField(row, 'kanthi')),
-          gopiDress:        importYN(getField(row, 'gopiDress')),
-          tilak:            importYN(getField(row, 'tilak')),
-          teamName:         String(getField(row, 'teamName')) || null,
-          devoteeStatus:    importStatus(getField(row, 'devoteeStatus')),
-          facilitator:      String(getField(row, 'facilitator')) || null,
-          referenceBy:      String(getField(row, 'referenceBy')) || null,
-          callingBy:        String(getField(row, 'callingBy')) || null,
-          education:        String(getField(row, 'education')) || null,
-          email:            String(getField(row, 'email')) || null,
-          profession:       String(getField(row, 'profession')) || null,
-          familyFavourable: String(getField(row, 'familyFavourable')) || null,
-          reading:          String(getField(row, 'reading')) || null,
-          hearing:          String(getField(row, 'hearing')) || null,
-          hobbies:          String(getField(row, 'hobbies')) || null,
-          skills:           String(getField(row, 'skills')) || null,
+          // Personal Identity
+          mobile:              mobile || null,
+          address:             String(getField(row, 'address')) || null,
+          dob:                 importDate(getField(row, 'dob')) || null,
+          email:               String(getField(row, 'email')) || null,
+          // Professional Profile
+          education:           String(getField(row, 'education')) || null,
+          profession:          String(getField(row, 'profession')) || null,
+          // Sadhana & Practices
+          chantingRounds:      Math.abs(parseInt(getField(row, 'chantingRounds')) || 0),
+          reading:             String(getField(row, 'reading')) || null,
+          hearing:             String(getField(row, 'hearing')) || null,
+          tilak:               importYN(getField(row, 'tilak')),
+          kanthi:              importYN(getField(row, 'kanthi')),
+          gopiDress:           importYN(getField(row, 'gopiDress')),
+          // Social & Family
+          familyMembers:       isNaN(rawFamM) ? null : rawFamM,
+          familyParticipants:  isNaN(rawFamP) ? null : rawFamP,
+          familyFavourable:    String(getField(row, 'familyFavourable')) || null,
+          hobbies:             String(getField(row, 'hobbies')) || null,
+          // Team Management
+          teamName:            String(getField(row, 'teamName')) || null,
+          devoteeStatus:       importStatus(getField(row, 'devoteeStatus')),
+          dateOfJoining:       importDate(getField(row, 'dateOfJoining')) || null,
+          referenceBy:         String(getField(row, 'referenceBy')) || null,
+          facilitator:         String(getField(row, 'facilitator')) || null,
+          callingBy:           String(getField(row, 'callingBy')) || null,
           isActive: true, inactivityFlag: false, updatedAt: TS(),
         };
         Object.keys(payload).forEach(k => { if (payload[k] === 'null' || payload[k] === '') payload[k] = null; });
@@ -2842,7 +2870,9 @@ async function openProfileModal(id) {
   try {
     const d = await DB.getDevotee(id);
     document.getElementById('profile-modal-name').textContent = d.name;
+    const yn = v => v ? '<span class="pf-yes">✓ Yes</span>' : '<span class="pf-no">✗ No</span>';
     content.innerHTML = `
+      <!-- Hero -->
       <div class="profile-hero">
         <div class="profile-avatar-lg">${initials(d.name)}</div>
         <div class="profile-hero-info">
@@ -2851,53 +2881,73 @@ async function openProfileModal(id) {
           <div class="profile-hero-meta" style="margin-top:.4rem">${contactIcons(d.mobile)}${d.mobile ? `<span style="font-size:.85rem;margin-left:.4rem">${d.mobile}</span>` : ''}</div>
         </div>
       </div>
+
+      <!-- 01 Personal Identity -->
       <div class="profile-section">
-        <div class="profile-section-title">Basic Information</div>
+        <div class="profile-section-title psec-cat-identity"><i class="fas fa-user"></i> Personal Identity</div>
         <div class="profile-fields">
-          <div class="profile-field"><label>Address</label><span>${d.address || '—'}</span></div>
+          <div class="profile-field full"><label>Residential Address</label><span>${d.address || '—'}</span></div>
           <div class="profile-field"><label>Date of Birth</label><span>${formatDate(d.dob)}${isBirthdayWeek(d.dob) ? ' 🎂' : ''}</span></div>
-          <div class="profile-field"><label>Date of Joining</label><span>${formatDate(d.date_of_joining)}</span></div>
+          ${d.email ? `<div class="profile-field"><label>Email</label><span><a href="mailto:${d.email}" style="color:var(--primary)">${d.email}</a></span></div>` : ''}
           <div class="profile-field"><label>Admitted On</label><span style="font-size:.82rem;color:var(--text-muted)">${d.created_at ? formatDateTime(d.created_at) : '—'}</span></div>
-          <div class="profile-field"><label>Lifetime Attendance</label><span style="color:var(--primary);font-size:1.1rem;font-family:'Cinzel',serif">${d.lifetime_attendance}</span></div>
         </div>
       </div>
+
+      <!-- 02 Professional Profile -->
+      ${(d.education || d.profession) ? `
       <div class="profile-section">
-        <div class="profile-section-title">Spiritual Profile</div>
+        <div class="profile-section-title psec-cat-professional"><i class="fas fa-briefcase"></i> Professional Profile</div>
         <div class="profile-fields">
-          <div class="profile-field"><label>Chanting Rounds</label><span style="font-size:1.1rem;font-family:'Cinzel',serif">${d.chanting_rounds || 0}</span></div>
+          ${d.education  ? `<div class="profile-field"><label>Education / Qualification</label><span>${d.education}</span></div>` : ''}
+          ${d.profession ? `<div class="profile-field"><label>Profession / Occupation</label><span>${d.profession}</span></div>` : ''}
+        </div>
+      </div>` : ''}
+
+      <!-- 03 Sadhana & Practices -->
+      <div class="profile-section">
+        <div class="profile-section-title psec-cat-sadhana"><i class="fas fa-dharmachakra"></i> Sadhana &amp; Practices</div>
+        <div class="profile-fields">
+          <div class="profile-field"><label>Daily Chanting Rounds</label><span style="font-size:1.1rem;font-family:'Cinzel',serif">${d.chanting_rounds || 0}</span></div>
           <div class="profile-field"><label>Lifetime Attendance</label><span style="color:var(--primary);font-size:1.1rem;font-family:'Cinzel',serif">${d.lifetime_attendance}</span></div>
+          ${d.reading ? `<div class="profile-field"><label>Reading</label><span class="pf-tag">${d.reading}</span></div>` : ''}
+          ${d.hearing ? `<div class="profile-field"><label>Hearing</label><span class="pf-tag">${d.hearing}</span></div>` : ''}
+          <div class="profile-field"><label>Tilak</label>${yn(d.tilak)}</div>
+          <div class="profile-field"><label>Kanthi</label>${yn(d.kanthi)}</div>
+          <div class="profile-field"><label>Gopi Dress</label>${yn(d.gopi_dress)}</div>
         </div>
       </div>
+
+      <!-- 04 Social & Family -->
+      ${(d.family_members || d.family_participants || d.family_favourable || d.hobbies) ? `
       <div class="profile-section">
-        <div class="profile-section-title">Classification</div>
+        <div class="profile-section-title psec-cat-family"><i class="fas fa-home"></i> Social &amp; Family</div>
         <div class="profile-fields">
+          ${d.family_members      ? `<div class="profile-field"><label>Total Family Members</label><span>${d.family_members}</span></div>` : ''}
+          ${d.family_participants ? `<div class="profile-field"><label>Members in Class</label><span>${d.family_participants}</span></div>` : ''}
+          ${d.family_favourable   ? `<div class="profile-field"><label>Favorable to Devotion</label><span class="pf-tag pf-family-${d.family_favourable.toLowerCase().replace(/\s/g,'-')}">${d.family_favourable}</span></div>` : ''}
+          ${d.hobbies             ? `<div class="profile-field full"><label>Hobbies &amp; Interests</label><span>${d.hobbies}</span></div>` : ''}
+        </div>
+      </div>` : ''}
+
+      <!-- 05 Team Management -->
+      <div class="profile-section">
+        <div class="profile-section-title psec-cat-team"><i class="fas fa-users"></i> Team Management</div>
+        <div class="profile-fields">
+          <div class="profile-field"><label>Date of Joining</label><span>${formatDate(d.date_of_joining)}</span></div>
+          <div class="profile-field"><label>Reference By</label><span>${d.reference_by || '—'}</span></div>
           <div class="profile-field"><label>Facilitator</label><span>${d.facilitator || '—'}</span></div>
-          <div class="profile-field"><label>Reference</label><span>${d.reference_by || '—'}</span></div>
           <div class="profile-field"><label>Calling By</label><span>${d.calling_by || '—'}</span></div>
         </div>
       </div>
-      ${(d.education || d.email || d.profession || d.family_favourable || d.reading || d.hearing || d.hobbies || d.skills || d.tilak || d.kanthi || d.gopi_dress) ? `
-      <div class="profile-section">
-        <div class="profile-section-title"><i class="fas fa-user-graduate" style="margin-right:.35rem"></i>Personal Details</div>
-        <div class="profile-fields">
-          ${d.education ? `<div class="profile-field"><label>Education</label><span>${d.education}</span></div>` : ''}
-          ${d.email ? `<div class="profile-field"><label>Email</label><span><a href="mailto:${d.email}" style="color:var(--primary)">${d.email}</a></span></div>` : ''}
-          ${d.profession ? `<div class="profile-field"><label>Profession</label><span>${d.profession}</span></div>` : ''}
-          ${d.family_favourable ? `<div class="profile-field"><label>Family Favourable</label><span class="pf-tag pf-family-${d.family_favourable.toLowerCase().replace(/\s/g,'-')}">${d.family_favourable}</span></div>` : ''}
-          ${d.reading ? `<div class="profile-field"><label>Reading</label><span class="pf-tag">${d.reading}</span></div>` : ''}
-          ${d.hearing ? `<div class="profile-field"><label>Hearing</label><span class="pf-tag">${d.hearing}</span></div>` : ''}
-          ${d.hobbies ? `<div class="profile-field"><label>Hobbies</label><span>${d.hobbies}</span></div>` : ''}
-          ${d.skills ? `<div class="profile-field"><label>Skills</label><span>${d.skills}</span></div>` : ''}
-          <div class="profile-field"><label>Tilak</label><span>${d.tilak ? '✓ Yes' : '✗ No'}</span></div>
-          <div class="profile-field"><label>Kanthi</label><span>${d.kanthi ? '✓ Yes' : '✗ No'}</span></div>
-          <div class="profile-field"><label>Gopi Dress</label><span>${d.gopi_dress ? '✓ Yes' : '✗ No'}</span></div>
+
+      <!-- Actions -->
+      <div class="profile-section profile-actions-row">
+        ${AppState.userRole === 'superAdmin' && !d.is_not_interested ? `<button class="btn btn-warning-soft" onclick="markNotInterested('${d.id}')"><i class="fas fa-ban"></i> Not Interested</button>` : ''}
+        ${d.is_not_interested ? `<span class="badge" style="background:#bf360c;color:#fff;padding:.35rem .7rem"><i class="fas fa-ban"></i> Not Interested</span>` : '<span></span>'}
+        <div style="display:flex;gap:.5rem">
+          <button class="btn btn-secondary" onclick="editCurrentDevotee()"><i class="fas fa-pencil-alt"></i> Edit</button>
+          <button class="btn btn-danger" onclick="deleteDevotee('${d.id}')"><i class="fas fa-trash"></i> Remove</button>
         </div>
-      </div>` : ''}
-      <div class="profile-section" style="display:flex;gap:.6rem;justify-content:flex-end;flex-wrap:wrap">
-        ${AppState.userRole === 'superAdmin' && !d.is_not_interested ? `<button class="btn" style="background:#ff6f00;color:#fff" onclick="markNotInterested('${d.id}')"><i class="fas fa-ban"></i> Mark Not Interested</button>` : ''}
-        ${d.is_not_interested ? `<span class="badge" style="background:#bf360c;color:#fff;padding:.35rem .7rem;align-self:center"><i class="fas fa-ban"></i> Not Interested</span>` : ''}
-        <button class="btn btn-secondary" onclick="editCurrentDevotee()"><i class="fas fa-pencil-alt"></i> Edit</button>
-        <button class="btn btn-danger" onclick="deleteDevotee('${d.id}')"><i class="fas fa-trash"></i> Remove</button>
       </div>`;
   } catch (_) {
     content.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
@@ -2906,16 +2956,46 @@ async function openProfileModal(id) {
 
 function editCurrentDevotee() { closeModal('profile-modal'); openDevoteeFormModal(false, AppState.currentDevoteeId); }
 
+const PROFILE_TABS = ['identity','professional','sadhana','family','team'];
+
+function switchProfileTab(tab, btn) {
+  document.querySelectorAll('.psec-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.psec-tab').forEach(b => b.classList.remove('active'));
+  document.getElementById('psec-' + tab).classList.add('active');
+  if (btn) btn.classList.add('active');
+  else {
+    const allBtns = document.querySelectorAll('.psec-tab');
+    const idx = PROFILE_TABS.indexOf(tab);
+    if (allBtns[idx]) allBtns[idx].classList.add('active');
+  }
+  const idx = PROFILE_TABS.indexOf(tab);
+  const prevBtn = document.getElementById('psec-prev');
+  const nextBtn = document.getElementById('psec-next');
+  const saveBtn = document.getElementById('psec-save');
+  if (prevBtn) prevBtn.style.display = idx === 0 ? 'none' : '';
+  if (nextBtn) nextBtn.style.display = idx === PROFILE_TABS.length - 1 ? 'none' : '';
+  if (saveBtn) saveBtn.style.display = idx === PROFILE_TABS.length - 1 ? '' : 'none';
+}
+
+function stepProfileTab(dir) {
+  const active = document.querySelector('.psec-tab.active');
+  const allBtns = [...document.querySelectorAll('.psec-tab')];
+  const idx = allBtns.indexOf(active);
+  const next = allBtns[idx + dir];
+  if (next) next.click();
+}
+
 function openDevoteeFormModal(fromAttendance = false, editId = null) {
   AppState.fromAttendance = fromAttendance;
   document.getElementById('f-id').value = editId || '';
   document.getElementById('devotee-form-title').textContent = editId ? 'Edit Devotee Profile' : (fromAttendance ? 'Register New Devotee' : 'Add New Devotee');
   if (editId) populateEditForm(editId); else clearDevoteeForm();
+  switchProfileTab('identity', null);
   openModal('devotee-form-modal');
 }
 
 function clearDevoteeForm() {
-  ['f-name','f-mobile','f-address','f-education','f-email','f-profession','f-hobbies','f-skills'].forEach(id => document.getElementById(id).value = '');
+  ['f-name','f-mobile','f-address','f-education','f-email','f-profession','f-hobbies','f-family-members','f-family-participants'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
   document.getElementById('f-dob').value = '';
   document.getElementById('f-joining').value = getToday(); // auto-fill today for new devotees
   document.getElementById('f-chanting').value = '0';
@@ -2954,15 +3034,16 @@ async function populateEditForm(id) {
     if (d.reference_by) { document.getElementById('f-reference').value = d.reference_by; const pi = document.querySelector('#picker-reference .picker-input'); if(pi){pi.value=d.reference_by;pi.classList.add('has-value');} }
     if (d.calling_by) { document.getElementById('f-calling-by').value = d.calling_by; const pi = document.querySelector('#picker-calling-by .picker-input'); if(pi){pi.value=d.calling_by;pi.classList.add('has-value');} }
     // Personal details
-    document.getElementById('f-education').value        = d.education || '';
-    document.getElementById('f-email').value            = d.email || '';
-    document.getElementById('f-profession').value       = d.profession || '';
-    document.getElementById('f-family-favourable').value= d.family_favourable || '';
-    document.getElementById('f-reading').value          = d.reading || '';
-    document.getElementById('f-hearing').value          = d.hearing || '';
-    document.getElementById('f-hobbies').value          = d.hobbies || '';
-    document.getElementById('f-skills').value           = d.skills || '';
-    document.getElementById('f-tilak').value            = d.tilak || '0';
+    document.getElementById('f-education').value          = d.education || '';
+    document.getElementById('f-email').value              = d.email || '';
+    document.getElementById('f-profession').value         = d.profession || '';
+    document.getElementById('f-family-favourable').value  = d.family_favourable || '';
+    document.getElementById('f-reading').value            = d.reading || '';
+    document.getElementById('f-hearing').value            = d.hearing || '';
+    document.getElementById('f-hobbies').value            = d.hobbies || '';
+    document.getElementById('f-tilak').value              = d.tilak || '0';
+    const fm = document.getElementById('f-family-members');    if(fm) fm.value = d.family_members || '';
+    const fp = document.getElementById('f-family-participants'); if(fp) fp.value = d.family_participants || '';
     clearFieldError('mobile');
   } catch (_) { showToast('Failed to load profile', 'error'); }
 }
@@ -2982,15 +3063,16 @@ function getFormPayload() {
     facilitator:       document.getElementById('f-facilitator').value.trim(),
     reference_by:      document.getElementById('f-reference').value.trim(),
     calling_by:        document.getElementById('f-calling-by').value.trim(),
-    education:         document.getElementById('f-education').value.trim(),
-    email:             document.getElementById('f-email').value.trim(),
-    profession:        document.getElementById('f-profession').value.trim(),
-    family_favourable: document.getElementById('f-family-favourable').value,
-    reading:           document.getElementById('f-reading').value,
-    hearing:           document.getElementById('f-hearing').value,
-    hobbies:           document.getElementById('f-hobbies').value.trim(),
-    skills:            document.getElementById('f-skills').value.trim(),
-    tilak:             parseInt(document.getElementById('f-tilak').value),
+    education:            document.getElementById('f-education').value.trim(),
+    email:                document.getElementById('f-email').value.trim(),
+    profession:           document.getElementById('f-profession').value.trim(),
+    family_favourable:    document.getElementById('f-family-favourable').value,
+    family_members:       parseInt(document.getElementById('f-family-members')?.value) || null,
+    family_participants:  parseInt(document.getElementById('f-family-participants')?.value) || null,
+    reading:              document.getElementById('f-reading').value,
+    hearing:              document.getElementById('f-hearing').value,
+    hobbies:              document.getElementById('f-hobbies').value.trim(),
+    tilak:                parseInt(document.getElementById('f-tilak').value),
   };
 }
 
@@ -2999,25 +3081,28 @@ async function saveDevotee(e) {
   // Mobile validation
   const mobileRaw = document.getElementById('f-mobile').value;
   const mob = validateMobile(mobileRaw);
-  if (!mob.valid) { showFieldError('mobile', mob.error); return; }
+  if (!mob.valid) { switchProfileTab('identity', null); showFieldError('mobile', mob.error); return; }
   clearFieldError('mobile');
   const id = document.getElementById('f-id').value;
   const payload = getFormPayload();
 
   // Required field validation
   if (!payload.address) {
+    switchProfileTab('identity', null);
     showToast('Address is required', 'error');
-    document.getElementById('f-address').focus();
+    setTimeout(() => document.getElementById('f-address')?.focus(), 100);
     return;
   }
   if (!payload.dob) {
+    switchProfileTab('identity', null);
     showToast('Date of Birth is required', 'error');
-    document.getElementById('f-dob').focus();
+    setTimeout(() => document.getElementById('f-dob')?.focus(), 100);
     return;
   }
   if (!payload.reference_by) {
+    switchProfileTab('team', null);
     showToast('Reference By is required — search and select who referred this devotee', 'error');
-    document.querySelector('#picker-reference .picker-input')?.focus();
+    setTimeout(() => document.querySelector('#picker-reference .picker-input')?.focus(), 100);
     return;
   }
 
@@ -3251,18 +3336,36 @@ async function doSubmitCallingWeek(week) {
   }
 }
 
+const CALLING_REASONS = [
+  { value: '',               label: '— Select reason —',          text: '',                             needsDate: false },
+  { value: 'did_not_pick',   label: 'Did not pick call',          text: 'Did not pick call',            needsDate: false },
+  { value: 'incoming_na',    label: 'Incoming not available',     text: 'Incoming not available',       needsDate: false },
+  { value: 'wrong_number',   label: 'Wrong number',               text: 'Wrong number',                 needsDate: false },
+  { value: 'online_class',   label: 'Shifted to online class',    text: 'Shifted to online class',      needsDate: false },
+  { value: 'out_of_service', label: 'Temporarily out of service', text: 'Temporarily out of service',   needsDate: false },
+  { value: 'out_of_station', label: 'Out of station',             text: 'Out of station — available from: ', needsDate: true },
+  { value: 'exams',          label: 'Exams',                      text: 'Exams — available from: ',     needsDate: true },
+];
+
+function _reasonLabel(r) {
+  return CALLING_REASONS.find(x => x.value === r)?.label || r || '';
+}
+function _reasonNeedsDate(r) {
+  return CALLING_REASONS.find(x => x.value === r)?.needsDate || false;
+}
+
 function renderCallingStats(devotees) {
-  const yes     = devotees.filter(d => d.coming_status === 'Yes').length;
-  const maybe   = devotees.filter(d => d.coming_status === 'Maybe').length;
-  const no      = devotees.filter(d => d.coming_status === 'No').length;
-  const shift   = devotees.filter(d => d.coming_status === 'Shift').length;
-  const uncalled = devotees.filter(d => !d.coming_status).length;
+  const yes       = devotees.filter(d => d.coming_status === 'Yes').length;
+  const reached   = devotees.filter(d => ['did_not_pick','incoming_na','wrong_number','out_of_service'].includes(d.calling_reason)).length;
+  const unavail   = devotees.filter(d => ['out_of_station','exams'].includes(d.calling_reason)).length;
+  const online    = devotees.filter(d => d.calling_reason === 'online_class').length;
+  const uncalled  = devotees.filter(d => !d.coming_status && !d.calling_reason && !d.calling_notes).length;
   document.getElementById('calling-stats').innerHTML = `
-    <div class="calling-stat"><i class="fas fa-check" style="color:var(--success)"></i> <strong>${yes}</strong> Coming</div>
-    <div class="calling-stat"><i class="fas fa-question" style="color:var(--warning)"></i> <strong>${maybe}</strong> Maybe</div>
-    <div class="calling-stat"><i class="fas fa-times" style="color:var(--danger)"></i> <strong>${no}</strong> No</div>
-    <div class="calling-stat"><i class="fas fa-user-slash" style="color:var(--text-muted)"></i> <strong>${shift}</strong> Shift</div>
-    <div class="calling-stat"><i class="fas fa-phone-slash" style="color:var(--text-muted)"></i> <strong>${uncalled}</strong> Not Called</div>`;
+    <div class="calling-stat"><i class="fas fa-check-circle" style="color:var(--success)"></i> <strong>${yes}</strong> Confirmed</div>
+    <div class="calling-stat"><i class="fas fa-phone-slash" style="color:var(--danger)"></i> <strong>${reached}</strong> Not reached</div>
+    <div class="calling-stat"><i class="fas fa-calendar-times" style="color:#7b5ea7"></i> <strong>${unavail}</strong> Unavailable</div>
+    <div class="calling-stat"><i class="fas fa-laptop" style="color:#0288d1"></i> <strong>${online}</strong> Online</div>
+    <div class="calling-stat"><i class="fas fa-circle-notch" style="color:var(--text-muted)"></i> <strong>${uncalled}</strong> Not called</div>`;
 }
 
 function filterCallingList() {
@@ -3270,48 +3373,73 @@ function filterCallingList() {
   const s    = document.getElementById('calling-filter-status').value;
   const team = document.getElementById('calling-filter-team').value;
   const by   = document.getElementById('calling-filter-callingby').value;
-  renderCallingList(AppState.callingData.filter(d =>
-    (!q    || d.name.toLowerCase().includes(q) || (d.mobile || '').includes(q)) &&
-    (!s    || (s === '_none' ? !d.coming_status : d.coming_status === s)) &&
-    (!team || d.team_name === team) &&
-    (!by   || d.calling_by === by)
-  ));
+  renderCallingList(AppState.callingData.filter(d => {
+    if (q    && !d.name.toLowerCase().includes(q) && !(d.mobile||'').includes(q)) return false;
+    if (team && d.team_name !== team) return false;
+    if (by   && d.calling_by !== by) return false;
+    if (s) {
+      if (s === '_none') return !d.coming_status && !d.calling_reason && !d.calling_notes;
+      if (s === 'Yes')   return d.coming_status === 'Yes';
+      return d.calling_reason === s;
+    }
+    return true;
+  }));
 }
 
 function renderCallingList(devotees) {
   const wrap = document.getElementById('calling-list');
   if (!devotees.length) { wrap.innerHTML = '<div class="empty-state"><i class="fas fa-phone-slash"></i><p>No devotees found</p></div>'; return; }
   wrap.innerHTML = `<table class="calling-table">
-    <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>Coming?</th><th>Notes</th></tr></thead>
+    <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>✓ Coming</th><th>Reason &amp; Notes</th></tr></thead>
     <tbody>${devotees.map((d, i) => renderCallingRow(d, i + 1)).join('')}</tbody>
   </table>`;
 }
 
+function _reasonOptions(selected) {
+  return CALLING_REASONS.map(r =>
+    `<option value="${r.value}"${r.value === selected ? ' selected' : ''}>${r.label}</option>`
+  ).join('');
+}
+
 function renderCallingRow(d, i) {
-  const statuses = ['Yes','No','Maybe','Shift'];
-  const cur = d.coming_status || '';
-  const btns = statuses.map(s => `<button class="status-btn ${s.toLowerCase()}${cur === s ? ' active' : ''}" onclick="updateCallingStatus('${d.id}', '${s}', this)">${s}</button>`).join('');
+  const isYes   = d.coming_status === 'Yes';
+  const reason  = d.calling_reason || '';
+  const needsDate = _reasonNeedsDate(reason);
+  const safeId  = d.id;
+  const safeName = d.name.replace(/'/g,"\\'");
   const updTime = d.updated_at_client
-    ? `<span class="calling-upd-time" title="Last updated">${new Date(d.updated_at_client).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true})}</span>` : '';
-  return `<tr class="${cur === 'Shift' ? 'status-shift' : ''}">
-    <td style="color:var(--text-muted)">${i}</td>
+    ? `<span class="calling-upd-time">${new Date(d.updated_at_client).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true})}</span>` : '';
+  return `<tr data-id="${safeId}" class="${isYes ? 'row-confirmed' : (reason ? 'row-has-reason' : '')}">
+    <td class="cs-num">${i}</td>
     <td>
       <div style="display:flex;align-items:center;gap:.4rem">
-        <div class="devotee-avatar" style="width:30px;height:30px;font-size:.7rem">${initials(d.name)}</div>
-        <span class="calling-name-link" onclick="openCallingHistory('${d.id}','${d.name.replace(/'/g,"\\'")}')">
-          ${d.name}${isBirthdayWeek(d.dob) ? ' <i class="fas fa-birthday-cake" style="color:var(--gold);font-size:.75rem"></i>' : ''}
+        <div class="devotee-avatar" style="width:28px;height:28px;font-size:.65rem;flex-shrink:0">${initials(d.name)}</div>
+        <span class="calling-name-link" onclick="openCallingHistory('${safeId}','${safeName}')">
+          ${d.name}${isBirthdayWeek(d.dob) ? ' <i class="fas fa-birthday-cake" style="color:var(--gold);font-size:.7rem"></i>' : ''}
         </span>
       </div>
     </td>
     <td>${contactIcons(d.mobile)}</td>
     <td>${teamBadge(d.team_name)}</td>
-    <td style="font-size:.82rem;color:var(--text-muted)">${d.calling_by || '—'}</td>
+    <td class="cs-callingby">${d.calling_by || '—'}</td>
     <td>
-      <div class="status-btns">${btns}</div>
+      <button class="coming-toggle${isYes ? ' active' : ''}" onclick="toggleComing('${safeId}', this)" title="${isYes ? 'Click to unmark' : 'Mark as confirmed coming'}">
+        ${isYes ? '<i class="fas fa-check-circle"></i> Coming' : '<i class="fas fa-circle"></i> Mark Yes'}
+      </button>
       ${updTime}
     </td>
-    <td><input class="calling-notes-input" type="text" placeholder="Notes…" value="${d.calling_notes || ''}"
-      onchange="updateCallingNotes('${d.id}', this.value)" onclick="event.stopPropagation()"></td>
+    <td>
+      <div class="reason-notes-cell">
+        <select class="calling-reason-select${reason ? ' has-reason' : ''}" onchange="onReasonChange('${safeId}', this)" onclick="event.stopPropagation()">
+          ${_reasonOptions(reason)}
+        </select>
+        <input type="date" class="calling-avail-date filter-select" style="display:${needsDate ? 'block' : 'none'}"
+          value="${d.available_from || ''}" title="Available from this date"
+          onchange="updateAvailableFrom('${safeId}', this.value)" onclick="event.stopPropagation()">
+        <input class="calling-notes-input" type="text" placeholder="Add notes…" value="${(d.calling_notes || '').replace(/"/g,'&quot;')}"
+          onchange="updateCallingNotes('${safeId}', this.value)" onclick="event.stopPropagation()">
+      </div>
+    </td>
   </tr>`;
 }
 
@@ -3325,15 +3453,19 @@ async function openCallingHistory(devoteeId, devoteeName) {
     const history = await DB.getCallingHistory(devoteeId, 4);
     document.getElementById('calling-history-content').innerHTML = history.map(h => {
       const label = formatDate(h.weekDate);
-      const cs = h.comingStatus || '—';
-      const color = cs === 'Yes' ? 'var(--success)' : cs === 'No' ? 'var(--danger)' : cs === 'Maybe' ? 'var(--warning)' : 'var(--text-muted)';
-      const note = h.callingNotes ? `<div style="font-size:.8rem;color:var(--text-muted);margin-top:.2rem">${h.callingNotes}</div>` : '';
-      return `<div style="display:flex;align-items:flex-start;gap:.75rem;padding:.6rem 0;border-bottom:1px solid var(--border)">
-        <div style="min-width:90px;font-size:.82rem;color:var(--text-muted)">${label}</div>
-        <div>
-          <span style="font-weight:600;color:${color}">${cs}</span>
-          ${note}
-        </div>
+      const isYes = h.comingStatus === 'Yes';
+      const reason = h.callingReason || '';
+      const reasonLbl = _reasonLabel(reason);
+      const avail = h.availableFrom ? ` (available from ${formatDate(h.availableFrom)})` : '';
+      const statusHtml = isYes
+        ? `<span style="font-weight:700;color:var(--success)"><i class="fas fa-check-circle"></i> Confirmed Coming</span>`
+        : (reason
+            ? `<span style="font-weight:600;color:var(--danger)">${reasonLbl}${avail}</span>`
+            : (h.comingStatus ? `<span style="font-weight:600;color:var(--text-muted)">${h.comingStatus}</span>` : '<span style="color:var(--text-muted)">Not called</span>'));
+      const note = h.callingNotes ? `<div style="font-size:.8rem;color:var(--text-muted);margin-top:.2rem;font-style:italic">"${h.callingNotes}"</div>` : '';
+      return `<div style="display:flex;align-items:flex-start;gap:.75rem;padding:.65rem 0;border-bottom:1px solid var(--border-subtle)">
+        <div style="min-width:80px;font-size:.8rem;color:var(--text-muted)">${label}</div>
+        <div>${statusHtml}${note}</div>
       </div>`;
     }).join('') || '<div class="empty-state"><p>No calling history</p></div>';
   } catch (_) {
@@ -3341,34 +3473,104 @@ async function openCallingHistory(devoteeId, devoteeName) {
   }
 }
 
-async function updateCallingStatus(devoteeId, status, btn) {
+async function toggleComing(devoteeId, btn) {
   const week = document.getElementById('calling-week').value;
+  const d = AppState.callingData.find(x => x.id === devoteeId);
   const row = btn.closest('tr');
-  const notesInput = row?.querySelector('.calling-notes-input');
-  const typedNotes = notesInput?.value?.trim() || '';
-  const savedNotes  = AppState.callingData.find(x => x.id === devoteeId)?.calling_notes || '';
-  const effectiveNotes = typedNotes || savedNotes;
+  const isNowYes = !d || d.coming_status !== 'Yes';
 
-  // Notes required for all statuses except Yes
-  if (status !== 'Yes' && !effectiveNotes) {
-    showToast('Please add calling notes before saving status', 'error');
-    notesInput?.focus();
+  try {
+    const payload = isNowYes
+      ? { coming_status: 'Yes', calling_reason: '', available_from: null }
+      : { coming_status: '', calling_reason: '', available_from: null };
+    await DB.updateCallingStatus(devoteeId, week, payload);
+
+    if (d) { d.coming_status = isNowYes ? 'Yes' : ''; d.calling_reason = ''; d.available_from = null; }
+    btn.className = 'coming-toggle' + (isNowYes ? ' active' : '');
+    btn.innerHTML = isNowYes
+      ? '<i class="fas fa-check-circle"></i> Coming'
+      : '<i class="fas fa-circle"></i> Mark Yes';
+    row.className = isNowYes ? 'row-confirmed' : '';
+
+    // Clear reason dropdown when marking Yes
+    if (isNowYes) {
+      const sel = row.querySelector('.calling-reason-select');
+      if (sel) { sel.value = ''; sel.classList.remove('has-reason'); }
+      const datePicker = row.querySelector('.calling-avail-date');
+      if (datePicker) datePicker.style.display = 'none';
+    }
+    renderCallingStats(AppState.callingData);
+  } catch (_) { showToast('Update failed', 'error'); }
+}
+
+function onReasonChange(devoteeId, sel) {
+  const reason = sel.value;
+  const row = sel.closest('tr');
+  const notesInput = row?.querySelector('.calling-notes-input');
+  const datePicker = row?.querySelector('.calling-avail-date');
+  const needsDate = _reasonNeedsDate(reason);
+
+  sel.classList.toggle('has-reason', !!reason);
+
+  // Auto-fill notes
+  const reasonDef = CALLING_REASONS.find(r => r.value === reason);
+  if (reasonDef && reasonDef.text && notesInput && !notesInput.value) {
+    notesInput.value = reasonDef.text;
+  }
+
+  // Show/hide date picker
+  if (datePicker) datePicker.style.display = needsDate ? 'block' : 'none';
+
+  // If a reason is selected, unmark Coming=Yes
+  const d = AppState.callingData.find(x => x.id === devoteeId);
+  if (d && d.coming_status === 'Yes' && reason) {
+    const toggleBtn = row?.querySelector('.coming-toggle');
+    if (toggleBtn) {
+      toggleBtn.className = 'coming-toggle';
+      toggleBtn.innerHTML = '<i class="fas fa-circle"></i> Mark Yes';
+    }
+    row.className = 'row-has-reason';
+    if (d) d.coming_status = '';
+  }
+
+  // Validate date required
+  if (needsDate && datePicker && !datePicker.value) {
+    showToast('Please select the available-from date', 'error');
+    datePicker.focus();
     return;
   }
 
-  try {
-    // Save status + notes together (avoids race condition with debounced note-save)
-    const payload = { coming_status: status };
-    if (typedNotes) payload.calling_notes = typedNotes; // include typed notes in same write
-    await DB.updateCallingStatus(devoteeId, week, payload);
+  _saveCallingReason(devoteeId, reason, notesInput?.value || '', datePicker?.value || null);
+}
 
-    const d = AppState.callingData.find(x => x.id === devoteeId);
-    if (d) { d.coming_status = status; if (typedNotes) d.calling_notes = typedNotes; }
-    row.querySelectorAll('.status-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    row.className = status === 'Shift' ? 'status-shift' : '';
-    renderCallingStats(AppState.callingData);
+async function updateAvailableFrom(devoteeId, date) {
+  const week = document.getElementById('calling-week').value;
+  const row = document.querySelector(`tr[data-id="${devoteeId}"]`);
+  const notesInput = row?.querySelector('.calling-notes-input');
+  const notes = notesInput?.value || '';
+  const d = AppState.callingData.find(x => x.id === devoteeId);
+  try {
+    await DB.updateCallingStatus(devoteeId, week, { coming_status: '', available_from: date, calling_notes: notes });
+    if (d) d.available_from = date;
   } catch (_) { showToast('Update failed', 'error'); }
+}
+
+const _reasonTimers = {};
+function _saveCallingReason(devoteeId, reason, notes, availFrom) {
+  clearTimeout(_reasonTimers[devoteeId]);
+  _reasonTimers[devoteeId] = setTimeout(async () => {
+    const week = document.getElementById('calling-week').value;
+    const d = AppState.callingData.find(x => x.id === devoteeId);
+    try {
+      await DB.updateCallingStatus(devoteeId, week, {
+        coming_status: '', calling_reason: reason, calling_notes: notes, available_from: availFrom
+      });
+      if (d) { d.calling_reason = reason; d.calling_notes = notes; d.available_from = availFrom; }
+      const row = document.querySelector(`tr[data-id="${devoteeId}"]`);
+      if (row) row.className = reason ? 'row-has-reason' : '';
+      renderCallingStats(AppState.callingData);
+    } catch (_) {}
+  }, 600);
 }
 
 const _notesTimers = {};
@@ -3377,7 +3579,13 @@ function updateCallingNotes(devoteeId, notes) {
   _notesTimers[devoteeId] = setTimeout(async () => {
     const week = document.getElementById('calling-week').value;
     const d = AppState.callingData.find(x => x.id === devoteeId);
-    try { await DB.updateCallingStatus(devoteeId, week, { coming_status: d?.coming_status || 'Maybe', calling_notes: notes }); } catch (_) {}
+    try {
+      await DB.updateCallingStatus(devoteeId, week, {
+        coming_status: d?.coming_status || '', calling_notes: notes,
+        calling_reason: d?.calling_reason || ''
+      });
+      if (d) d.calling_notes = notes;
+    } catch (_) {}
   }, 800);
 }
 
