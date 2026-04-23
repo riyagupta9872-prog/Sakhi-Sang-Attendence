@@ -72,7 +72,7 @@ Three roles with hardcoded permission gates throughout the UI:
 
 - `DevoteeCache` — 90-second TTL in-memory cache of active devotees
 - `sessionsCache` on `AppState` — maps session IDs to session metadata
-- Service worker version string is `sakhi-sang-v11` in `sw.js` — bump this to invalidate cached assets
+- Service worker version string is `sakhi-sang-v25` in `sw.js` — bump this to invalidate cached assets
 
 ## Firebase Setup
 
@@ -84,7 +84,12 @@ To run against a new Firebase project, replace `firebaseConfig` in [js/config.js
 ## Important Conventions
 
 - **No modules/imports** — everything is global. New functions go in the `js/` file matching their feature area.
-- **Soft-delete only** — devotees are never hard-deleted; set `status: 'inactive'`.
+- **Soft-delete only** — devotees are never hard-deleted; set `isActive: false` (NOT `status: 'inactive'` — that field does not exist on devotee docs).
 - **Team scoping** — `teamAdmin` queries always include `.where('team', '==', AppState.userTeam)`. Don't add unscoped queries for `teamAdmin` role.
 - **Fiscal year** — Apr–Mar (not Jan–Dec). The calling list export uses this for date filtering.
 - **Date utilities** — use `DateUtils` helpers for Sunday snapping and display formatting; don't use raw `Date` arithmetic elsewhere.
+- **Firestore helpers** — use `TS()` for server timestamps and `INC(n)` for atomic increments (both defined in `config.js`); never fetch-modify-write a counter.
+- **Cache invalidation** — call `DevoteeCache.bust()` after any write that creates, updates, or deletes a devotee, so the next read re-fetches from Firestore.
+- **Dual timestamps** — `callingStatus` docs store both `updatedAt` (server `TS()`) and `updatedAtClient` (ISO string via `new Date().toISOString()`). Late-submission reports compare `updatedAtClient` hours against a threshold (21:00); don't omit this field when writing calling status docs.
+- **Attendance time coloring** — use `attTimeStyle(markedAtISO)` (in `config.js`) to get inline style for late arrival highlights (12:30–12:45 → pink, 12:45–13:00 → salmon, after 13:00 → red); don't hardcode time color logic elsewhere.
+- **First-user bootstrap** — on signup, `ui-core.js` checks if any user doc exists in `users`; if the collection is empty, the new user is assigned `superAdmin`. Subsequent signups default to `serviceDevotee` until manually upgraded.

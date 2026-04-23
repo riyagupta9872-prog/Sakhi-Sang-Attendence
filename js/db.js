@@ -952,7 +952,7 @@ const DB = {
       const csSnap = await fdb.collection('callingStatus')
         .where('weekDate', '==', callingDate).get();
       const csMap = {};
-      csSnap.docs.forEach(d => { csMap[d.data().devoteeId] = d.data().status || ''; });
+      csSnap.docs.forEach(d => { csMap[d.data().devoteeId] = d.data(); });
 
       let atSet = new Set();
       if (sessionDate) {
@@ -971,9 +971,9 @@ const DB = {
 
   async getMgmtSeparateLists() {
     const all = await DevoteeCache.all();
-    const online = all.filter(d => d.callingMode === 'online' && !d.isNotInterested);
-    const festival = all.filter(d => d.callingMode === 'festival' && !d.isNotInterested);
-    const notInterested = all.filter(d => d.isNotInterested === true);
+    const online = all.filter(d => d.callingMode === 'online');
+    const festival = all.filter(d => d.callingMode === 'festival');
+    const notInterested = all.filter(d => d.callingMode === 'not_interested' || d.isNotInterested === true);
     return { online, festival, notInterested };
   },
 

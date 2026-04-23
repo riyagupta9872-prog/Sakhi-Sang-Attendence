@@ -367,7 +367,7 @@ async function loadMgmtTab() {
       DevoteeCache.all(),
     ]);
     const activeDevotees = allDevotees.filter(d =>
-      d.status !== 'inactive' && d.callingBy && !d.callingMode && !d.isNotInterested
+      d.isActive !== false && d.callingBy && !d.callingMode && !d.isNotInterested
     );
     el.innerHTML = _buildMgmtGrid(gridData, activeDevotees) + _buildMgmtSeparateLists(lists);
   } catch (e) {
@@ -451,11 +451,16 @@ function _buildMgmtGrid(weekData, devotees) {
       html += `<tr>
         <td class="mgmt-col-sticky" style="left:0;background:#fff;text-align:center;color:var(--text-muted);border-bottom:1px solid #f0f0f0">${sno++}</td>
         <td class="mgmt-col-sticky" style="left:30px;background:#fff;border-bottom:1px solid #f0f0f0;padding:.3rem .5rem">
-          <button onclick="openMgmtAction('${d.id}','${d.name.replace(/'/g,"\\'")}')"
+          <button onclick="openMgmtAction('${d.id}','${(d.name||'').replace(/'/g,"\\'")}')"
             style="background:none;border:none;cursor:pointer;font-weight:600;color:var(--primary);padding:0;text-align:left;font-size:.8rem;width:100%">${d.name}</button>
           ${d.mobile ? `<div style="font-size:.68rem;color:var(--text-muted)">${d.mobile}</div>` : ''}
         </td>
-        <td style="border-bottom:1px solid #f0f0f0;padding:.3rem .4rem">${teamBadge(team)}</td>
+        <td style="border-bottom:1px solid #f0f0f0;padding:.3rem .4rem;white-space:nowrap">
+          ${teamBadge(team)}
+          <button onclick="showMgmtTeamHistory('${d.id}','${(d.name||'').replace(/'/g,"\\'")}')" title="Team change history" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:.72rem;padding:.1rem .25rem;margin-left:.15rem;vertical-align:middle;opacity:.7">
+            <i class="fas fa-pencil-alt"></i>
+          </button>
+        </td>
         <td style="border-bottom:1px solid #f0f0f0;padding:.3rem .4rem;font-size:.75rem;color:var(--text-muted)">${d.callingBy || '—'}</td>
         ${wkCells}
         <td style="text-align:center;font-weight:700;color:var(--primary);border-bottom:1px solid #f0f0f0">${d.lifetimeAttendance || totalAt}</td>
@@ -472,9 +477,14 @@ function _buildMgmtSeparateLists({ online, festival, notInterested }) {
     const rows = items.map((d, i) => `<tr style="font-size:.82rem">
       <td style="color:var(--text-muted);text-align:center">${i + 1}</td>
       <td style="font-weight:600">${d.name || ''}</td>
-      <td style="font-size:.75rem">${d.mobile || d.mobile || '—'}</td>
-      <td>${teamBadge(d.team_name || d.teamName)}</td>
-      <td style="font-size:.75rem;color:var(--text-muted)">${d.calling_by || d.callingBy || '—'}</td>
+      <td style="font-size:.75rem">${d.mobile || '—'}</td>
+      <td style="white-space:nowrap">
+        ${teamBadge(d.teamName)}
+        <button onclick="showMgmtTeamHistory('${d.id}','${(d.name||'').replace(/'/g,"\\'")}')" title="Team change history" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:.72rem;padding:.1rem .25rem;margin-left:.15rem;vertical-align:middle;opacity:.7">
+          <i class="fas fa-pencil-alt"></i>
+        </button>
+      </td>
+      <td style="font-size:.75rem;color:var(--text-muted)">${d.callingBy || '—'}</td>
       <td><button onclick="restoreMgmtDevotee('${d.id}')"
         style="font-size:.72rem;padding:.15rem .45rem;background:#e8f5e9;border:1px solid var(--secondary);border-radius:4px;cursor:pointer;color:var(--primary)">
         <i class="fas fa-undo"></i> Restore
@@ -522,8 +532,10 @@ async function doMgmtAction(type) {
     const newTeam = document.getElementById('mgmt-new-team').value;
     if (!newTeam) return;
     try {
+      const allD = await DevoteeCache.all();
+      const oldTeam = allD.find(d => d.id === devoteeId)?.teamName || '';
       await fdb.collection('devotees').doc(devoteeId).update({ teamName: newTeam, updatedAt: TS() });
-      await fdb.collection('profileChanges').add({ devoteeId, fieldName: 'team_name', newValue: newTeam, changedBy: AppState.userName, changedAt: TS() });
+      await fdb.collection('profileChanges').add({ devoteeId, fieldName: 'team_name', oldValue: oldTeam, newValue: newTeam, changedBy: AppState.userName, changedAt: TS() });
       DevoteeCache.bust();
       closeModal('mgmt-action-modal');
       showToast('Team changed!', 'success');
@@ -552,6 +564,33 @@ async function restoreMgmtDevotee(devoteeId) {
   } catch (e) { showToast('Failed', 'error'); }
 }
 
+async function showMgmtTeamHistory(devoteeId, devoteeName) {
+  const titleEl = document.getElementById('history-modal-title');
+  const content = document.getElementById('history-content');
+  if (titleEl) titleEl.textContent = `Team History — ${devoteeName}`;
+  content.innerHTML = '<div class="loading" style="padding:1.5rem"><i class="fas fa-spinner"></i></div>';
+  openModal('history-modal');
+  try {
+    const history = await DB.getTeamChangeHistory(devoteeId);
+    if (!history.length) {
+      content.innerHTML = '<div class="empty-state" style="padding:2rem"><i class="fas fa-users"></i><p>No team changes recorded</p></div>';
+      return;
+    }
+    content.innerHTML = history.map((h, i) => {
+      const oldTeam = h.oldValue || history[i + 1]?.newValue || '—';
+      const newTeam = h.newValue || '—';
+      const iso = h.changedAt?.toDate ? h.changedAt.toDate().toISOString() : (h.changedAt || null);
+      return `<div class="history-item">
+        <div class="history-field"><i class="fas fa-users" style="color:var(--primary);margin-right:.35rem"></i> Team Change</div>
+        <div class="history-change"><span class="old">${oldTeam}</span> <i class="fas fa-arrow-right" style="color:var(--text-muted);font-size:.7rem"></i> <span class="new">${newTeam}</span></div>
+        <div class="history-date">${formatDateTime(iso)}<br><span style="font-size:.7rem">by ${h.changedBy || '—'}</span></div>
+      </div>`;
+    }).join('');
+  } catch (_) {
+    content.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load history</p></div>';
+  }
+}
+
 async function exportMgmtFY() {
   showToast('Preparing FY export…');
   try {
@@ -567,7 +606,7 @@ async function exportMgmtFY() {
       DevoteeCache.all(),
     ]);
     const activeDevotees = allDevotees.filter(d =>
-      d.status !== 'inactive' && d.callingBy && !d.callingMode && !d.isNotInterested
+      d.isActive !== false && d.callingBy && !d.callingMode && !d.isNotInterested
     );
     const XS = _xls();
     const wb = XLSX.utils.book_new();
