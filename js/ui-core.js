@@ -277,12 +277,13 @@ function applyRoleUI() {
   });
 
   const tabs = {
-    devotees:   ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    calling:    ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    attendance: ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    reports:    ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    care:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    events:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    devotees:    ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    calling:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    attendance:  ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    reports:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    care:        ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    events:      ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    management:  ['superAdmin'],
   };
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const tab = btn.dataset.tab;
@@ -668,6 +669,7 @@ function switchTab(tab, btn) {
   if (tab === 'reports')    loadReports();
   if (tab === 'care')       loadCareData();
   if (tab === 'events')     loadEvents();
+  if (tab === 'management') loadMgmtTab?.();
 }
 
 function switchSubTab(btn, id) {

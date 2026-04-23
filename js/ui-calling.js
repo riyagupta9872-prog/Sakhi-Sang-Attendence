@@ -6,7 +6,7 @@ function switchCallingTab(tab, btn) {
   _callingActiveTab = tab;
   document.querySelectorAll('#calling-main-tabs .att-sub-tab').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  ['list','reports','late','notinterested','mgmt'].forEach(p => {
+  ['list','reports','late','notinterested'].forEach(p => {
     const el = document.getElementById(`calling-panel-${p}`);
     if (el) el.classList.toggle('active', p === tab);
   });
@@ -14,7 +14,6 @@ function switchCallingTab(tab, btn) {
   if (tab === 'reports') _populateReportWeeks().then(loadCallingReports);
   if (tab === 'late')          loadLateReports();
   if (tab === 'notinterested') loadNotInterestedList();
-  if (tab === 'mgmt') loadManagementTab();
 }
 
 
@@ -51,21 +50,10 @@ async function loadNotInterestedList() {
   }
 }
 
-async function loadManagementTab() {
+async function _unusedMgmtStub() {
+  // Management tab is now a top-level tab — see ui-analytics.js loadMgmtTab()
   const el = document.getElementById('calling-mgmt-content');
   if (!el) return;
-
-  // Pre-fill config inputs with current values
-  const cfg = await DB.getCallingWeekConfig().catch(() => null);
-  if (cfg?.callingDate) {
-    const inp = document.getElementById('config-calling-date');
-    if (inp && !inp.value) inp.value = cfg.callingDate;
-  }
-  if (cfg?.sessionDate) {
-    const inp = document.getElementById('config-calling-session-date');
-    if (inp && !inp.value) inp.value = cfg.sessionDate;
-  }
-
   el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
     const week = document.getElementById('calling-week').value;

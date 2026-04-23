@@ -158,6 +158,9 @@
   <button class="tab-btn" data-tab="events" onclick="switchTab('events', this)">
     <i class="fas fa-calendar-star"></i><span>Events</span>
   </button>
+  <button class="tab-btn" data-tab="management" onclick="switchTab('management', this)">
+    <i class="fas fa-table"></i><span>Management</span>
+  </button>
 </nav>
 
 <!-- ══════════ MAIN CONTENT ══════════ -->
@@ -211,7 +214,6 @@
       <button class="att-sub-tab" onclick="switchCallingTab('reports',this)"><i class="fas fa-chart-bar"></i> Reports</button>
       <button class="att-sub-tab" onclick="switchCallingTab('late',this)"><i class="fas fa-chart-line"></i> Submission Reports</button>
       <button class="att-sub-tab super-admin-only" onclick="switchCallingTab('notinterested',this)"><i class="fas fa-ban"></i> Not Interested</button>
-      <button class="att-sub-tab super-admin-only" onclick="switchCallingTab('mgmt',this)"><i class="fas fa-table"></i> Management</button>
     </div>
 
     <!-- ── CALLING LIST PANEL ── -->
@@ -245,31 +247,6 @@
       </div>
       <div id="calling-list" class="calling-table-wrap"></div>
       <div id="calling-submit-bar" class="calling-submit-bar"></div>
-    </div>
-
-    <!-- ── MANAGEMENT PANEL (superAdmin only) ── -->
-    <div id="calling-panel-mgmt" class="att-sub-panel">
-      <!-- Config + Export toolbar -->
-      <div class="calling-config-row" style="margin-bottom:.75rem">
-        <div class="calling-config-fields">
-          <div class="calling-config-field">
-            <label><i class="fas fa-phone-alt"></i> Calling Date</label>
-            <input type="date" id="config-calling-date" class="filter-select">
-          </div>
-          <div class="calling-config-field">
-            <label><i class="fas fa-chalkboard-teacher"></i> Session Date</label>
-            <input type="date" id="config-calling-session-date" class="filter-select">
-          </div>
-          <button class="btn btn-primary" onclick="saveCallingWeekConfig()">
-            <i class="fas fa-save"></i> Save Dates
-          </button>
-          <button class="btn btn-secondary" onclick="exportCallingList()" style="margin-left:auto">
-            <i class="fas fa-file-excel"></i> Export FY
-          </button>
-        </div>
-      </div>
-      <!-- Management content rendered by JS -->
-      <div id="calling-mgmt-content"></div>
     </div>
 
     <!-- ── REPORTS PANEL ── -->
@@ -483,6 +460,35 @@
       <button class="btn btn-primary admin-coordinator-only" onclick="openNewEventModal()"><i class="fas fa-plus"></i> New Event</button>
     </div>
     <div id="events-list" class="events-grid"></div>
+  </section>
+
+  <!-- ══ TAB 7: MANAGEMENT (superAdmin only) ══ -->
+  <section id="tab-management" class="tab-panel">
+    <div class="panel-header">
+      <h2><i class="fas fa-table"></i> Calling Management</h2>
+      <div class="panel-actions">
+        <button class="btn btn-secondary" onclick="toggleMgmtConfig(this)" title="Configure calling dates">
+          <i class="fas fa-cog"></i> Configure
+        </button>
+        <button class="btn btn-secondary" onclick="exportMgmtFY()"><i class="fas fa-file-excel"></i> Export FY</button>
+      </div>
+    </div>
+    <div id="mgmt-config-row" class="calling-config-row hidden" style="margin-bottom:1rem">
+      <div class="calling-config-fields">
+        <div class="calling-config-field">
+          <label><i class="fas fa-phone-alt"></i> Calling Date</label>
+          <input type="date" id="mgmt-config-calling-date" class="filter-select">
+        </div>
+        <div class="calling-config-field">
+          <label><i class="fas fa-chalkboard-teacher"></i> Session Date</label>
+          <input type="date" id="mgmt-config-session-date" class="filter-select">
+        </div>
+        <button class="btn btn-primary" onclick="saveMgmtCallingDates()">
+          <i class="fas fa-save"></i> Save Dates
+        </button>
+      </div>
+    </div>
+    <div id="mgmt-tab-content"></div>
   </section>
 
 <!-- FAB: Register New Devotee (shown only on Attendance > Live) -->
@@ -1033,6 +1039,42 @@
         <button type="button" class="btn btn-primary" style="flex:1" onclick="saveEditProfile()">
           <i class="fas fa-save"></i> Save
         </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Management Action Modal -->
+<div id="mgmt-action-modal" class="modal-overlay hidden">
+  <div class="modal-box small">
+    <div class="modal-header">
+      <h2><i class="fas fa-user-cog"></i> <span id="mgmt-action-name">Devotee</span></h2>
+      <button class="btn-icon close" onclick="closeModal('mgmt-action-modal')"><i class="fas fa-times"></i></button>
+    </div>
+    <input type="hidden" id="mgmt-action-devotee-id">
+    <div style="padding:1.25rem;display:flex;flex-direction:column;gap:.6rem">
+      <button class="btn btn-secondary" style="justify-content:flex-start;gap:.6rem" onclick="doMgmtAction('online')">
+        <i class="fas fa-laptop" style="color:#1565c0;width:1.1rem"></i> Shift to Online Class
+      </button>
+      <button class="btn btn-secondary" style="justify-content:flex-start;gap:.6rem" onclick="doMgmtAction('festival')">
+        <i class="fas fa-star" style="color:#f9a825;width:1.1rem"></i> Shift to Festival Calling
+      </button>
+      <button class="btn btn-secondary" style="justify-content:flex-start;gap:.6rem" onclick="doMgmtAction('not_interested')">
+        <i class="fas fa-ban" style="color:#c62828;width:1.1rem"></i> Mark Not Interested
+      </button>
+      <hr style="margin:.25rem 0">
+      <button class="btn btn-secondary" style="justify-content:flex-start;gap:.6rem" onclick="doMgmtAction('team')">
+        <i class="fas fa-users" style="color:#388e3c;width:1.1rem"></i> Change Team
+      </button>
+      <div id="mgmt-team-picker" style="display:none;flex-direction:column;gap:.4rem">
+        <select id="mgmt-new-team" class="form-control">
+          <option value="">Select Team…</option>
+          <option>Lalita</option><option>Vishakha</option><option>Tungavidya</option>
+          <option>Indulekha</option><option>Sudevi</option><option>Rangadevi</option>
+          <option>Chitralekha</option><option>Champaklata</option><option>Nilachal</option>
+          <option>New Devotees</option>
+        </select>
+        <button class="btn btn-primary" onclick="doMgmtAction('team_confirm')"><i class="fas fa-check"></i> Confirm Team Change</button>
       </div>
     </div>
   </div>

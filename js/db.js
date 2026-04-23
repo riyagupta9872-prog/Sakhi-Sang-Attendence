@@ -930,4 +930,64 @@ const DB = {
     const snap = await fdb.collection('eventDevotees').where('eventId', '==', eventId).where('devoteeId', '==', devoteeId).limit(1).get();
     if (!snap.empty) await snap.docs[0].ref.delete();
   },
+
+  // ── MANAGEMENT / CALLING WEEK HISTORY ─────────────────────────────
+  async getCallingWeekHistory(limit = 4) {
+    const snap = await fdb.collection('callingWeekHistory')
+      .orderBy('callingDate', 'desc').limit(limit).get();
+    return snap.docs.map(d => d.data()).reverse();
+  },
+
+  async setCallingWeekHistory(callingDate, sessionDate) {
+    await fdb.collection('callingWeekHistory').doc(callingDate).set({
+      callingDate,
+      sessionDate: sessionDate || null,
+      updatedAt: TS(),
+      updatedBy: AppState.userId || null,
+    }, { merge: true });
+  },
+
+  async getMgmtGridData(weekEntries) {
+    const results = await Promise.all(weekEntries.map(async ({ callingDate, sessionDate }) => {
+      const csSnap = await fdb.collection('callingStatus')
+        .where('weekDate', '==', callingDate).get();
+      const csMap = {};
+      csSnap.docs.forEach(d => { csMap[d.data().devoteeId] = d.data().status || ''; });
+
+      let atSet = new Set();
+      if (sessionDate) {
+        const sessSnap = await fdb.collection('sessions')
+          .where('sessionDate', '==', sessionDate).limit(1).get();
+        if (!sessSnap.empty) {
+          const attSnap = await fdb.collection('attendanceRecords')
+            .where('sessionId', '==', sessSnap.docs[0].id).get();
+          attSnap.docs.forEach(d => atSet.add(d.data().devoteeId));
+        }
+      }
+      return { callingDate, sessionDate, csMap, atSet };
+    }));
+    return results;
+  },
+
+  async getMgmtSeparateLists() {
+    const all = await DevoteeCache.all();
+    const online = all.filter(d => d.callingMode === 'online' && !d.isNotInterested);
+    const festival = all.filter(d => d.callingMode === 'festival' && !d.isNotInterested);
+    const notInterested = all.filter(d => d.isNotInterested === true);
+    return { online, festival, notInterested };
+  },
+
+  async setDevoteeCallingMode(devoteeId, mode) {
+    const updateData = { callingMode: mode || '', callingBy: '', updatedAt: TS() };
+    await fdb.collection('devotees').doc(devoteeId).update(updateData);
+    await fdb.collection('profileChanges').add({
+      devoteeId,
+      changedBy: AppState.userId || '',
+      changedByName: AppState.userName || '',
+      changeType: 'callingMode',
+      newValue: mode || '',
+      timestamp: TS(),
+    });
+    DevoteeCache.bust();
+  },
 };
