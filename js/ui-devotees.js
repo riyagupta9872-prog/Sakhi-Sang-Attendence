@@ -53,74 +53,57 @@ async function unCancelSession() {
 async function openProfileModal(id) {
   AppState.currentDevoteeId = id;
   openModal('profile-modal');
+  switchProfileViewTab('identity', null);
   const content = document.getElementById('profile-modal-content');
+  const heroEl  = document.getElementById('profile-view-hero');
+  const actsEl  = document.getElementById('profile-view-actions');
   content.innerHTML = '<div class="loading" style="padding:2rem"><i class="fas fa-spinner"></i> Loading…</div>';
+  if (heroEl) heroEl.innerHTML = '';
+  if (actsEl) actsEl.innerHTML = '';
   try {
     const d = await DB.getDevotee(id);
     document.getElementById('profile-modal-name').textContent = d.name;
     const yn = v => v ? '<span class="pf-yes">✓ Yes</span>' : '<span class="pf-no">✗ No</span>';
-    content.innerHTML = `
-      <!-- Hero -->
-      <div class="profile-hero">
-        <div class="profile-avatar-lg">${initials(d.name)}</div>
-        <div class="profile-hero-info">
-          <h2>${d.name}${isBirthdayWeek(d.dob) ? ' 🎂' : ''}</h2>
-          <div class="profile-hero-meta">${teamBadge(d.team_name)} ${statusBadge(d.devotee_status)}</div>
-          <div class="profile-hero-meta" style="margin-top:.4rem">${contactIcons(d.mobile)}${d.mobile ? `<span style="font-size:.85rem;margin-left:.4rem">${d.mobile}</span>` : ''}</div>
-        </div>
-      </div>
+    const val = v => (v === 0 || v) ? v : '—';
 
-      <!-- 01 Personal Identity -->
-      <div class="profile-section">
-        <div class="profile-section-title psec-cat-identity"><i class="fas fa-user"></i> Personal Identity</div>
+    // Hero
+    if (heroEl) {
+      heroEl.innerHTML = `
+        <div class="profile-hero">
+          <div class="profile-avatar-lg">${initials(d.name)}</div>
+          <div class="profile-hero-info">
+            <h2>${d.name}${isBirthdayWeek(d.dob) ? ' 🎂' : ''}</h2>
+            <div class="profile-hero-meta">${d.team_name ? teamBadge(d.team_name) : ''} ${statusBadge(d.devotee_status)}${d.is_not_interested ? ' <span class="badge" style="background:#bf360c;color:#fff"><i class="fas fa-ban"></i> Not Interested</span>' : ''}</div>
+            <div class="profile-hero-meta" style="margin-top:.4rem">${contactIcons(d.mobile)}${d.mobile ? `<span style="font-size:.85rem;margin-left:.4rem">${d.mobile}</span>` : ''}</div>
+          </div>
+        </div>`;
+    }
+
+    content.innerHTML = `
+      <!-- Identity panel -->
+      <div class="psec-panel active" id="pvpanel-identity">
+        <div class="psec-panel-header psec-identity">
+          <i class="fas fa-user"></i> Personal Identity
+          <span class="psec-note">Name, contact, and location details</span>
+        </div>
         <div class="profile-fields">
           <div class="profile-field full"><label>Residential Address</label><span>${d.address || '—'}</span></div>
           <div class="profile-field"><label>Date of Birth</label><span>${formatDate(d.dob)}${isBirthdayWeek(d.dob) ? ' 🎂' : ''}</span></div>
-          ${d.email ? `<div class="profile-field"><label>Email</label><span><a href="mailto:${d.email}" style="color:var(--primary)">${d.email}</a></span></div>` : ''}
+          <div class="profile-field"><label>Mobile</label><span>${d.mobile || '—'}</span></div>
+          <div class="profile-field"><label>Email</label><span>${d.email ? `<a href="mailto:${d.email}" style="color:var(--primary)">${d.email}</a>` : '—'}</span></div>
           <div class="profile-field"><label>Admitted On</label><span style="font-size:.82rem;color:var(--text-muted)">${d.created_at ? formatDateTime(d.created_at) : '—'}</span></div>
         </div>
       </div>
 
-      <!-- 02 Professional Profile -->
-      ${(d.education || d.profession) ? `
-      <div class="profile-section">
-        <div class="profile-section-title psec-cat-professional"><i class="fas fa-briefcase"></i> Professional Profile</div>
-        <div class="profile-fields">
-          ${d.education  ? `<div class="profile-field"><label>Education / Qualification</label><span>${d.education}</span></div>` : ''}
-          ${d.profession ? `<div class="profile-field"><label>Profession / Occupation</label><span>${d.profession}</span></div>` : ''}
+      <!-- Team panel -->
+      <div class="psec-panel" id="pvpanel-team">
+        <div class="psec-panel-header psec-team">
+          <i class="fas fa-users"></i> Team Management
+          <span class="psec-note">Team assignment and connections</span>
         </div>
-      </div>` : ''}
-
-      <!-- 03 Sadhana & Practices -->
-      <div class="profile-section">
-        <div class="profile-section-title psec-cat-sadhana"><i class="fas fa-dharmachakra"></i> Sadhana &amp; Practices</div>
         <div class="profile-fields">
-          <div class="profile-field"><label>Daily Chanting Rounds</label><span style="font-size:1.1rem;font-family:'Cinzel',serif">${d.chanting_rounds || 0}</span></div>
-          <div class="profile-field"><label>Lifetime Attendance</label><span style="color:var(--primary);font-size:1.1rem;font-family:'Cinzel',serif">${d.lifetime_attendance}</span></div>
-          ${d.reading ? `<div class="profile-field"><label>Reading</label><span class="pf-tag">${d.reading}</span></div>` : ''}
-          ${d.hearing ? `<div class="profile-field"><label>Hearing</label><span class="pf-tag">${d.hearing}</span></div>` : ''}
-          <div class="profile-field"><label>Tilak</label>${yn(d.tilak)}</div>
-          <div class="profile-field"><label>Kanthi</label>${yn(d.kanthi)}</div>
-          <div class="profile-field"><label>Gopi Dress</label>${yn(d.gopi_dress)}</div>
-        </div>
-      </div>
-
-      <!-- 04 Social & Family -->
-      ${(d.family_members || d.family_participants || d.family_favourable || d.hobbies) ? `
-      <div class="profile-section">
-        <div class="profile-section-title psec-cat-family"><i class="fas fa-home"></i> Social &amp; Family</div>
-        <div class="profile-fields">
-          ${d.family_members      ? `<div class="profile-field"><label>Total Family Members</label><span>${d.family_members}</span></div>` : ''}
-          ${d.family_participants ? `<div class="profile-field"><label>Members in Class</label><span>${d.family_participants}</span></div>` : ''}
-          ${d.family_favourable   ? `<div class="profile-field"><label>Favorable to Devotion</label><span class="pf-tag pf-family-${d.family_favourable.toLowerCase().replace(/\s/g,'-')}">${d.family_favourable}</span></div>` : ''}
-          ${d.hobbies             ? `<div class="profile-field full"><label>Hobbies &amp; Interests</label><span>${d.hobbies}</span></div>` : ''}
-        </div>
-      </div>` : ''}
-
-      <!-- 05 Team Management -->
-      <div class="profile-section">
-        <div class="profile-section-title psec-cat-team"><i class="fas fa-users"></i> Team Management</div>
-        <div class="profile-fields">
+          <div class="profile-field"><label>Team Name</label><span>${d.team_name ? teamBadge(d.team_name) : '—'}</span></div>
+          <div class="profile-field"><label>Devotee Status</label><span>${statusBadge(d.devotee_status)}</span></div>
           <div class="profile-field"><label>Date of Joining</label><span>${formatDate(d.date_of_joining)}</span></div>
           <div class="profile-field"><label>Reference By</label><span>${d.reference_by || '—'}</span></div>
           <div class="profile-field"><label>Facilitator</label><span>${d.facilitator || '—'}</span></div>
@@ -128,31 +111,94 @@ async function openProfileModal(id) {
         </div>
       </div>
 
-      <!-- Actions -->
-      <div class="profile-section profile-actions-row">
-        ${AppState.userRole === 'superAdmin' && !d.is_not_interested ? `<button class="btn btn-warning-soft" onclick="markNotInterested('${d.id}')"><i class="fas fa-ban"></i> Not Interested</button>` : ''}
-        ${d.is_not_interested ? `<span class="badge" style="background:#bf360c;color:#fff;padding:.35rem .7rem"><i class="fas fa-ban"></i> Not Interested</span>` : '<span></span>'}
-        <div style="display:flex;gap:.5rem">
-          <button class="btn btn-secondary" onclick="editCurrentDevotee()"><i class="fas fa-pencil-alt"></i> Edit</button>
-          <button class="btn btn-danger" onclick="deleteDevotee('${d.id}')"><i class="fas fa-trash"></i> Remove</button>
+      <!-- Professional panel -->
+      <div class="psec-panel" id="pvpanel-professional">
+        <div class="psec-panel-header psec-professional">
+          <i class="fas fa-briefcase"></i> Professional Profile
+          <span class="psec-note">Education and occupation</span>
+        </div>
+        <div class="profile-fields">
+          <div class="profile-field"><label>Education / Qualification</label><span>${d.education || '—'}</span></div>
+          <div class="profile-field"><label>Profession / Occupation</label><span>${d.profession || '—'}</span></div>
+        </div>
+      </div>
+
+      <!-- Sadhana panel -->
+      <div class="psec-panel" id="pvpanel-sadhana">
+        <div class="psec-panel-header psec-sadhana">
+          <i class="fas fa-dharmachakra"></i> Sadhana &amp; Practices
+          <span class="psec-note">Daily spiritual practice details</span>
+        </div>
+        <div class="profile-fields">
+          <div class="profile-field"><label>Daily Chanting Rounds</label><span style="font-size:1.1rem;font-family:'Cinzel',serif">${val(d.chanting_rounds) || 0}</span></div>
+          <div class="profile-field"><label>Lifetime Attendance</label><span style="color:var(--primary);font-size:1.1rem;font-family:'Cinzel',serif">${d.lifetime_attendance || 0}</span></div>
+          <div class="profile-field"><label>Reading</label><span>${d.reading ? `<span class="pf-tag">${d.reading}</span>` : '—'}</span></div>
+          <div class="profile-field"><label>Hearing</label><span>${d.hearing ? `<span class="pf-tag">${d.hearing}</span>` : '—'}</span></div>
+          <div class="profile-field"><label>Tilak</label>${yn(d.tilak)}</div>
+          <div class="profile-field"><label>Kanthi</label>${yn(d.kanthi)}</div>
+          <div class="profile-field"><label>Gopi Dress</label>${yn(d.gopi_dress)}</div>
+        </div>
+      </div>
+
+      <!-- Family panel -->
+      <div class="psec-panel" id="pvpanel-family">
+        <div class="psec-panel-header psec-family">
+          <i class="fas fa-home"></i> Social &amp; Family
+          <span class="psec-note">Family background and interests</span>
+        </div>
+        <div class="profile-fields">
+          <div class="profile-field"><label>Total Family Members</label><span>${val(d.family_members)}</span></div>
+          <div class="profile-field"><label>Members in Class</label><span>${val(d.family_participants)}</span></div>
+          <div class="profile-field"><label>Favorable to Devotion</label><span>${d.family_favourable ? `<span class="pf-tag pf-family-${d.family_favourable.toLowerCase().replace(/\s/g,'-')}">${d.family_favourable}</span>` : '—'}</span></div>
+          <div class="profile-field full"><label>Hobbies &amp; Interests</label><span>${d.hobbies || '—'}</span></div>
         </div>
       </div>`;
+
+    // Action row
+    if (actsEl) {
+      const adminOrCoord = AppState.userRole === 'superAdmin' || AppState.userRole === 'teamAdmin';
+      actsEl.innerHTML = `
+        <div style="display:flex;gap:.5rem;align-items:center">
+          ${AppState.userRole === 'superAdmin' && !d.is_not_interested ? `<button class="btn btn-warning-soft" onclick="markNotInterested('${d.id}')"><i class="fas fa-ban"></i> Not Interested</button>` : ''}
+        </div>
+        <div style="display:flex;gap:.5rem">
+          ${adminOrCoord ? `<button class="btn btn-secondary" onclick="editCurrentDevotee()"><i class="fas fa-pencil-alt"></i> Edit</button>` : ''}
+          ${AppState.userRole === 'superAdmin' ? `<button class="btn btn-danger" onclick="deleteDevotee('${d.id}')"><i class="fas fa-trash"></i> Remove</button>` : ''}
+        </div>`;
+    }
   } catch (_) {
     content.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
   }
 }
 
-function editCurrentDevotee() { closeModal('profile-modal'); openDevoteeFormModal(false, AppState.currentDevoteeId); }
-
-const PROFILE_TABS = ['identity','professional','sadhana','family','team'];
-
-function switchProfileTab(tab, btn) {
-  document.querySelectorAll('.psec-panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.psec-tab').forEach(b => b.classList.remove('active'));
-  document.getElementById('psec-' + tab).classList.add('active');
+function switchProfileViewTab(tab, btn) {
+  const modal = document.getElementById('profile-modal');
+  if (!modal) return;
+  modal.querySelectorAll('.psec-tab').forEach(b => b.classList.remove('active'));
+  modal.querySelectorAll('.psec-panel').forEach(p => p.classList.remove('active'));
+  const panel = document.getElementById('pvpanel-' + tab);
+  if (panel) panel.classList.add('active');
   if (btn) btn.classList.add('active');
   else {
-    const allBtns = document.querySelectorAll('.psec-tab');
+    const idx = PROFILE_TABS.indexOf(tab);
+    const tabs = modal.querySelectorAll('.psec-tab');
+    if (tabs[idx]) tabs[idx].classList.add('active');
+  }
+}
+
+function editCurrentDevotee() { closeModal('profile-modal'); openDevoteeFormModal(false, AppState.currentDevoteeId); }
+
+const PROFILE_TABS = ['identity','team','professional','sadhana','family'];
+
+function switchProfileTab(tab, btn) {
+  const formModal = document.getElementById('devotee-form-modal');
+  if (!formModal) return;
+  formModal.querySelectorAll('.psec-panel').forEach(p => p.classList.remove('active'));
+  formModal.querySelectorAll('.psec-tab').forEach(b => b.classList.remove('active'));
+  document.getElementById('psec-' + tab)?.classList.add('active');
+  if (btn) btn.classList.add('active');
+  else {
+    const allBtns = formModal.querySelectorAll('.psec-tab');
     const idx = PROFILE_TABS.indexOf(tab);
     if (allBtns[idx]) allBtns[idx].classList.add('active');
   }
@@ -166,8 +212,10 @@ function switchProfileTab(tab, btn) {
 }
 
 function stepProfileTab(dir) {
-  const active = document.querySelector('.psec-tab.active');
-  const allBtns = [...document.querySelectorAll('.psec-tab')];
+  const formModal = document.getElementById('devotee-form-modal');
+  if (!formModal) return;
+  const allBtns = [...formModal.querySelectorAll('.psec-tab')];
+  const active = formModal.querySelector('.psec-tab.active');
   const idx = allBtns.indexOf(active);
   const next = allBtns[idx + dir];
   if (next) next.click();

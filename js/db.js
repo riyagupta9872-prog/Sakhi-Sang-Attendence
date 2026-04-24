@@ -309,10 +309,17 @@ const DB = {
   },
 
   async getSessionStats(sessionId) {
-    const sessSnap = await fdb.collection('sessions').doc(sessionId).get();
-    const week = sessSnap.exists ? sessSnap.data().sessionDate : getUpcomingSunday();
+    // Fetch session + calling config in parallel so we can map sessionDate → callingDate
+    const [sessSnap, cfgSnap] = await Promise.all([
+      fdb.collection('sessions').doc(sessionId).get(),
+      fdb.collection('settings').doc('callingWeek').get(),
+    ]);
+    const sessionDate = sessSnap.exists ? sessSnap.data().sessionDate : getUpcomingSunday();
+    const cfg = cfgSnap.exists ? cfgSnap.data() : null;
+    // callingStatus docs use callingDate as weekDate, not sessionDate
+    const weekDate = (cfg?.sessionDate === sessionDate) ? (cfg.callingDate || sessionDate) : sessionDate;
     const [cs, at] = await Promise.all([
-      fdb.collection('callingStatus').where('weekDate', '==', week).get(),
+      fdb.collection('callingStatus').where('weekDate', '==', weekDate).get(),
       fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get()
     ]);
     const confirmed = cs.docs.filter(d => d.data().comingStatus === 'Yes').length;
@@ -323,8 +330,14 @@ const DB = {
 
   /* ATTENDANCE */
   async getAttendanceCandidates(sessionId, search = '') {
-    const sessSnap = await fdb.collection('sessions').doc(sessionId).get();
-    const week = sessSnap.exists ? sessSnap.data().sessionDate : getUpcomingSunday();
+    // Fetch session + calling config together so we use the correct weekDate
+    const [sessSnap, cfgSnap] = await Promise.all([
+      fdb.collection('sessions').doc(sessionId).get(),
+      fdb.collection('settings').doc('callingWeek').get(),
+    ]);
+    const sessionDate = sessSnap.exists ? sessSnap.data().sessionDate : getUpcomingSunday();
+    const cfg = cfgSnap.exists ? cfgSnap.data() : null;
+    const week = (cfg?.sessionDate === sessionDate) ? (cfg.callingDate || sessionDate) : sessionDate;
     const [rawDevotees, csSnap, atSnap] = await Promise.all([
       DevoteeCache.all(),
       fdb.collection('callingStatus').where('weekDate', '==', week).get(),
@@ -388,22 +401,51 @@ const DB = {
     const doc = await fdb.collection('settings').doc('callingWeek').get();
     return doc.exists ? doc.data() : null;
   },
-  async setCallingWeekConfig(callingDate, sessionDate) {
-    await fdb.collection('settings').doc('callingWeek').set({
+  async setCallingWeekConfig(callingDate, sessionDate, extra = {}) {
+    const payload = {
       callingDate, sessionDate: sessionDate || '',
       updatedAt: TS(), updatedBy: AppState.userName
-    });
+    };
+    if (extra.topic       !== undefined) payload.topic       = extra.topic || '';
+    if (extra.speakerName !== undefined) payload.speakerName = extra.speakerName || '';
+    if (extra.sessionType !== undefined) payload.sessionType = extra.sessionType || 'regular';
+    await fdb.collection('settings').doc('callingWeek').set(payload, { merge: true });
+    // Also propagate topic onto the Session doc so it shows on attendance screen
+    if (sessionDate && (extra.topic !== undefined || extra.speakerName !== undefined || extra.sessionType !== undefined)) {
+      const snap = await fdb.collection('sessions').where('sessionDate','==',sessionDate).limit(1).get();
+      const update = { updatedAt: TS() };
+      if (extra.topic       !== undefined) update.topic       = extra.topic || '';
+      if (extra.speakerName !== undefined) update.speakerName = extra.speakerName || '';
+      if (extra.sessionType !== undefined) update.sessionType = extra.sessionType || 'regular';
+      if (snap.empty) {
+        await fdb.collection('sessions').add({ sessionDate, createdAt: TS(), ...update });
+      } else {
+        await snap.docs[0].ref.update(update);
+      }
+    }
   },
 
   /* CALLING */
   async getCallingStatus(weekDate) {
-    const [raw, csSnap] = await Promise.all([
+    const [raw, csSnap, cfgSnap] = await Promise.all([
       DevoteeCache.all(),
-      fdb.collection('callingStatus').where('weekDate', '==', weekDate).get()
+      fdb.collection('callingStatus').where('weekDate', '==', weekDate).get(),
+      fdb.collection('settings').doc('callingWeek').get(),
     ]);
     const csMap = {};
     csSnap.docs.forEach(d => { csMap[d.data().devoteeId] = { id: d.id, ...d.data() }; });
-    let filtered = raw.filter(d => d.callingBy && d.callingBy.trim() && !d.isNotInterested);
+    const sessionType = cfgSnap.exists ? (cfgSnap.data().sessionType || 'regular') : 'regular';
+    const isFestival  = sessionType === 'festival';
+    let filtered = raw.filter(d => {
+      if (d.isNotInterested) return false;
+      if (d.callingMode === 'not_interested') return false;
+      if (d.callingMode === 'online') return false;
+      if (d.callingMode === 'festival') {
+        if (!isFestival) return false;
+        return !!(d.callingBy && d.callingBy.trim());
+      }
+      return !!(d.callingBy && d.callingBy.trim());
+    });
     if (AppState.userRole !== 'superAdmin') {
       filtered = filtered.filter(d => d.callingBy === AppState.userName);
     }
@@ -778,13 +820,16 @@ const DB = {
   },
 
   async getTeamChangeHistory(devoteeId) {
+    // Single-field query only — composite index (devoteeId+fieldName+orderBy changedAt)
+    // does not exist, so filter and sort in memory instead.
     const snap = await fdb.collection('profileChanges')
       .where('devoteeId', '==', devoteeId)
-      .where('fieldName', '==', 'team_name')
-      .orderBy('changedAt', 'desc')
-      .limit(30)
       .get();
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(d => d.fieldName === 'team_name')
+      .sort((a, b) => (b.changedAt?.seconds || 0) - (a.changedAt?.seconds || 0))
+      .slice(0, 30);
   },
 
   async getSeriousReport(weekDate, sessionId) {
@@ -948,25 +993,37 @@ const DB = {
   },
 
   async getMgmtGridData(weekEntries) {
-    const results = await Promise.all(weekEntries.map(async ({ callingDate, sessionDate }) => {
-      const csSnap = await fdb.collection('callingStatus')
-        .where('weekDate', '==', callingDate).get();
-      const csMap = {};
-      csSnap.docs.forEach(d => { csMap[d.data().devoteeId] = d.data(); });
+    if (!weekEntries.length) return [];
+    // Round 1: fire ALL callingStatus queries and ALL session lookups in parallel
+    // (previously these were sequential per-week, causing avoidable latency).
+    const [csSnaps, sessSnaps] = await Promise.all([
+      Promise.all(weekEntries.map(w =>
+        fdb.collection('callingStatus').where('weekDate', '==', w.callingDate).get()
+      )),
+      Promise.all(weekEntries.map(w =>
+        w.sessionDate
+          ? fdb.collection('sessions').where('sessionDate', '==', w.sessionDate).limit(1).get()
+          : Promise.resolve(null)
+      )),
+    ]);
 
-      let atSet = new Set();
-      if (sessionDate) {
-        const sessSnap = await fdb.collection('sessions')
-          .where('sessionDate', '==', sessionDate).limit(1).get();
-        if (!sessSnap.empty) {
-          const attSnap = await fdb.collection('attendanceRecords')
-            .where('sessionId', '==', sessSnap.docs[0].id).get();
-          attSnap.docs.forEach(d => atSet.add(d.data().devoteeId));
-        }
-      }
-      return { callingDate, sessionDate, csMap, atSet };
-    }));
-    return results;
+    // Collect session IDs so we can fetch attendance in one parallel round.
+    const sessionIds = sessSnaps.map(snap => (snap && !snap.empty) ? snap.docs[0].id : null);
+
+    // Round 2: fire ALL attendanceRecord queries in parallel.
+    const attSnaps = await Promise.all(
+      sessionIds.map(sid =>
+        sid ? fdb.collection('attendanceRecords').where('sessionId', '==', sid).get() : Promise.resolve(null)
+      )
+    );
+
+    return weekEntries.map((w, i) => {
+      const csMap = {};
+      csSnaps[i].docs.forEach(d => { csMap[d.data().devoteeId] = d.data(); });
+      const atSet = new Set();
+      if (attSnaps[i]) attSnaps[i].docs.forEach(d => atSet.add(d.data().devoteeId));
+      return { callingDate: w.callingDate, sessionDate: w.sessionDate, csMap, atSet };
+    });
   },
 
   async getMgmtSeparateLists() {
@@ -978,7 +1035,9 @@ const DB = {
   },
 
   async setDevoteeCallingMode(devoteeId, mode) {
-    const updateData = { callingMode: mode || '', callingBy: '', updatedAt: TS() };
+    // Keep callingBy for 'festival' so they reappear during festival sessions
+    const updateData = { callingMode: mode || '', updatedAt: TS() };
+    if (mode === 'online' || mode === 'not_interested') updateData.callingBy = '';
     await fdb.collection('devotees').doc(devoteeId).update(updateData);
     await fdb.collection('profileChanges').add({
       devoteeId,

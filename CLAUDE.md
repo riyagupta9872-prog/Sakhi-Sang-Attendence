@@ -44,7 +44,7 @@ All application logic is split across 8 JS files in [js/](js/), loaded in order 
 ### Global State
 
 `AppState` ([js/config.js](js/config.js)) is the single source of truth:
-- `userRole` / `userTeam` / `userId` — set on login, drive all permission checks
+- `userRole` / `userTeam` / `userId` / `userPosition` — set on login, drive all permission checks (`userPosition` is a free-text field from the user profile, e.g. `'Facilitator'`)
 - `currentTab` / `currentSessionId` / `currentDevoteeId` — UI navigation state
 - `devoteeSelectMode` / `selectedDevotees` — bulk-action state
 
@@ -60,7 +60,7 @@ Three roles with hardcoded permission gates throughout the UI:
 | Collection | Purpose |
 |---|---|
 | `users` | Auth profiles with role + team |
-| `devotees` | Devotee profiles (soft-deleted via `status: 'inactive'`) |
+| `devotees` | Devotee profiles (soft-deleted via `isActive: false`) |
 | `sessions` | Sunday class sessions |
 | `attendanceRecords` | Per-session per-devotee attendance |
 | `callingStatus` | Weekly calling outcome per devotee |
@@ -72,7 +72,7 @@ Three roles with hardcoded permission gates throughout the UI:
 
 - `DevoteeCache` — 90-second TTL in-memory cache of active devotees
 - `sessionsCache` on `AppState` — maps session IDs to session metadata
-- Service worker version string is `sakhi-sang-v25` in `sw.js` — bump this to invalidate cached assets
+- Service worker version string is `sakhi-sang-v26` in `sw.js` — bump this on every deployment to invalidate cached assets. App JS files use **network-first** strategy so new code is always fetched without a hard refresh; other static assets use cache-first.
 
 ## Firebase Setup
 
@@ -84,7 +84,8 @@ To run against a new Firebase project, replace `firebaseConfig` in [js/config.js
 ## Important Conventions
 
 - **No modules/imports** — everything is global. New functions go in the `js/` file matching their feature area.
-- **Soft-delete only** — devotees are never hard-deleted; set `isActive: false` (NOT `status: 'inactive'` — that field does not exist on devotee docs).
+- **camelCase ↔ snake_case** — Firestore documents store camelCase fields (e.g. `teamName`, `isActive`). `DB` methods return snake_case objects to the UI (via `toSnake()` in `db.js`). Writes go through `toCamel()`. Don't bypass these converters.
+- **Soft-delete only** — devotees are never hard-deleted; set `isActive: false`. A separate `isNotInterested: true` flag (with `notInterestedAt` timestamp) moves a devotee to the "Not Interested" list without deactivating them.
 - **Team scoping** — `teamAdmin` queries always include `.where('team', '==', AppState.userTeam)`. Don't add unscoped queries for `teamAdmin` role.
 - **Fiscal year** — Apr–Mar (not Jan–Dec). The calling list export uses this for date filtering.
 - **Date utilities** — use `DateUtils` helpers for Sunday snapping and display formatting; don't use raw `Date` arithmetic elsewhere.

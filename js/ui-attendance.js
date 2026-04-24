@@ -26,8 +26,8 @@ function getFYYears() {
   return years;
 }
 
-function initSheetYearSelector() {
-  const sel = document.getElementById('sheet-year');
+function initSheetYearSelector(elId) {
+  const sel = document.getElementById(elId || 'sheet-year');
   if (!sel || sel.options.length > 0) return;
   getFYYears().forEach((y, i) => {
     const opt = document.createElement('option');
@@ -38,28 +38,67 @@ function initSheetYearSelector() {
   });
 }
 
+// Simple roster (Attendance tab) — no per-session CS/AT columns
 async function loadAttendanceSheet() {
-  initSheetYearSelector();
   const wrap = document.getElementById('attendance-sheet-wrap');
-  const yearVal = document.getElementById('sheet-year').value;
   const teamFilter = document.getElementById('sheet-team').value;
-  if (!yearVal) return;
-  const { start, end } = JSON.parse(yearVal);
-  wrap.innerHTML = '<div class="loading" style="padding:2rem"><i class="fas fa-spinner"></i> Loading attendance data…</div>';
+  wrap.innerHTML = '<div class="loading" style="padding:2rem"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
-    const { sessions, devotees, attMap, csMap } = await DB.getSheetData(start, end);
-    if (!sessions.length) {
-      wrap.innerHTML = '<div class="empty-state"><i class="fas fa-table"></i><p>No sessions found for this year</p></div>';
-      return;
-    }
-    wrap.innerHTML = buildSheetTable(devotees, sessions, attMap, csMap, teamFilter);
+    const devotees = await DevoteeCache.all();
+    wrap.innerHTML = buildSimpleRoster(devotees, teamFilter);
   } catch (e) {
     console.error('Sheet error', e);
-    wrap.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load sheet data</p></div>';
+    wrap.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
   }
 }
 
-function buildSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
+function buildSimpleRoster(devotees, teamFilter) {
+  let rows = [...devotees];
+  if (teamFilter) rows = rows.filter(d => d.teamName === teamFilter);
+  rows.sort((a, b) => (a.teamName || '').localeCompare(b.teamName || '') || a.name.localeCompare(b.name));
+  if (!rows.length) return '<div class="empty-state"><i class="fas fa-users"></i><p>No devotees found</p></div>';
+
+  let currentTeam = null;
+  const bodyRows = rows.map((d, i) => {
+    const isActive = d.isActive !== false;
+    const total = d.lifetimeAttendance || 0;
+    const totalBg = total >= 30 ? 'background:#b2ebf2;font-weight:700' : total >= 15 ? 'background:#c8e6c9;font-weight:600' : total >= 5 ? 'background:#fff9c4' : '';
+    let teamRow = '';
+    if (d.teamName !== currentTeam) {
+      currentTeam = d.teamName;
+      teamRow = `<tr style="background:#e8f5e9"><td colspan="9" style="font-weight:700;color:var(--primary);padding:.3rem .6rem;font-size:.82rem">${currentTeam || '—'}</td></tr>`;
+    }
+    return teamRow + `<tr style="${isActive ? 'background:#fffde7' : 'background:#ffebee'}">
+      <td class="sh-cell sh-center sh-sno">${i + 1}</td>
+      <td class="sh-cell sh-name">${d.name}</td>
+      <td class="sh-cell sh-center">${d.mobile || '—'}</td>
+      <td class="sh-cell">${d.referenceBy || ''}</td>
+      <td class="sh-cell sh-center">${d.chantingRounds || 0}</td>
+      <td class="sh-cell sh-center">${isActive ? '<span class="sh-active">Active</span>' : ''}</td>
+      <td class="sh-cell">${d.teamName || ''}</td>
+      <td class="sh-cell">${d.callingBy || ''}</td>
+      <td class="sh-cell sh-center" style="${totalBg}">${total}</td>
+    </tr>`;
+  }).join('');
+
+  return `<table class="attendance-sheet-table">
+    <thead><tr>
+      <th class="sh-header sh-sno">Sno</th>
+      <th class="sh-header" style="min-width:130px">Name</th>
+      <th class="sh-header">Mobile</th>
+      <th class="sh-header">Reference</th>
+      <th class="sh-header">CR</th>
+      <th class="sh-header">Active</th>
+      <th class="sh-header">Team</th>
+      <th class="sh-header">Calling By</th>
+      <th class="sh-header sh-total">Total AT</th>
+    </tr></thead>
+    <tbody>${bodyRows}</tbody>
+  </table>`;
+}
+
+// Full CS+AT grid (Reports → Yearly Sheet tab)
+function buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
   let rows = [...devotees];
   if (teamFilter) rows = rows.filter(d => d.teamName === teamFilter);
   rows.sort((a, b) => (a.teamName || '').localeCompare(b.teamName || '') || a.name.localeCompare(b.name));
@@ -90,7 +129,6 @@ function buildSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
 
   const bodyRows = rows.map((d, i) => {
     const isActive = d.isActive !== false;
-    const rowBg = isActive ? 'background:#fffde7' : 'background:#ffebee';
     let cells = `<td class="sh-cell sh-center sh-sno">${i + 1}</td>
       <td class="sh-cell sh-name">${d.name}</td>
       <td class="sh-cell sh-center">${d.mobile || '—'}</td>
@@ -112,7 +150,7 @@ function buildSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
     const total = d.lifetimeAttendance || 0;
     const totalBg = total >= 30 ? 'background:#b2ebf2;font-weight:700' : total >= 15 ? 'background:#c8e6c9;font-weight:600' : total >= 5 ? 'background:#fff9c4' : '';
     cells += `<td class="sh-cell sh-center" style="${totalBg}">${total}</td>`;
-    return `<tr style="${rowBg}">${cells}</tr>`;
+    return `<tr style="${isActive ? 'background:#fffde7' : 'background:#ffebee'}">${cells}</tr>`;
   }).join('');
 
   return `<table class="attendance-sheet-table">
@@ -180,8 +218,7 @@ async function loadAttendanceSession(sessionId) {
   if (!sessionId) return;
   AppState.currentSessionId = sessionId;
   const s = AppState.sessionsCache[sessionId];
-  const picker = document.getElementById('session-date-picker');
-  if (picker && s?.session_date) picker.value = s.session_date;
+  if (s?.session_date) _setSessionDateDisplay(s.session_date);
   showSessionInfo(sessionId);
   await Promise.all([updateAttendanceStats(), loadAttendanceCandidates()]);
 }

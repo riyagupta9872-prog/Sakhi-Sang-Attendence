@@ -111,9 +111,11 @@ function teamBadge(t) { return t ? `<span class="badge badge-team">${t}</span>` 
 function contactIcons(mobile) {
   if (!mobile) return '';
   const c = mobile.replace(/\D/g, '');
+  // WhatsApp expects country-coded numbers. If 10 digits (IN), prefix 91.
+  const wa = c.length === 10 ? '91' + c : c;
   return `<div class="contact-icons">
-    <a href="tel:${c}" class="contact-icon icon-phone" onclick="event.stopPropagation()" title="Call"><i class="fas fa-phone"></i></a>
-    <a href="https://wa.me/91${c}" target="_blank" class="contact-icon icon-whatsapp" onclick="event.stopPropagation()" title="WhatsApp"><i class="fab fa-whatsapp"></i></a>
+    <a href="tel:${c}" class="contact-icon icon-phone" onclick="event.stopPropagation()" title="Call"><i class="fas fa-phone-alt"></i></a>
+    <a href="https://wa.me/${wa}" target="_blank" rel="noopener" class="contact-icon icon-whatsapp" onclick="event.stopPropagation()" title="WhatsApp"><i class="fab fa-whatsapp"></i></a>
   </div>`;
 }
 
@@ -128,9 +130,44 @@ function showToast(msg, type = '') {
 function debounce(fn, ms) {
   let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
-function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
-function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
+// Back-button support: keep one history entry while any overlay is open.
+// When the user taps Back, close every open overlay at once.
+let _overlayHistoryPushed = false;
+function _ensureOverlayHistory() {
+  if (!_overlayHistoryPushed) {
+    try { history.pushState({ overlay: true }, '', location.href); } catch (_) {}
+    _overlayHistoryPushed = true;
+  }
+}
+
+function openModal(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.remove('hidden');
+  _ensureOverlayHistory();
+}
+function closeModal(id) {
+  document.getElementById(id)?.classList.add('hidden');
+}
 function openImportModal() { openModal('import-modal'); }
+
+window.addEventListener('popstate', () => {
+  let closedAny = false;
+  document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => {
+    m.classList.add('hidden'); closedAny = true;
+  });
+  const sb = document.getElementById('app-sidebar');
+  if (sb?.classList.contains('open')) {
+    sb.classList.remove('open');
+    document.getElementById('sidebar-overlay')?.classList.add('hidden');
+    closedAny = true;
+  }
+  if (typeof _cmSelectMode !== 'undefined' && _cmSelectMode) {
+    _exitCMSelectMode?.(); closedAny = true;
+  }
+  _overlayHistoryPushed = false;
+  // If nothing was closed, let the browser actually navigate back next time
+});
 
 // ── DEVOTEE CACHE (90-second TTL) ────────────────────
 const DevoteeCache = {

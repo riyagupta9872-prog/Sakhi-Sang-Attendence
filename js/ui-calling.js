@@ -1,19 +1,12 @@
 /* ══ UI-CALLING.JS – Calling status tab, reports, late tracking ══ */
 
 let _callingActiveTab = 'list';
+let _callingLocked = false;
 
 function switchCallingTab(tab, btn) {
-  _callingActiveTab = tab;
-  document.querySelectorAll('#calling-main-tabs .att-sub-tab').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  ['list','reports','late','notinterested'].forEach(p => {
-    const el = document.getElementById(`calling-panel-${p}`);
-    if (el) el.classList.toggle('active', p === tab);
-  });
-  if (tab === 'list') loadCallingStatus();
-  if (tab === 'reports') _populateReportWeeks().then(loadCallingReports);
-  if (tab === 'late')          loadLateReports();
-  if (tab === 'notinterested') loadNotInterestedList();
+  // Legacy no-op: Calling tab now shows only the calling list.
+  _callingActiveTab = 'list';
+  loadCallingStatus();
 }
 
 
@@ -242,14 +235,41 @@ async function saveCallingWeekConfig() {
 }
 
 async function loadCallingStatus() {
+  _callingLocked = false;
   document.getElementById('calling-list').innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
     const cfg = await DB.getCallingWeekConfig();
-    const week = cfg?.callingDate || '';
-    const sessionDate = cfg?.sessionDate || '';
-    window._callingSessionDate = sessionDate;
+    let week = cfg?.callingDate || '';
+    let sessionDate = cfg?.sessionDate || '';
+    let isHistoryFallback = false;
+    let beforeCallingDate = false;
 
+    if (week) {
+      const today = getToday();
+      if (today < week) {
+        // Before calling date → list is read-only, no submit yet
+        _callingLocked = true;
+        beforeCallingDate = true;
+      } else if (today > week) {
+        // After calling date → locked (past)
+        _callingLocked = true;
+      } else {
+        // today === callingDate: open until 11:59 PM
+        _callingLocked = Date.now() > new Date(week + 'T23:59:00').getTime();
+      }
+    } else {
+      _callingLocked = true;
+      isHistoryFallback = true;
+      const history = await DB.getCallingWeekHistory(1);
+      if (history.length) {
+        week = history[0].callingDate;
+        sessionDate = history[0].sessionDate || '';
+      }
+    }
+
+    window._callingSessionDate = sessionDate;
     document.getElementById('calling-week').value = week;
+
     const disp = document.getElementById('calling-dates-display');
     if (disp) {
       if (week) {
@@ -261,17 +281,24 @@ async function loadCallingStatus() {
       }
     }
 
+    _renderSessionInfoChip(cfg, sessionDate);
+
     if (!week) {
-      document.getElementById('calling-list').innerHTML = '<div class="empty-state"><i class="fas fa-calendar-times"></i><p>No calling date configured yet.<br>Use <i class="fas fa-cog"></i> to set calling &amp; session dates.</p></div>';
+      document.getElementById('calling-list').innerHTML = '<div class="empty-state"><i class="fas fa-calendar-times"></i><p>No session configured yet.<br>Super Admin must configure the next session from the sidebar.</p></div>';
       document.getElementById('calling-stats').innerHTML = '';
+      const bar = document.getElementById('calling-submit-bar');
+      if (bar) bar.innerHTML = '';
       return;
     }
 
+    window._beforeCallingDate = beforeCallingDate;
+
     const [devotees, mySubmission] = await Promise.all([
       DB.getCallingStatus(week),
-      DB.getMyCallingSubmission(week, AppState.userId).catch(() => null)
+      _callingLocked ? Promise.resolve(null) : DB.getMyCallingSubmission(week, AppState.userId).catch(() => null)
     ]);
     AppState.callingData = devotees;
+
     const teamSel = document.getElementById('calling-filter-team');
     const prevTeam = teamSel.value;
     teamSel.innerHTML = '<option value="">All Teams</option>' +
@@ -282,12 +309,92 @@ async function loadCallingStatus() {
     const callers = [...new Set(devotees.map(d => d.calling_by).filter(Boolean))].sort();
     bySel.innerHTML = '<option value="">All Calling By</option>' +
       callers.map(c => `<option value="${c}"${prevBy===c?' selected':''}>${c}</option>`).join('');
+
     renderCallingStats(devotees);
-    _renderCallingSubmitBar(week, mySubmission);
+    if (_callingLocked) {
+      _renderLockedBanner(isHistoryFallback, week, window._beforeCallingDate);
+    } else {
+      _renderCallingSubmitBar(week, mySubmission);
+    }
     filterCallingList();
   } catch (e) {
     console.error(e);
     document.getElementById('calling-list').innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+  }
+}
+
+function _renderSessionInfoChip(cfg, sessionDate) {
+  const host = document.getElementById('calling-panel-list');
+  if (!host) return;
+  let chip = document.getElementById('calling-session-chip');
+  if (!chip) {
+    chip = document.createElement('div');
+    chip.id = 'calling-session-chip';
+    chip.className = 'session-info-chip';
+    host.insertBefore(chip, host.firstChild);
+  }
+  const parts = [];
+  if (cfg?.topic) {
+    parts.push(`<span class="sic-item"><i class="fas fa-book-open"></i> <span class="sic-label">Topic:</span> <strong>${cfg.topic}</strong></span>`);
+  }
+  if (cfg?.speakerName) {
+    parts.push(`<span class="sic-item"><i class="fas fa-user-tie"></i> <span class="sic-label">Speaker:</span> <strong>${cfg.speakerName}</strong></span>`);
+  }
+  if (sessionDate) {
+    const sd = new Date(sessionDate + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' });
+    parts.push(`<span class="sic-item"><i class="fas fa-chalkboard-teacher"></i> <span class="sic-label">Upcoming Class:</span> <strong>${sd}</strong></span>`);
+  }
+  if (cfg?.sessionType) {
+    const cls = cfg.sessionType === 'festival' ? 'sic-type-festival' : 'sic-type-regular';
+    parts.push(`<span class="${cls}">${cfg.sessionType === 'festival' ? '🌟 Festival' : '● Regular'}</span>`);
+  }
+  if (!parts.length) {
+    chip.style.display = 'none';
+    return;
+  }
+  chip.style.display = '';
+  chip.innerHTML = parts.join('');
+}
+
+function _renderLockedBanner(isHistoryFallback, weekDate, beforeCallingDate) {
+  const bar = document.getElementById('calling-submit-bar');
+  if (!bar) return;
+  const weekLabel = weekDate
+    ? new Date(weekDate + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric', weekday:'short' })
+    : '';
+  if (beforeCallingDate) {
+    bar.style.background  = '#fff8e1';
+    bar.style.borderColor = '#ffcc80';
+    bar.innerHTML = `<div style="flex:1">
+      <span style="font-size:.9rem;font-weight:700;color:#e65100">
+        <i class="fas fa-hourglass-half"></i> Calling opens on <strong>${weekLabel}</strong>
+      </span>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem">
+        Your devotee list is available for reference. Submit will unlock on the calling date.
+      </div>
+    </div>`;
+  } else if (isHistoryFallback) {
+    bar.style.background  = '#e3f2fd';
+    bar.style.borderColor = '#90caf9';
+    bar.innerHTML = `<div style="flex:1">
+      <span style="font-size:.9rem;font-weight:700;color:#0d47a1">
+        <i class="fas fa-info-circle"></i> Showing previous week — <strong>${weekLabel}</strong>
+      </span>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem">
+        No session is configured. This is last week's data for reference. Super Admin must configure the next session.
+      </div>
+    </div>`;
+  } else {
+    bar.style.background  = '#fce4ec';
+    bar.style.borderColor = '#ef9a9a';
+    bar.innerHTML = `<div style="flex:1">
+      <span style="font-size:.9rem;font-weight:700;color:#b71c1c">
+        <i class="fas fa-lock"></i> Calling date of <strong>${weekLabel}</strong> has passed
+      </span>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem">
+        The submission window (until 11:59 PM on calling date) has closed. This list is read-only.
+      </div>
+    </div>`;
   }
 }
 
@@ -403,15 +510,15 @@ function filterCallingList() {
       return d.calling_reason === s;
     }
     return true;
-  }));
+  }), _callingLocked);
 }
 
-function renderCallingList(devotees) {
+function renderCallingList(devotees, locked) {
   const wrap = document.getElementById('calling-list');
   if (!devotees.length) { wrap.innerHTML = '<div class="empty-state"><i class="fas fa-phone-slash"></i><p>No devotees found</p></div>'; return; }
   wrap.innerHTML = `<table class="calling-table">
-    <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>✓ Coming</th><th>Reason &amp; Notes</th></tr></thead>
-    <tbody>${devotees.map((d, i) => renderCallingRow(d, i + 1)).join('')}</tbody>
+    <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>${locked ? 'Status' : '✓ Coming'}</th><th>Reason &amp; Notes</th></tr></thead>
+    <tbody>${devotees.map((d, i) => renderCallingRow(d, i + 1, locked)).join('')}</tbody>
   </table>`;
 }
 
@@ -421,12 +528,44 @@ function _reasonOptions(selected) {
   ).join('');
 }
 
-function renderCallingRow(d, i) {
+function renderCallingRow(d, i, locked) {
   const isYes   = d.coming_status === 'Yes';
   const reason  = d.calling_reason || '';
-  const needsDate = _reasonNeedsDate(reason);
   const safeId  = d.id;
   const safeName = d.name.replace(/'/g,"\\'");
+
+  if (locked) {
+    const avail = (_reasonNeedsDate(reason) && d.available_from) ? ` · from ${formatDate(d.available_from)}` : '';
+    let statusChip;
+    if (isYes) {
+      statusChip = `<span style="background:#e8f5e9;color:#1b5e20;padding:.2rem .6rem;border-radius:4px;font-size:.82rem;font-weight:600"><i class="fas fa-check-circle"></i> Coming</span>`;
+    } else if (reason) {
+      statusChip = `<span style="background:#fff3e0;color:#bf360c;padding:.2rem .6rem;border-radius:4px;font-size:.82rem">${_reasonLabel(reason)}${avail}</span>`;
+    } else {
+      statusChip = `<span style="color:var(--text-muted);font-size:.82rem">—</span>`;
+    }
+    const notesHtml = d.calling_notes
+      ? `<div style="font-size:.75rem;color:var(--text-muted);font-style:italic">"${(d.calling_notes||'').replace(/"/g,'&quot;')}"</div>`
+      : `<span style="color:var(--text-muted);font-size:.75rem">—</span>`;
+    return `<tr data-id="${safeId}" class="${isYes ? 'row-confirmed' : (reason ? 'row-has-reason' : '')}">
+      <td class="cs-num">${i}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:.4rem">
+          <div class="devotee-avatar" style="width:28px;height:28px;font-size:.65rem;flex-shrink:0">${initials(d.name)}</div>
+          <span class="calling-name-link" onclick="openCallingHistory('${safeId}','${safeName}')">
+            ${d.name}${isBirthdayWeek(d.dob) ? ' <i class="fas fa-birthday-cake" style="color:var(--gold);font-size:.7rem"></i>' : ''}
+          </span>
+        </div>
+      </td>
+      <td>${contactIcons(d.mobile)}</td>
+      <td>${teamBadge(d.team_name)}</td>
+      <td class="cs-callingby">${d.calling_by || '—'}</td>
+      <td>${statusChip}</td>
+      <td><div class="reason-notes-cell">${notesHtml}</div></td>
+    </tr>`;
+  }
+
+  const needsDate = _reasonNeedsDate(reason);
   const updTime = d.updated_at_client
     ? `<span class="calling-upd-time">${new Date(d.updated_at_client).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true})}</span>` : '';
   return `<tr data-id="${safeId}" class="${isYes ? 'row-confirmed' : (reason ? 'row-has-reason' : '')}">
@@ -494,6 +633,7 @@ async function openCallingHistory(devoteeId, devoteeName) {
 }
 
 async function toggleComing(devoteeId, btn) {
+  if (_callingLocked) return;
   const week = document.getElementById('calling-week').value;
   const d = AppState.callingData.find(x => x.id === devoteeId);
   const row = btn.closest('tr');
@@ -523,6 +663,7 @@ async function toggleComing(devoteeId, btn) {
 }
 
 function onReasonChange(devoteeId, sel) {
+  if (_callingLocked) return;
   const reason = sel.value;
   const row = sel.closest('tr');
   const notesInput = row?.querySelector('.calling-notes-input');
@@ -559,6 +700,7 @@ function onReasonChange(devoteeId, sel) {
 }
 
 async function updateAvailableFrom(devoteeId, date) {
+  if (_callingLocked) return;
   const week = document.getElementById('calling-week').value;
   const row = document.querySelector(`tr[data-id="${devoteeId}"]`);
   const notesInput = row?.querySelector('.calling-notes-input');
@@ -572,6 +714,7 @@ async function updateAvailableFrom(devoteeId, date) {
 
 const _reasonTimers = {};
 function _saveCallingReason(devoteeId, reason, notes, availFrom) {
+  if (_callingLocked) return;
   clearTimeout(_reasonTimers[devoteeId]);
   _reasonTimers[devoteeId] = setTimeout(async () => {
     const week = document.getElementById('calling-week').value;
@@ -590,6 +733,7 @@ function _saveCallingReason(devoteeId, reason, notes, availFrom) {
 
 const _notesTimers = {};
 function updateCallingNotes(devoteeId, notes) {
+  if (_callingLocked) return;
   clearTimeout(_notesTimers[devoteeId]);
   _notesTimers[devoteeId] = setTimeout(async () => {
     const week = document.getElementById('calling-week').value;
@@ -965,61 +1109,91 @@ async function loadLateReports() {
   try {
     const { fourWeeks, submMap, teamRows } = await DB.getSubmissionReport();
 
-    if (!fourWeeks.length) {
+    // Scope to 4 calling weeks up to the selected session's date (main filter)
+    const refDate = (typeof _reportActive !== 'undefined' && _reportActive?.session_date)
+      ? _reportActive.session_date
+      : getToday();
+    const weeks = fourWeeks.filter(w => w <= refDate).slice(-4);
+
+    if (!weeks.length) {
       el.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><p>No submissions yet</p></div>';
       return;
     }
 
-    function fmtCell(name, weekDate) {
-      const sub = submMap[weekDate]?.[name];
-      if (!sub || !sub.initial) return `<td class="sr-cell sr-empty">—</td>`;
-      const t = new Date(sub.initial);
-      const time = t.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', hour12:true });
-      const isLate = t.getHours() >= 21;
-      return `<td class="sr-cell${isLate ? ' sr-late' : ' sr-ok'}">
-        <i class="fas fa-${isLate ? 'exclamation-circle' : 'check-circle'}"></i> ${time}
-      </td>`;
-    }
-
-    const weekHeaders = fourWeeks.map(w =>
-      `<th class="sr-wk-hdr">${new Date(w + 'T00:00:00').toLocaleDateString('en-IN',{day:'numeric',month:'short'})}<br><span style="font-size:.7rem;font-weight:400;color:var(--text-muted)">${new Date(w + 'T00:00:00').toLocaleDateString('en-IN',{weekday:'short'})}</span></th>`
-    ).join('');
-
-    let html = `
-      <div class="sr-legend">
-        <span class="sr-leg-ok"><i class="fas fa-check-circle"></i> On time</span>
-        <span class="sr-leg-late"><i class="fas fa-exclamation-circle"></i> After 9 PM (late)</span>
-        <span style="color:var(--text-muted);font-size:.78rem"><i class="fas fa-lock"></i> Shows first submission time — locked</span>
-      </div>`;
-
+    // Flatten coordinators into one list, annotate lateness per week
+    const rows = [];
     teamRows.forEach(({ team, admin, coordinators }) => {
-      const allCoords = admin ? [admin, ...coordinators.filter(c => c !== admin)] : coordinators;
-      if (!allCoords.length) return;
-
-      html += `<div class="sr-team-block">
-        <div class="sr-team-banner"><i class="fas fa-users"></i> ${team}</div>
-        <div style="overflow-x:auto">
-        <table class="calling-table sr-table">
-          <thead><tr>
-            <th style="min-width:180px">Coordinator</th>
-            ${weekHeaders}
-          </tr></thead>
-          <tbody>`;
-
-      allCoords.forEach(name => {
-        const isAdmin = name === admin;
-        const badge = isAdmin
-          ? `<span class="badge-tc"><i class="fas fa-crown"></i> Team Coordinator</span>` : '';
-        html += `<tr class="${isAdmin ? 'sr-admin-row' : ''}">
-          <td style="font-weight:${isAdmin ? '700' : '500'}">${name} ${badge}</td>
-          ${fourWeeks.map(w => fmtCell(name, w)).join('')}
-        </tr>`;
+      const names = [admin, ...coordinators.filter(c => c !== admin)].filter(Boolean);
+      names.forEach(name => {
+        const cells = weeks.map(w => {
+          const sub = submMap[w]?.[name];
+          if (!sub?.initial) return { text: '—', late: null, state: 'none' };
+          const t = new Date(sub.initial);
+          const time = t.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', hour12:true });
+          const isLate = t.getHours() >= 21;
+          return { text: time, late: isLate, state: isLate ? 'late' : 'ok' };
+        });
+        const lateCount = cells.filter(c => c.late === true).length;
+        // Most-recent-late index (weeks are oldest → newest; higher = newer)
+        let recentLateIdx = -1;
+        cells.forEach((c, i) => { if (c.late) recentLateIdx = Math.max(recentLateIdx, i); });
+        rows.push({ name, team, isAdmin: name === admin, cells, lateCount, recentLateIdx });
       });
-
-      html += `</tbody></table></div></div>`;
     });
 
-    el.innerHTML = html;
+    // Sort: most late weeks first; tie → most recent lateness first; tie → name
+    rows.sort((a, b) => {
+      if (b.lateCount !== a.lateCount)          return b.lateCount - a.lateCount;
+      if (b.recentLateIdx !== a.recentLateIdx)  return b.recentLateIdx - a.recentLateIdx;
+      return a.name.localeCompare(b.name);
+    });
+
+    const weekHeaders = weeks.map(w => {
+      const dt = new Date(w + 'T00:00:00');
+      return `<th class="sr-wk-hdr">
+        ${dt.toLocaleDateString('en-IN',{day:'numeric',month:'short'})}
+        <br><span style="font-size:.7rem;font-weight:400;opacity:.8">${dt.toLocaleDateString('en-IN',{weekday:'short'})}</span>
+      </th>`;
+    }).join('');
+
+    const body = rows.map((r, i) => {
+      const rowCls = r.lateCount >= 4 ? 'sr-row-l4'
+                  : r.lateCount === 3 ? 'sr-row-l3'
+                  : r.lateCount === 2 ? 'sr-row-l2'
+                  : r.lateCount === 1 ? 'sr-row-l1' : '';
+      const badge = r.isAdmin
+        ? `<span class="badge-tc" style="margin-left:.3rem;font-size:.66rem"><i class="fas fa-crown"></i> TC</span>` : '';
+      return `<tr class="${rowCls}">
+        <td style="text-align:center;color:var(--text-muted);font-size:.78rem">${i + 1}</td>
+        <td style="font-weight:600">${r.name}${badge}</td>
+        <td>${teamBadge(r.team)}</td>
+        ${r.cells.map(c => {
+          if (c.state === 'none') return `<td class="sr-cell sr-empty">—</td>`;
+          if (c.state === 'late') return `<td class="sr-cell sr-late"><i class="fas fa-exclamation-circle"></i> ${c.text}</td>`;
+          return `<td class="sr-cell sr-ok"><i class="fas fa-check-circle"></i> ${c.text}</td>`;
+        }).join('')}
+        <td style="text-align:center;font-weight:700;color:${r.lateCount>0 ? 'var(--danger)' : 'var(--text-muted)'}">${r.lateCount}</td>
+      </tr>`;
+    }).join('');
+
+    el.innerHTML = `
+      <div class="sr-legend" style="margin-bottom:.6rem">
+        <span class="sr-leg-ok"><i class="fas fa-check-circle"></i> On time</span>
+        <span class="sr-leg-late"><i class="fas fa-exclamation-circle"></i> After 9 PM</span>
+        <span style="color:var(--text-muted);font-size:.78rem"><i class="fas fa-sort-amount-down"></i> Sorted: most late first</span>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="calling-table sr-table" style="margin:0;min-width:640px">
+          <thead><tr>
+            <th style="min-width:36px">#</th>
+            <th style="min-width:160px">Name</th>
+            <th style="min-width:110px">Team</th>
+            ${weekHeaders}
+            <th style="min-width:60px;text-align:center">Late</th>
+          </tr></thead>
+          <tbody>${body || '<tr><td colspan="99" style="text-align:center;padding:1.5rem;color:var(--text-muted)">No data</td></tr>'}</tbody>
+        </table>
+      </div>`;
   } catch (e) {
     console.error(e);
     el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';

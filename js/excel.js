@@ -275,9 +275,34 @@ async function exportCallingList() {
 
 // ── EXPORT SHEET EXCEL ────────────────────────────────
 async function exportSheetExcel() {
-  initSheetYearSelector();
-  const yearVal = document.getElementById('sheet-year').value;
-  const teamFilter = document.getElementById('sheet-team').value;
+  const teamFilter = document.getElementById('sheet-team')?.value || '';
+  showToast('Preparing roster Excel…');
+  try {
+    const devotees = await DevoteeCache.all();
+    let rows = [...devotees];
+    if (teamFilter) rows = rows.filter(d => d.teamName === teamFilter);
+    rows.sort((a, b) => (a.teamName || '').localeCompare(b.teamName || '') || a.name.localeCompare(b.name));
+
+    const headerRow = ['Sno', 'Name', 'Mobile', 'Reference', 'CR', 'Active', 'Team', 'Calling By', 'Total Attendance'];
+    const dataRows = rows.map((d, i) => [
+      i + 1, d.name, d.mobile || '', d.referenceBy || '',
+      d.chantingRounds || 0, d.isActive !== false ? 'Active' : '',
+      d.teamName || '', d.callingBy || '', d.lifetimeAttendance || 0,
+    ]);
+
+    const ws = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]);
+    ws['!cols'] = [{ wch: 5 }, { wch: 26 }, { wch: 13 }, { wch: 20 }, { wch: 5 }, { wch: 8 }, { wch: 14 }, { wch: 20 }, { wch: 10 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Devotee Roster');
+    XLSX.writeFile(wb, 'Devotee_Roster.xlsx');
+    showToast('Roster downloaded!', 'success');
+  } catch (e) { console.error(e); showToast('Export failed', 'error'); }
+}
+
+async function exportYearlySheetExcel() {
+  initSheetYearSelector('yearly-sheet-year');
+  const yearVal = document.getElementById('yearly-sheet-year')?.value;
+  const teamFilter = document.getElementById('yearly-sheet-team')?.value || '';
   if (!yearVal) return showToast('Select a year first', 'error');
   const { start, end } = JSON.parse(yearVal);
   showToast('Preparing Excel…');
@@ -309,9 +334,9 @@ async function exportSheetExcel() {
 
     const ws = XLSX.utils.aoa_to_sheet([headerRow1, headerRow2, ...dataRows]);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Attendance Sheet');
+    XLSX.utils.book_append_sheet(wb, ws, 'Yearly Sheet');
     const yearLabel = JSON.parse(yearVal).start.slice(0, 4);
-    XLSX.writeFile(wb, `attendance_sheet_${yearLabel}.xlsx`);
+    XLSX.writeFile(wb, `Yearly_Sheet_FY${yearLabel}.xlsx`);
     showToast('Excel downloaded!', 'success');
   } catch (e) { console.error(e); showToast('Export failed', 'error'); }
 }

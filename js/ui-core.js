@@ -241,16 +241,206 @@ async function saveEditProfile() {
 }
 
 function _applyHeaderAvatar() {
-  const img   = document.getElementById('header-avatar-img');
-  const inits = document.getElementById('header-avatar-initials');
-  const pic   = AppState.profilePic;
-  if (pic) {
-    img.src = pic; img.style.display = 'block';
-    inits.style.display = 'none';
-  } else {
-    img.style.display = 'none';
-    inits.textContent = initials(AppState.userName || '?');
-    inits.style.display = '';
+  _applySidebarInfo();
+}
+
+function _applySidebarInfo() {
+  const img   = document.getElementById('sidebar-avatar-img');
+  const inits = document.getElementById('sidebar-avatar-initials');
+  const name  = document.getElementById('sidebar-user-name');
+  const role  = document.getElementById('sidebar-user-role');
+  if (name) name.textContent = AppState.userName || '';
+  if (role) {
+    const r = AppState.userRole;
+    const t = AppState.userTeam;
+    const p = AppState.userPosition;
+    role.textContent = r === 'superAdmin' ? 'Super Admin'
+      : r === 'teamAdmin' ? (t ? `${t} · Coordinator` : 'Coordinator')
+      : (t ? `${t} · ${p || 'Sevak'}` : (p || 'Sevak'));
+  }
+  const pic = AppState.profilePic;
+  if (img && inits) {
+    if (pic) {
+      img.src = pic; img.style.display = 'block';
+      inits.style.display = 'none';
+    } else {
+      img.style.display = 'none';
+      inits.textContent = initials(AppState.userName || '?');
+      inits.style.display = '';
+    }
+  }
+}
+
+// ── SIDEBAR ────────────────────────────────────────────
+function openSidebar() {
+  const sb = document.getElementById('app-sidebar');
+  if (!sb || sb.classList.contains('open')) return;
+  _applySidebarInfo();
+  sb.classList.add('open');
+  document.getElementById('sidebar-overlay')?.classList.remove('hidden');
+  _ensureOverlayHistory?.();
+}
+function closeSidebar() {
+  const sb = document.getElementById('app-sidebar');
+  if (!sb) return;
+  sb.classList.remove('open');
+  document.getElementById('sidebar-overlay')?.classList.add('hidden');
+}
+
+// ── SESSION CONFIGURATION ──────────────────────────────
+async function openSessionConfig() {
+  closeSidebar();
+  try {
+    const cfg = await DB.getCallingWeekConfig();
+    document.getElementById('sc-topic').value           = cfg?.topic        || '';
+    document.getElementById('sc-speaker').value         = cfg?.speakerName  || '';
+    document.getElementById('sc-session-type').value    = cfg?.sessionType  || 'regular';
+    document.getElementById('sc-calling-date').value    = cfg?.callingDate  || '';
+    document.getElementById('sc-attendance-date').value = cfg?.sessionDate  || '';
+  } catch (_) {}
+  openModal('session-config-modal');
+}
+
+async function saveSessionConfig() {
+  const topic       = document.getElementById('sc-topic').value.trim();
+  const speakerName = document.getElementById('sc-speaker').value.trim();
+  const sessionType = document.getElementById('sc-session-type').value;
+  const callingDate = document.getElementById('sc-calling-date').value;
+  const sessionDate = document.getElementById('sc-attendance-date').value;
+  if (!callingDate) { showToast('Calling date is required', 'error'); return; }
+  if (!sessionDate) { showToast('Attendance date is required', 'error'); return; }
+  try {
+    await DB.setCallingWeekConfig(callingDate, sessionDate, { topic, speakerName, sessionType });
+    closeModal('session-config-modal');
+    showToast('Session configured! Hare Krishna 🙏', 'success');
+    if (AppState.currentTab === 'calling') loadCallingStatus?.();
+    if (AppState.currentTab === 'attendance') loadAttendanceTab?.();
+  } catch (e) {
+    showToast('Save failed: ' + (e.message || 'Check connection'), 'error');
+  }
+}
+
+// ── CHANGE PASSWORD ────────────────────────────────────
+function openChangePassword() {
+  closeSidebar();
+  ['cp-current','cp-new','cp-confirm'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  const err = document.getElementById('cp-error'); if (err) err.style.display = 'none';
+  openModal('change-password-modal');
+}
+
+async function doChangePassword() {
+  const cur = document.getElementById('cp-current').value;
+  const nw  = document.getElementById('cp-new').value;
+  const cf  = document.getElementById('cp-confirm').value;
+  const err = document.getElementById('cp-error');
+  err.style.display = 'none';
+  if (!cur || !nw || !cf) { err.textContent = 'All fields are required.'; err.style.display = 'block'; return; }
+  if (nw.length < 6)      { err.textContent = 'New password must be at least 6 characters.'; err.style.display = 'block'; return; }
+  if (nw !== cf)          { err.textContent = 'New passwords do not match.'; err.style.display = 'block'; return; }
+  const user = auth.currentUser;
+  if (!user) { err.textContent = 'Not signed in.'; err.style.display = 'block'; return; }
+  try {
+    const cred = firebase.auth.EmailAuthProvider.credential(user.email, cur);
+    await user.reauthenticateWithCredential(cred);
+    await user.updatePassword(nw);
+    closeModal('change-password-modal');
+    showToast('Password updated! Hare Krishna 🙏', 'success');
+  } catch (e) {
+    err.textContent = e.code === 'auth/wrong-password' ? 'Current password is incorrect.'
+      : e.code === 'auth/weak-password' ? 'Password is too weak.'
+      : (e.message || 'Could not update password.');
+    err.style.display = 'block';
+  }
+}
+
+// ── USER MANAGEMENT (enhanced) ─────────────────────────
+let _umUsers = [];
+
+async function openUserManagement() {
+  closeSidebar();
+  openModal('user-mgmt-modal');
+  const list = document.getElementById('um-list');
+  list.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading users…</div>';
+  try {
+    const snap = await fdb.collection('users').get();
+    _umUsers = snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    _umUsers.sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
+    renderUserMgmtList();
+  } catch (_) {
+    list.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load users</p></div>';
+  }
+}
+
+function renderUserMgmtList() {
+  const list = document.getElementById('um-list');
+  if (!list) return;
+  const q = (document.getElementById('um-search')?.value || '').toLowerCase().trim();
+  const filtered = _umUsers.filter(u => {
+    if (!q) return true;
+    return (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q);
+  });
+  if (!filtered.length) {
+    list.innerHTML = '<div class="empty-state"><i class="fas fa-user-slash"></i><p>No users found</p></div>';
+    return;
+  }
+  list.innerHTML = filtered.map(u => {
+    const roleLabel = u.role === 'superAdmin' ? 'Super Admin'
+      : u.role === 'teamAdmin' ? 'Coordinator' : 'Sevak';
+    const meta = [roleLabel, u.teamName || '', u.position || ''].filter(Boolean).join(' · ');
+    return `<div class="um-row" onclick="openUserAction('${u.uid}')">
+      <div class="um-avatar">${initials(u.name || u.email)}</div>
+      <div class="um-info">
+        <div class="um-name">${u.name || u.email}</div>
+        <div class="um-meta">${u.email ? u.email + ' · ' : ''}${meta}</div>
+      </div>
+      <i class="fas fa-chevron-right um-chevron"></i>
+    </div>`;
+  }).join('');
+}
+
+function openUserAction(uid) {
+  const u = _umUsers.find(x => x.uid === uid);
+  if (!u) return;
+  document.getElementById('ua-user-name').textContent = u.name || u.email || 'User';
+  document.getElementById('ua-user-id').value          = uid;
+  document.getElementById('ua-position').value         = u.position || '';
+  document.getElementById('ua-team').value             = u.teamName || '';
+  document.getElementById('ua-role').value             = u.role     || 'serviceDevotee';
+  openModal('user-action-modal');
+}
+
+async function doSaveUserAction() {
+  const uid      = document.getElementById('ua-user-id').value;
+  const position = document.getElementById('ua-position').value.trim() || null;
+  const teamName = document.getElementById('ua-team').value || null;
+  const role     = document.getElementById('ua-role').value;
+  if (!uid) return;
+  try {
+    await fdb.collection('users').doc(uid).update({ position, teamName, role, updatedAt: TS() });
+    // reflect in local cache
+    const u = _umUsers.find(x => x.uid === uid);
+    if (u) { u.position = position; u.teamName = teamName; u.role = role; }
+    renderUserMgmtList();
+    closeModal('user-action-modal');
+    showToast('User updated!', 'success');
+  } catch (e) {
+    showToast('Update failed: ' + (e.message || 'Unknown'), 'error');
+  }
+}
+
+async function doRemoveUser() {
+  const uid = document.getElementById('ua-user-id').value;
+  if (!uid) return;
+  if (uid === AppState.userId) { showToast('You cannot remove your own account here.', 'error'); return; }
+  if (!confirm('Remove this user profile? Their Firestore record will be deleted. (Auth account must be deleted separately in Firebase Console.)')) return;
+  try {
+    await fdb.collection('users').doc(uid).delete();
+    _umUsers = _umUsers.filter(u => u.uid !== uid);
+    renderUserMgmtList();
+    closeModal('user-action-modal');
+    showToast('User removed', 'success');
+  } catch (e) {
+    showToast('Remove failed: ' + (e.message || 'Unknown'), 'error');
   }
 }
 
@@ -269,11 +459,11 @@ function applyRoleUI() {
   pill.style.background = role === 'superAdmin' ? 'rgba(201,168,76,.5)' : role === 'teamAdmin' ? 'rgba(82,183,136,.4)' : 'rgba(82,183,136,.25)';
 
   if (role === 'superAdmin') {
-    document.getElementById('admin-gear-btn').classList.remove('hidden');
-    document.getElementById('clear-data-btn').classList.remove('hidden');
+    document.getElementById('admin-gear-btn')?.classList.remove('hidden');
+    document.getElementById('clear-data-btn')?.classList.remove('hidden');
   }
   document.querySelectorAll('.super-admin-only').forEach(el => {
-    if (role !== 'superAdmin') el.style.display = 'none';
+    el.style.display = role === 'superAdmin' ? '' : 'none';
   });
 
   const tabs = {
@@ -283,7 +473,7 @@ function applyRoleUI() {
     reports:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     care:        ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     events:      ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    management:  ['superAdmin'],
+    'calling-mgmt':  ['superAdmin'],
   };
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const tab = btn.dataset.tab;
@@ -453,7 +643,7 @@ async function initApp() {
   loadDevotees();
   loadCallingPersonsFilter();
   loadBirthdays();
-  document.getElementById('report-date').value = getToday();
+  initReportsSessionFilter?.();
   initAllPickers();
   initSheetYearSelector();
 }
@@ -569,12 +759,16 @@ function clearPicker(containerId, hiddenId) {
 }
 
 // ── SESSION MANAGEMENT ─────────────────────────────────
+function _setSessionDateDisplay(dateStr) {
+  const el = document.getElementById('session-date-text');
+  if (el) el.textContent = dateStr ? formatDate(dateStr) : '';
+}
+
 async function initSession() {
   try {
     const session = await DB.getTodaySession();
     AppState.currentSessionId = session.id;
-    const picker = document.getElementById('session-date-picker');
-    if (picker) picker.value = session.session_date;
+    _setSessionDateDisplay(session.session_date);
     await loadSessionSelector();
     loadAttendanceSession(session.id);
   } catch (e) { console.error('Session init', e); }
@@ -585,11 +779,8 @@ async function loadSessionSelector() {
     const sessions = await DB.getSessions();
     AppState.sessionsCache = {};
     sessions.forEach(s => { AppState.sessionsCache[s.id] = s; });
-
-    const picker = document.getElementById('session-date-picker');
     const currentSession = AppState.sessionsCache[AppState.currentSessionId];
-    if (picker && currentSession) picker.value = currentSession.session_date;
-
+    if (currentSession) _setSessionDateDisplay(currentSession.session_date);
     if (AppState.currentSessionId) showSessionInfo(AppState.currentSessionId);
   } catch (_) {}
 }
@@ -597,17 +788,13 @@ async function loadSessionSelector() {
 async function loadSessionByDate(dateStr) {
   if (!dateStr) return;
   const sunday = snapToSunday(dateStr);
-  if (sunday !== dateStr) {
-    showToast(`Snapped to Sunday: ${formatDate(sunday)}`, 'info');
-    const picker = document.getElementById('session-date-picker');
-    if (picker) picker.value = sunday;
-  }
   try {
     const session = await DB.getOrCreateSession(sunday);
     AppState.currentSessionId = session.id;
     AppState.sessionsCache[session.id] = AppState.sessionsCache[session.id] || {
       id: session.id, session_date: sunday, topic: '', is_cancelled: false
     };
+    _setSessionDateDisplay(sunday);
     showSessionInfo(session.id);
     loadAttendanceSession(session.id);
   } catch (e) { showToast('Could not load session', 'error'); console.error(e); }
@@ -615,28 +802,43 @@ async function loadSessionByDate(dateStr) {
 
 function showSessionInfo(sessionId) {
   const s = AppState.sessionsCache?.[sessionId];
-  const banner = document.getElementById('session-cancelled-banner');
-  const topicBar = document.getElementById('session-topic-bar');
-  if (!banner || !topicBar) return;
-  if (s?.is_cancelled) {
-    banner.classList.remove('hidden');
-  } else {
-    banner.classList.add('hidden');
-  }
+  const banner   = document.getElementById('session-cancelled-banner');
+  const topicPil = document.getElementById('session-topic-inline');
+  if (!banner || !topicPil) return;
+  banner.classList.toggle('hidden', !s?.is_cancelled);
   if (s?.topic && !s.is_cancelled) {
     document.getElementById('session-topic-text').textContent = s.topic;
-    topicBar.classList.remove('hidden');
+    topicPil.classList.remove('hidden');
   } else {
-    topicBar.classList.add('hidden');
+    topicPil.classList.add('hidden');
   }
 }
 
 async function loadCallingPersonsFilter() {
+  await _repopulateCallingByFilter();
+}
+
+async function _repopulateCallingByFilter() {
+  const sel = document.getElementById('filter-calling-by');
+  if (!sel) return;
+  const team = document.getElementById('filter-team')?.value || '';
+  const prev = sel.value;
   try {
-    const persons = await DB.getCallingPersons();
-    const sel = document.getElementById('filter-calling-by');
-    persons.forEach(p => { const o = document.createElement('option'); o.value = p; o.textContent = p; sel.appendChild(o); });
+    // Pull all active devotees from cache, narrow by team if set, then
+    // return unique callingBy values (users who actually call in that team).
+    const all = await DevoteeCache.all();
+    const pool = team ? all.filter(d => d.teamName === team) : all;
+    const persons = [...new Set(pool.map(d => d.callingBy).filter(Boolean))].sort();
+    sel.innerHTML = '<option value="">All Callers</option>' +
+      persons.map(p => `<option value="${p.replace(/"/g,'&quot;')}"${p===prev?' selected':''}>${p}</option>`).join('');
   } catch (_) {}
+}
+
+// Called when the Team filter changes on the Devotees tab: re-scope callers, then reload.
+function onDevoteeTeamFilterChange() {
+  const by = document.getElementById('filter-calling-by');
+  if (by) by.value = '';
+  _repopulateCallingByFilter().then(() => loadDevotees());
 }
 
 async function loadBirthdays() {
@@ -669,14 +871,15 @@ function switchTab(tab, btn) {
   if (tab === 'reports')    loadReports();
   if (tab === 'care')       loadCareData();
   if (tab === 'events')     loadEvents();
-  if (tab === 'management') loadMgmtTab?.();
+  if (tab === 'calling-mgmt') loadCallingMgmtTab?.();
 }
 
 function switchSubTab(btn, id) {
-  document.querySelectorAll('.sub-tab').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.sub-panel').forEach(p => p.classList.remove('active'));
+  const scope = btn.closest('.reports-cat-panel') || document;
+  scope.querySelectorAll('.sub-tab').forEach(b => b.classList.remove('active'));
+  scope.querySelectorAll('.sub-panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
-  document.getElementById('subtab-' + id).classList.add('active');
+  document.getElementById('subtab-' + id)?.classList.add('active');
   if (id === 'trends')            loadTrends();
   if (id === 'serious-analysis')  loadSeriousAnalysis();
   if (id === 'team-leaderboard')  loadTeamLeaderboard();

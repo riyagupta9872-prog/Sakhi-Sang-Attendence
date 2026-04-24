@@ -38,5 +38,11 @@ service cloud.firestore {
       allow write: if isSuperAdmin();
     }
 
+    // ── Calling week history (used for fallback when no week configured) ──
+    match /callingWeekHistory/{id} {
+      allow read:  if isAuth();
+      allow write: if isSuperAdmin();
+    }
+
   }
 }

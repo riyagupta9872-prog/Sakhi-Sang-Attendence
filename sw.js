@@ -1,5 +1,7 @@
 /* ══ SERVICE WORKER – Sakhi Sang ══ */
-const CACHE = 'sakhi-sang-v25';
+// Bump this version string every time you deploy new code.
+// This tells the browser to throw away old cached files and install fresh ones.
+const CACHE = 'sakhi-sang-v48';
 const SHELL = [
   './index.html',
   './js/config.js',
@@ -33,13 +35,53 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  // Firebase / Firestore always go to network
-  if (e.request.url.includes('firestore.googleapis.com') ||
-      e.request.url.includes('firebase') ||
-      e.request.url.includes('googleapis.com/v1') ||
-      e.request.url.includes('identitytoolkit')) {
+  const url = e.request.url;
+
+  // Firebase / Firestore: always bypass cache, go straight to network
+  if (url.includes('firestore.googleapis.com') ||
+      url.includes('firebase') ||
+      url.includes('googleapis.com/v1') ||
+      url.includes('identitytoolkit')) {
     return;
   }
+
+  // App JS files: network-first, cached fallback.
+  // This guarantees users get fresh code after every deployment
+  // without needing a hard refresh. Falls back to cache when offline.
+  if (url.includes('/js/')) {
+    e.respondWith(
+      fetch(e.request)
+        .then(res => {
+          if (res.ok) {
+            const clone = res.clone();
+            caches.open(CACHE).then(c => c.put(e.request, clone));
+          }
+          return res;
+        })
+        .catch(() => caches.match(e.request))
+    );
+    return;
+  }
+
+  // HTML navigation: network-first so the shell is always fresh,
+  // cached fallback for offline use.
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request)
+        .then(res => {
+          if (res.ok) {
+            const clone = res.clone();
+            caches.open(CACHE).then(c => c.put(e.request, clone));
+          }
+          return res;
+        })
+        .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+
+  // Everything else (fonts, icons, CDN libraries, CSS):
+  // cache-first — these rarely change and benefit from instant loading.
   e.respondWith(
     caches.match(e.request).then(cached => {
       if (cached) return cached;
