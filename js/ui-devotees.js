@@ -35,7 +35,7 @@ function renderDevoteeItem(d) {
         <div class="devotee-meta">${d.mobile || '—'}</div>
         <div class="devotee-badges">${statusBadge(d.devotee_status)}${d.team_name ? ' ' + teamBadge(d.team_name) : ''}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:.5rem">${contactIcons(d.mobile)}</div>
+      <div style="display:flex;align-items:center;gap:.5rem">${contactIcons(d.mobile, { altMobile: d.mobile_alt, devoteeId: d.id, name: d.name })}</div>
     </div>`;
 }
 
@@ -74,7 +74,7 @@ async function openProfileModal(id) {
           <div class="profile-hero-info">
             <h2>${d.name}${isBirthdayWeek(d.dob) ? ' 🎂' : ''}</h2>
             <div class="profile-hero-meta">${d.team_name ? teamBadge(d.team_name) : ''} ${statusBadge(d.devotee_status)}${d.is_not_interested ? ' <span class="badge" style="background:#bf360c;color:#fff"><i class="fas fa-ban"></i> Not Interested</span>' : ''}</div>
-            <div class="profile-hero-meta" style="margin-top:.4rem">${contactIcons(d.mobile)}${d.mobile ? `<span style="font-size:.85rem;margin-left:.4rem">${d.mobile}</span>` : ''}</div>
+            <div class="profile-hero-meta" style="margin-top:.4rem">${contactIcons(d.mobile, { altMobile: d.mobile_alt, devoteeId: d.id, name: d.name })}${d.mobile ? `<span style="font-size:.85rem;margin-left:.4rem">${d.mobile}</span>` : ''}${d.mobile_alt ? `<span style="font-size:.72rem;color:var(--text-muted);margin-left:.4rem">(Alt: ${d.mobile_alt})</span>` : ''}</div>
           </div>
         </div>`;
     }
@@ -89,7 +89,8 @@ async function openProfileModal(id) {
         <div class="profile-fields">
           <div class="profile-field full"><label>Residential Address</label><span>${d.address || '—'}</span></div>
           <div class="profile-field"><label>Date of Birth</label><span>${formatDate(d.dob)}${isBirthdayWeek(d.dob) ? ' 🎂' : ''}</span></div>
-          <div class="profile-field"><label>Mobile</label><span>${d.mobile || '—'}</span></div>
+          <div class="profile-field"><label>Mobile (Primary)</label><span>${d.mobile || '—'}</span></div>
+          <div class="profile-field"><label>Alternate Mobile</label><span>${d.mobile_alt || '—'}</span></div>
           <div class="profile-field"><label>Email</label><span>${d.email ? `<a href="mailto:${d.email}" style="color:var(--primary)">${d.email}</a>` : '—'}</span></div>
           <div class="profile-field"><label>Admitted On</label><span style="font-size:.82rem;color:var(--text-muted)">${d.created_at ? formatDateTime(d.created_at) : '—'}</span></div>
         </div>
@@ -231,7 +232,7 @@ function openDevoteeFormModal(fromAttendance = false, editId = null) {
 }
 
 function clearDevoteeForm() {
-  ['f-name','f-mobile','f-address','f-education','f-email','f-profession','f-hobbies','f-family-members','f-family-participants'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+  ['f-name','f-mobile','f-mobile-alt','f-address','f-education','f-email','f-profession','f-hobbies','f-family-members','f-family-participants'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
   document.getElementById('f-dob').value = '';
   document.getElementById('f-joining').value = getToday();
   document.getElementById('f-chanting').value = '0';
@@ -257,6 +258,7 @@ async function populateEditForm(id) {
     const d = await DB.getDevotee(id);
     document.getElementById('f-name').value     = d.name || '';
     document.getElementById('f-mobile').value   = d.mobile || '';
+    const fMobileAlt = document.getElementById('f-mobile-alt'); if (fMobileAlt) fMobileAlt.value = d.mobile_alt || '';
     document.getElementById('f-address').value  = d.address || '';
     document.getElementById('f-dob').value      = d.dob || '';
     document.getElementById('f-joining').value  = d.date_of_joining || '';
@@ -286,6 +288,7 @@ function getFormPayload() {
   return {
     name:              document.getElementById('f-name').value.trim(),
     mobile:            document.getElementById('f-mobile').value.replace(/\D/g,'').slice(0,10),
+    mobile_alt:        (document.getElementById('f-mobile-alt')?.value || '').replace(/\D/g,'').slice(0,10),
     address:           document.getElementById('f-address').value.trim(),
     dob:               document.getElementById('f-dob').value,
     date_of_joining:   document.getElementById('f-joining').value,

@@ -518,6 +518,52 @@ h3 { font-size: .93rem; }
 .icon-whatsapp  { background: #d1fae5; color: #128c7e; }
 .contact-icon i { font-size: .85rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
 
+/* "2" badge shown on contact icon when devotee has a primary + alternate number */
+.contact-icon { position: relative; }
+.contact-dual {
+  position: absolute; top: -3px; right: -3px;
+  background: var(--brand); color: #fff;
+  font-size: .55rem; font-weight: 700;
+  width: 14px; height: 14px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  border: 1.5px solid #fff;
+}
+button.contact-icon { border: none; padding: 0; }
+
+/* Number Picker modal rows */
+.np-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: .75rem .9rem;
+  background: var(--bg-card);
+  display: flex; flex-direction: column; gap: .55rem;
+}
+.np-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.np-num { font-size: 1rem; letter-spacing: .3px; }
+.np-tag {
+  padding: .15rem .55rem; border-radius: var(--radius-full);
+  font-size: .7rem; font-weight: 700;
+}
+.np-tag.np-primary { background: var(--gold-light); color: #8b6914; }
+.np-tag.np-alt     { background: var(--bg-subtle); color: var(--text-muted); }
+.np-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+.np-actions .btn { padding: .35rem .8rem; font-size: .82rem; }
+.np-wa { background: #128c7e; color: #fff; border-color: #128c7e; }
+.np-wa:hover { background: #0f7a6d; }
+.np-promote { flex: 1; min-width: 140px; }
+
+/* Calling Mgmt — mobile row alongside name */
+.cm-mobile-row {
+  display: inline-flex; align-items: center; gap: .35rem;
+  margin-top: .22rem;
+}
+.cm-mobile-row .contact-icon { width: 22px; height: 22px; }
+.cm-mobile-row .contact-icon i { font-size: .68rem; }
+.cm-mobile-row .contact-icon .contact-dual {
+  width: 11px; height: 11px; font-size: .5rem;
+}
+.cm-mobile-num { font-size: .7rem; color: var(--text-muted); }
+
 /* Reports two-level hierarchy */
 .reports-cat-panel { display: none; }
 .reports-cat-panel.active { display: block; }
@@ -548,7 +594,14 @@ h3 { font-size: .93rem; }
   background: none; border: none; cursor: pointer;
   padding: 0; display: inline-flex; align-items: center;
 }
-.cm-team-btn:hover i.fa-pencil-alt { opacity: 1 !important; color: var(--brand); }
+.cm-team-history-btn {
+  background: none; border: none; cursor: pointer;
+  padding: .1rem .3rem; margin-left: .15rem;
+  color: var(--text-muted); opacity: .6;
+  font-size: .72rem; vertical-align: middle;
+  transition: color .12s, opacity .12s;
+}
+.cm-team-history-btn:hover { color: var(--brand); opacity: 1; }
 
 .cm-status-cell { display: flex; flex-direction: column; gap: .22rem; }
 .cm-pill {

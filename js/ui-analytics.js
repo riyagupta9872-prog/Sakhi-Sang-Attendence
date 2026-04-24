@@ -1053,6 +1053,13 @@ function _updateBulkBar() {
 }
 function _clearCMSelection() { _exitCMSelectMode(); }
 
+// Explicit "Select" toggle — tappable on mobile so users don't have to rely
+// on long-press, which can get cancelled by scroll/OS gestures.
+function _toggleCMSelectMode() {
+  if (_cmSelectMode) _exitCMSelectMode();
+  else _enterCMSelectMode();
+}
+
 function _renderCMWeek() {
   const el = document.getElementById('cm-week-content');
   if (!el) return;
@@ -1154,7 +1161,7 @@ function _renderCMWeek() {
       <td class="cm-check-cell" style="background:#e8f5e9;padding:.3rem .3rem;text-align:center">
         <input type="checkbox" onchange="_cmSelectTeam('${team.replace(/'/g,"\\'")}', this.checked)" title="Select all in ${team}">
       </td>
-      <td colspan="${5 + histWkData.length + 2}" style="font-weight:700;color:var(--primary);padding:.3rem .6rem">
+      <td colspan="${5 + histWkData.length + 3}" style="font-weight:700;color:var(--primary);padding:.3rem .6rem">
         <i class="fas fa-users" style="font-size:.7rem"></i> ${team}
         <span style="font-size:.74rem;font-weight:400;opacity:.75"> (${members.length})</span>
       </td>
@@ -1174,12 +1181,17 @@ function _renderCMWeek() {
         <td style="text-align:center;color:var(--text-muted);font-size:.74rem;padding:.3rem .3rem">${sno++}</td>
         <td style="padding:.3rem .5rem;min-width:140px">
           <button class="cm-link" onclick="openProfileModal('${d.id}')" title="Open profile">${d.name}</button>
-          ${d.mobile ? `<div style="font-size:.68rem;color:var(--text-muted)">${d.mobile}</div>` : ''}
+          ${d.mobile ? `<div style="font-size:.68rem;color:var(--text-muted)">${d.mobile}${d.mobileAlt ? ` · <span style="color:var(--text-light)">+1</span>` : ''}</div>` : ''}
+        </td>
+        <td style="padding:.3rem .4rem;white-space:nowrap">
+          ${contactIcons(d.mobile, { altMobile: d.mobileAlt, devoteeId: d.id, name: d.name })}
         </td>
         <td style="padding:.3rem .4rem;white-space:nowrap">
           <button class="cm-team-btn" onclick="openTeamChangeQuick('${d.id}','${safeName}','${safeTeam}')" title="Change team">
             ${teamBadge(team)}
-            <i class="fas fa-pencil-alt" style="font-size:.65rem;margin-left:.2rem;opacity:.6"></i>
+          </button>
+          <button class="cm-team-history-btn" onclick="showMgmtTeamHistory('${d.id}','${safeName}')" title="Past team history">
+            <i class="fas fa-pencil-alt"></i>
           </button>
         </td>
         <td style="padding:.3rem .4rem">
@@ -1227,14 +1239,20 @@ function _renderCMWeek() {
       </div>
     </div>
 
+    <!-- Select toggle — visible entry point (long-press still works too) -->
+    <div class="cm-select-toggle-row">
+      <button class="btn btn-secondary cm-select-toggle" onclick="_toggleCMSelectMode()">
+        <i class="fas fa-check-square"></i> <span class="cm-select-toggle-label">Select (Bulk Action)</span>
+      </button>
+      <span class="cm-hint"><i class="fas fa-hand-pointer"></i> or long-press any row</span>
+    </div>
+
     <!-- Bulk action bar — appears at top of list when selections exist -->
     <div id="cm-bulk-bar" class="cm-bulk-bar">
       <span class="cm-bulk-info"><i class="fas fa-check-square"></i> <span class="cm-bulk-count">0</span> selected</span>
       <button class="btn btn-primary" onclick="openBulkAction()"><i class="fas fa-layer-group"></i> Bulk Action</button>
       <button class="btn btn-secondary" onclick="_clearCMSelection()"><i class="fas fa-times"></i> Exit Select</button>
     </div>
-
-    <div class="cm-hint"><i class="fas fa-hand-pointer"></i> Long-press any row to enter bulk select mode</div>
 
     <div style="overflow-x:auto">
     <table style="border-collapse:collapse;min-width:720px;width:100%;font-size:.8rem">
@@ -1244,7 +1262,8 @@ function _renderCMWeek() {
             <input type="checkbox" id="cm-check-all" onchange="_toggleCMSelAll(this.checked)" title="Select all">
           </th>
           <th style="padding:.4rem .3rem;min-width:28px">#</th>
-          <th style="padding:.4rem .6rem;text-align:left;min-width:150px">Name</th>
+          <th style="padding:.4rem .6rem;text-align:left;min-width:140px">Name</th>
+          <th style="min-width:80px;text-align:center">Contact</th>
           <th style="min-width:90px">Team</th>
           <th style="min-width:110px;padding:.4rem">Calling By</th>
           <th style="min-width:170px">This Week</th>
@@ -1404,7 +1423,8 @@ async function _renderCMNewComers() {
         <td style="font-size:.78rem">${d.referenceBy || '—'}</td>
         <td style="padding:.3rem .4rem;white-space:nowrap">
           ${team
-            ? `<button class="cm-team-btn" onclick="openTeamChangeQuick('${a.devoteeId}','${safeName}','${safeTeam}')">${teamBadge(team)} <i class="fas fa-pencil-alt" style="font-size:.65rem;margin-left:.2rem;opacity:.6"></i></button>`
+            ? `<button class="cm-team-btn" onclick="openTeamChangeQuick('${a.devoteeId}','${safeName}','${safeTeam}')" title="Change team">${teamBadge(team)}</button>
+               <button class="cm-team-history-btn" onclick="showMgmtTeamHistory('${a.devoteeId}','${safeName}')" title="Past team history"><i class="fas fa-pencil-alt"></i></button>`
             : `<button class="btn btn-secondary" style="padding:.18rem .55rem;font-size:.72rem" onclick="openTeamChangeQuick('${a.devoteeId}','${safeName}','')"><i class="fas fa-users"></i> Assign Team</button>`
           }
         </td>

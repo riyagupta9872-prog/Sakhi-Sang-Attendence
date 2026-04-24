@@ -557,21 +557,21 @@ function downloadImportTemplate() {
   const statuses = ['Expected to be Serious','Serious','Most Serious'];
 
   const headers = [
-    'Name', 'Mobile', 'Address', 'DOB',
+    'Name', 'Mobile', 'Alternate Mobile', 'Address', 'DOB',
     'Date of Joining', 'Chanting Rounds', 'Kanthi', 'Gopi Dress',
     'Team', 'Status', 'Facilitator', 'Reference', 'Calling By',
     'Education', 'Email', 'Profession', 'Family Favourable', 'Reading', 'Hearing',
     'Hobbies', 'Skills', 'Tilak',
   ];
   const sample1 = [
-    'Radha Kumari', '9876543210', 'C-12, Sector 5, Noida',
+    'Radha Kumari', '9876543210', '9811122233', 'C-12, Sector 5, Noida',
     '2000-06-15', '2023-04-02', '16', 'Yes', 'No',
     'Champaklata', 'Serious', 'Anjali Mishra Mtg', 'Priya Devi', 'Anjali Mishra Mtg',
     'B.Com', 'radha@example.com', 'Housewife', 'Yes', 'Regular', 'Daily',
     'Singing, Cooking', 'Music, Art', 'Yes',
   ];
   const sample2 = [
-    'Sita Devi', '8765432109', 'B-4, Govind Nagar, Mathura',
+    'Sita Devi', '8765432109', '', 'B-4, Govind Nagar, Mathura',
     '1998-03-22', '2024-01-07', '8', 'No', 'No',
     'Lalita', 'Expected to be Serious', 'Neha Bhandari', '', 'Neha Bhandari',
     '12th Pass', '', 'Student', 'Partial', 'Occasionally', 'Occasionally',
@@ -580,7 +580,7 @@ function downloadImportTemplate() {
 
   const wsData = XLSX.utils.aoa_to_sheet([headers, sample1, sample2]);
   wsData['!cols'] = [
-    { wch: 22 }, { wch: 14 }, { wch: 30 }, { wch: 13 }, { wch: 15 },
+    { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 30 }, { wch: 13 }, { wch: 15 },
     { wch: 15 }, { wch: 9 }, { wch: 10 }, { wch: 14 }, { wch: 26 },
     { wch: 22 }, { wch: 22 }, { wch: 22 },
     { wch: 16 }, { wch: 24 }, { wch: 18 }, { wch: 18 }, { wch: 14 }, { wch: 14 },
@@ -597,6 +597,7 @@ function downloadImportTemplate() {
     ['COLUMN GUIDE:', 'Allowed Values / Format', 'Required?'],
     ['Name', 'Full name of devotee', 'YES (mandatory)'],
     ['Mobile', '10-digit number only, no spaces/dashes', 'Recommended'],
+    ['Alternate Mobile', '10-digit number (optional — only if a 2nd number is known)', 'Optional'],
     ['Address', 'Full address', 'Optional'],
     ['DOB', 'YYYY-MM-DD  (e.g. 2000-06-15)', 'Optional'],
     ['Date of Joining', 'YYYY-MM-DD  (e.g. 2023-04-02)', 'Optional'],
@@ -635,6 +636,7 @@ const IMPORT_FIELDS = [
   { key: 'name',               label: 'Name *',                  aliases: ['Name','name','Full Name','Devotee Name','NAAM'] },
   { key: 'dob',                label: 'Date of Birth',           aliases: ['DOB','D.O.B','Date of Birth','Birth Date','dob','D.O.B.','DOB (DD/MM/YYYY)'] },
   { key: 'mobile',             label: 'Mobile',                  aliases: ['Mobile','Contact','Phone','Mobile Number','Mobile (10 digits)','Contact Number','Mob','Ph No','mob no','contact'] },
+  { key: 'mobileAlt',          label: 'Alternate Mobile',        aliases: ['Alternate Mobile','Alt Mobile','Mobile 2','Alt Number','Alternate Number','Second Mobile','Secondary Mobile','Mob 2','alt mobile','Alternate Contact'] },
   { key: 'address',            label: 'Residential Address',     aliases: ['Address','address','Addr','ADDRESS','Residential Address'] },
   { key: 'email',              label: 'Email',                   aliases: ['Email','E-Mail','email','E Mail','e-mail','EMAIL'] },
   { key: 'education',          label: 'Education / Qualification', aliases: ['Education','education','EDUCATION','Qualification'] },

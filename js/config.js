@@ -108,15 +108,90 @@ function statusBadge(s) {
   return `<span class="badge badge-expected">${s || 'Expected to be Serious'}</span>`;
 }
 function teamBadge(t) { return t ? `<span class="badge badge-team">${t}</span>` : ''; }
-function contactIcons(mobile) {
-  if (!mobile) return '';
-  const c = mobile.replace(/\D/g, '');
-  // WhatsApp expects country-coded numbers. If 10 digits (IN), prefix 91.
-  const wa = c.length === 10 ? '91' + c : c;
+// contactIcons(mobile) → direct call/whatsapp links (single number).
+// contactIcons(mobile, { altMobile, devoteeId, name }) → if altMobile is also
+// present, the icons instead open the number-picker modal so the user can
+// choose which number (and can promote the alt to primary).
+function contactIcons(mobile, opts) {
+  const altMobile = (opts && opts.altMobile) || '';
+  const devoteeId = (opts && opts.devoteeId) || '';
+  const name      = (opts && opts.name)      || '';
+  const primary   = (mobile || '').replace(/\D/g, '');
+  const alt       = (altMobile || '').replace(/\D/g, '');
+  if (!primary && !alt) return '';
+
+  // Only one number available → direct links (original behaviour)
+  if (!primary || !alt) {
+    const c  = primary || alt;
+    const wa = c.length === 10 ? '91' + c : c;
+    return `<div class="contact-icons">
+      <a href="tel:${c}" class="contact-icon icon-phone" onclick="event.stopPropagation()" title="Call"><i class="fas fa-phone-alt"></i></a>
+      <a href="https://wa.me/${wa}" target="_blank" rel="noopener" class="contact-icon icon-whatsapp" onclick="event.stopPropagation()" title="WhatsApp"><i class="fab fa-whatsapp"></i></a>
+    </div>`;
+  }
+
+  // Both numbers present → open the chooser modal
+  const sName = name.replace(/'/g, "\\'");
   return `<div class="contact-icons">
-    <a href="tel:${c}" class="contact-icon icon-phone" onclick="event.stopPropagation()" title="Call"><i class="fas fa-phone-alt"></i></a>
-    <a href="https://wa.me/${wa}" target="_blank" rel="noopener" class="contact-icon icon-whatsapp" onclick="event.stopPropagation()" title="WhatsApp"><i class="fab fa-whatsapp"></i></a>
+    <button class="contact-icon icon-phone" onclick="event.stopPropagation(); openNumberPicker('${devoteeId}','${sName}','${primary}','${alt}')" title="Call"><i class="fas fa-phone-alt"></i><span class="contact-dual">2</span></button>
+    <button class="contact-icon icon-whatsapp" onclick="event.stopPropagation(); openNumberPicker('${devoteeId}','${sName}','${primary}','${alt}')" title="WhatsApp"><i class="fab fa-whatsapp"></i><span class="contact-dual">2</span></button>
   </div>`;
+}
+
+// Number-picker modal — lets user call/WhatsApp either number AND optionally
+// promote the alt to primary. Anyone (caller / coordinator / super admin) can
+// swap if they have edit rights; the swap just toggles the two fields in Firestore.
+function openNumberPicker(devoteeId, name, mobile, altMobile) {
+  const c = document.getElementById('np-content');
+  if (!c) return;
+  document.getElementById('np-devotee-id').value = devoteeId || '';
+  document.getElementById('np-name').textContent = name || 'Devotee';
+
+  function rowHtml(num, isPrimary) {
+    if (!num) return '';
+    const wa = num.length === 10 ? '91' + num : num;
+    const tag = isPrimary
+      ? '<span class="np-tag np-primary"><i class="fas fa-star"></i> Primary</span>'
+      : '<span class="np-tag np-alt">Alternate</span>';
+    const promote = isPrimary
+      ? ''
+      : `<button class="btn btn-secondary np-promote" onclick="makePrimaryNumber()"><i class="fas fa-star"></i> Make Primary</button>`;
+    return `<div class="np-row">
+      <div class="np-head">${tag} <strong class="np-num">${num}</strong></div>
+      <div class="np-actions">
+        <a href="tel:${num}" class="btn btn-primary np-call"><i class="fas fa-phone-alt"></i> Call</a>
+        <a href="https://wa.me/${wa}" target="_blank" rel="noopener" class="btn np-wa"><i class="fab fa-whatsapp"></i> WhatsApp</a>
+        ${promote}
+      </div>
+    </div>`;
+  }
+  c.innerHTML = rowHtml(mobile, true) + rowHtml(altMobile, false);
+  openModal('number-picker-modal');
+}
+
+async function makePrimaryNumber() {
+  const id = document.getElementById('np-devotee-id').value;
+  if (!id) return;
+  try {
+    const d = await DB.getDevotee(id);
+    const oldPrimary = d.mobile;
+    const oldAlt     = d.mobile_alt;
+    await DB.updateDevotee(id, {
+      ...d,
+      mobile:     oldAlt || '',
+      mobile_alt: oldPrimary || '',
+    });
+    DevoteeCache.bust();
+    closeModal('number-picker-modal');
+    showToast('Primary number updated!', 'success');
+    // Refresh whichever view is current
+    if (typeof loadDevotees === 'function'        && AppState.currentTab === 'devotees')     loadDevotees();
+    if (typeof loadCallingStatus === 'function'   && AppState.currentTab === 'calling')      loadCallingStatus();
+    if (typeof loadCallingMgmtTab === 'function'  && AppState.currentTab === 'calling-mgmt') loadCallingMgmtTab();
+    if (typeof loadCareData === 'function'        && AppState.currentTab === 'care')         loadCareData();
+  } catch (e) {
+    showToast('Failed: ' + (e.message || 'Error'), 'error');
+  }
 }
 
 // ── UI HELPERS ─────────────────────────────────────────

@@ -20,6 +20,7 @@ function toSnake(d) {
     id: d.id,
     name:                d.name || '',
     mobile:              d.mobile || null,
+    mobile_alt:          d.mobileAlt || null,
     address:             d.address || null,
     dob:                 d.dob || null,
     date_of_joining:     d.dateOfJoining || null,
@@ -60,6 +61,7 @@ function toCamel(f) {
   return {
     name:              (f.name || '').trim(),
     mobile:            (f.mobile || '').trim() || null,
+    mobileAlt:         (f.mobile_alt || '').trim() || null,
     address:           (f.address || '').trim() || null,
     dob:               f.dob || null,
     dateOfJoining:     f.date_of_joining || null,

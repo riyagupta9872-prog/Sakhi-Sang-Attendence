@@ -648,6 +648,12 @@
               oninput="this.value=this.value.replace(/\D/g,'').slice(0,10)">
             <span class="field-error" id="err-mobile">Mobile must be exactly 10 digits</span>
           </div>
+          <div class="form-group">
+            <label>Alternate Mobile <span class="field-hint">(optional)</span></label>
+            <input type="tel" id="f-mobile-alt" placeholder="Alternate 10-digit number"
+              inputmode="numeric" maxlength="10" pattern="[0-9]{10}"
+              oninput="this.value=this.value.replace(/\D/g,'').slice(0,10)">
+          </div>
           <div class="form-group full">
             <label>Residential Address <span class="req">*</span></label>
             <textarea id="f-address" rows="2" placeholder="Full residential address"></textarea>
@@ -1147,6 +1153,18 @@
         <button class="btn btn-primary" onclick="doMgmtAction('team_confirm')"><i class="fas fa-check"></i> Confirm Team Change</button>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Number Picker Modal (for devotees with primary + alternate mobile) -->
+<div id="number-picker-modal" class="modal-overlay hidden">
+  <div class="modal-box small">
+    <div class="modal-header">
+      <h2><i class="fas fa-phone-alt"></i> Choose Number — <span id="np-name"></span></h2>
+      <button class="btn-icon close" onclick="closeModal('number-picker-modal')"><i class="fas fa-times"></i></button>
+    </div>
+    <input type="hidden" id="np-devotee-id">
+    <div id="np-content" style="padding:1.25rem;display:flex;flex-direction:column;gap:.85rem"></div>
   </div>
 </div>
 
