@@ -300,11 +300,17 @@ async function exportSheetExcel() {
 }
 
 async function exportYearlySheetExcel() {
-  initSheetYearSelector('yearly-sheet-year');
-  const yearVal = document.getElementById('yearly-sheet-year')?.value;
+  // FY now derived from the main Reports filter — no separate year dropdown.
+  const refDate = (typeof _reportActive !== 'undefined' && _reportActive?.session_date) || getToday();
+  const fy = (typeof _fyRangeFor === 'function')
+    ? _fyRangeFor(refDate)
+    : (() => {
+        const [y, m] = refDate.split('-').map(Number);
+        const sy = m >= 4 ? y : y - 1;
+        return { start: `${sy}-04-01`, end: `${sy + 1}-03-31` };
+      })();
+  const start = fy.start, end = fy.end;
   const teamFilter = document.getElementById('yearly-sheet-team')?.value || '';
-  if (!yearVal) return showToast('Select a year first', 'error');
-  const { start, end } = JSON.parse(yearVal);
   showToast('Preparing Excel…');
   try {
     const { sessions, devotees, attMap, csMap } = await DB.getSheetData(start, end);
@@ -335,7 +341,7 @@ async function exportYearlySheetExcel() {
     const ws = XLSX.utils.aoa_to_sheet([headerRow1, headerRow2, ...dataRows]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Yearly Sheet');
-    const yearLabel = JSON.parse(yearVal).start.slice(0, 4);
+    const yearLabel = start.slice(0, 4);
     XLSX.writeFile(wb, `Yearly_Sheet_FY${yearLabel}.xlsx`);
     showToast('Excel downloaded!', 'success');
   } catch (e) { console.error(e); showToast('Export failed', 'error'); }

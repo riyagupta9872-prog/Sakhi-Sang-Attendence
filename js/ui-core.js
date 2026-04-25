@@ -467,7 +467,7 @@ function applyRoleUI() {
   });
 
   const tabs = {
-    devotees:    ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    devotees:    ['superAdmin'],
     calling:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     attendance:  ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     reports:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
@@ -477,10 +477,20 @@ function applyRoleUI() {
   };
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const tab = btn.dataset.tab;
-    if (!tabs[tab]?.includes(role)) {
-      btn.style.display = 'none';
-    }
+    const allowed = tabs[tab]?.includes(role);
+    btn.style.display = allowed ? '' : 'none';
   });
+
+  // If the currently-active panel is one the user can't access, switch to
+  // the first tab they CAN access. Devotees is the HTML default, so non-super-
+  // admins would otherwise land on an empty/forbidden view.
+  const activePanel = document.querySelector('.tab-panel.active');
+  const activeTab   = activePanel?.id?.replace('tab-', '');
+  if (activeTab && !tabs[activeTab]?.includes(role)) {
+    const firstAllowed = Object.keys(tabs).find(t => tabs[t].includes(role));
+    const firstBtn = document.querySelector(`.tab-btn[data-tab="${firstAllowed}"]`);
+    if (firstBtn && typeof switchTab === 'function') switchTab(firstAllowed, firstBtn);
+  }
 
   document.querySelectorAll('.admin-coordinator-only').forEach(el => {
     if (!['superAdmin','teamAdmin'].includes(role)) el.style.display = 'none';
