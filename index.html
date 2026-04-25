@@ -204,7 +204,6 @@
       <div class="panel-actions">
         <button class="btn btn-secondary" id="btn-import-excel" onclick="openImportModal()"><i class="fas fa-file-excel"></i> Import Excel</button>
         <button class="btn btn-secondary admin-coordinator-only" onclick="exportDevoteeDatabase()" title="Export team-wise devotee database"><i class="fas fa-database"></i> Export DB</button>
-        <button class="btn btn-primary" onclick="openDevoteeFormModal()"><i class="fas fa-user-plus"></i> Add Devotee</button>
       </div>
     </div>
     <div class="search-filter-bar">
@@ -539,6 +538,11 @@
 <!-- FAB: Register New Devotee (shown only on Attendance > Live) -->
 <button id="register-fab" class="fab hidden" onclick="openDevoteeFormModal(true)" title="Register New Devotee">
   <i class="fas fa-plus"></i>
+</button>
+
+<!-- FAB: Add Devotee (shown only on Devotees tab — default active) -->
+<button id="add-devotee-fab" class="fab fab-add-user" onclick="openDevoteeFormModal()" title="Add Devotee">
+  <i class="fas fa-user-plus"></i>
 </button>
 
 </main>

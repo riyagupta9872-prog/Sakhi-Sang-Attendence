@@ -1860,6 +1860,13 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
   .attendance-dashboard { grid-template-columns: 1fr 1fr; gap: .5rem; }
   .stat-card { padding: .7rem .8rem; }
   .search-filter-bar { padding: .48rem; gap: .38rem; }
+  .search-filter-bar .search-box { flex: 1 1 100%; min-width: 0; }
+  .search-filter-bar .filter-select {
+    flex: 1 1 calc(50% - .2rem);
+    min-width: 0;
+    font-size: .78rem;
+    padding: .42rem .55rem;
+  }
   .panel-header { padding: .78rem .95rem; }
   .panel-header h2 { font-size: .9rem; }
   .att-sub-tab, .sub-tab { font-size: .76rem; padding: .38rem .62rem; }

@@ -864,8 +864,8 @@ function switchTab(tab, btn) {
   document.getElementById('tab-' + tab).classList.add('active');
   btn.classList.add('active');
   AppState.currentTab = tab;
-  const fab = document.getElementById('register-fab');
-  if (fab) fab.classList.toggle('hidden', tab !== 'attendance');
+  document.getElementById('register-fab')?.classList.toggle('hidden', tab !== 'attendance');
+  document.getElementById('add-devotee-fab')?.classList.toggle('hidden', tab !== 'devotees');
   if (tab === 'calling')    loadCallingStatus();
   if (tab === 'attendance') loadAttendanceTab();
   if (tab === 'reports')    loadReports();
