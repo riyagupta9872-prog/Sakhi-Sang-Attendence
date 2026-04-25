@@ -302,8 +302,7 @@ async function loadCallingStatus() {
     const teamSel = document.getElementById('calling-filter-team');
     const prevTeam = teamSel.value;
     teamSel.innerHTML = '<option value="">All Teams</option>' +
-      TEAMS.filter(t => devotees.some(d => d.team_name === t))
-           .map(t => `<option value="${t}"${prevTeam===t?' selected':''}>${t}</option>`).join('');
+      TEAMS.map(t => `<option value="${t}"${prevTeam===t?' selected':''}>${t}</option>`).join('');
     const bySel = document.getElementById('calling-filter-callingby');
     const prevBy = bySel.value;
     const callers = [...new Set(devotees.map(d => d.calling_by).filter(Boolean))].sort();

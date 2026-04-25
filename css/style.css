@@ -578,6 +578,30 @@ button.contact-icon { border: none; padding: 0; }
 }
 .cm-filters {
   display: flex; gap: .5rem; flex-wrap: wrap; margin-left: auto;
+  align-items: center;
+}
+.cm-search-wrap {
+  display: flex; align-items: center; gap: .4rem;
+  background: #fff;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: .35rem .65rem;
+  min-width: 180px;
+  flex: 1 1 200px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.cm-search-wrap:focus-within {
+  border-color: var(--brand-light);
+  box-shadow: 0 0 0 3px rgba(82,183,136,.12);
+}
+.cm-search-wrap i { color: var(--text-muted); font-size: .8rem; flex-shrink: 0; }
+.cm-search-wrap input {
+  flex: 1; border: none; outline: none;
+  font-family: inherit; font-size: .82rem;
+  background: transparent; color: var(--text); min-width: 0;
+}
+@media (max-width: 480px) {
+  .cm-search-wrap { flex: 1 1 100%; }
 }
 .cm-link {
   background: none; border: none; cursor: pointer;

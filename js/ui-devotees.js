@@ -209,7 +209,9 @@ function switchProfileTab(tab, btn) {
   const saveBtn = document.getElementById('psec-save');
   if (prevBtn) prevBtn.style.display = idx === 0 ? 'none' : '';
   if (nextBtn) nextBtn.style.display = idx === PROFILE_TABS.length - 1 ? 'none' : '';
-  if (saveBtn) saveBtn.style.display = idx === PROFILE_TABS.length - 1 ? '' : 'none';
+  // Save is available on every tab so the user doesn't have to walk through
+  // all 5 tabs to save a partial profile.
+  if (saveBtn) saveBtn.style.display = '';
 }
 
 function stepProfileTab(dir) {
@@ -322,16 +324,17 @@ async function saveDevotee(e) {
   const id = document.getElementById('f-id').value;
   const payload = getFormPayload();
 
-  if (!payload.address) {
+  // Required fields: Name + Mobile + Reference By only.
+  if (!payload.name) {
     switchProfileTab('identity', null);
-    showToast('Address is required', 'error');
-    setTimeout(() => document.getElementById('f-address')?.focus(), 100);
+    showToast('Name is required', 'error');
+    setTimeout(() => document.getElementById('f-name')?.focus(), 100);
     return;
   }
-  if (!payload.dob) {
-    switchProfileTab('identity', null);
-    showToast('Date of Birth is required', 'error');
-    setTimeout(() => document.getElementById('f-dob')?.focus(), 100);
+  if (!payload.reference_by) {
+    switchProfileTab('team', null);
+    showToast('Reference By is required', 'error');
+    setTimeout(() => document.querySelector('#picker-reference .picker-input')?.focus(), 100);
     return;
   }
 

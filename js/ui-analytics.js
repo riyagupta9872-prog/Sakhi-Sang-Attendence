@@ -253,7 +253,7 @@ async function loadSeriousAnalysis() {
   try {
     const data = await DB.getSeriousReport(getWeekDate(), AppState.currentReportSessionId || AppState.currentSessionId);
     const teams    = TEAMS;
-    const statuses = ['Most Serious','Serious','Expected to be Serious'];
+    const statuses = ['Most Serious','Serious','Expected to be Serious','New Devotee','Inactive'];
     c.innerHTML = `<div style="overflow-x:auto"><table class="report-table">
       <thead>
         <tr><th>Team</th>${statuses.map(s => `<th colspan="2" style="text-align:center">${shortStatus(s)}</th>`).join('')}</tr>
@@ -1165,6 +1165,7 @@ function _renderCMWeek() {
 
   const savedTeam = document.getElementById('cm-filter-team')?.value || '';
   const savedBy   = document.getElementById('cm-filter-by')?.value   || '';
+  const savedQ    = (document.getElementById('cm-filter-search')?.value || '').trim().toLowerCase();
 
   const currentWkData = gridData.find(w => w.callingDate === currentWeek) || { csMap: {}, atSet: new Set() };
   const histWkData    = gridData.filter(w => w.callingDate !== currentWeek);
@@ -1181,6 +1182,11 @@ function _renderCMWeek() {
   let filtered = activeDevotees;
   if (savedTeam) filtered = filtered.filter(d => d.teamName === savedTeam);
   if (savedBy)   filtered = filtered.filter(d => d.callingBy === savedBy);
+  if (savedQ)    filtered = filtered.filter(d =>
+    (d.name || '').toLowerCase().includes(savedQ) ||
+    (d.mobile || '').includes(savedQ) ||
+    (d.mobileAlt || '').includes(savedQ)
+  );
 
   const uncalledCount = filtered.filter(d => isUncalled(d)).length;
   const comingCount   = filtered.filter(d => currentWkData.csMap[d.id]?.comingStatus === 'Yes').length;
@@ -1319,6 +1325,15 @@ function _renderCMWeek() {
         </span>
       </div>
       <div class="cm-filters">
+        <div class="cm-search-wrap">
+          <i class="fas fa-search"></i>
+          <input type="text" id="cm-filter-search" placeholder="Search name or mobile…"
+            value="${savedQ.replace(/"/g,'&quot;')}"
+            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+            data-form-type="other" data-lpignore="true" data-1p-ignore="true"
+            readonly onfocus="this.removeAttribute('readonly')"
+            oninput="_onCMSearch(this.value)">
+        </div>
         <select id="cm-filter-team" class="filter-select" style="font-size:.82rem" onchange="_onCMTeamChange()">
           ${teamOpts}
         </select>
@@ -1384,6 +1399,24 @@ function _onCMTeamChange() {
   const by = document.getElementById('cm-filter-by');
   if (by) by.value = '';
   _renderCMWeek();
+}
+
+let _cmSearchTimer = null;
+function _onCMSearch(_v) {
+  clearTimeout(_cmSearchTimer);
+  _cmSearchTimer = setTimeout(() => {
+    _renderCMWeek();
+    // Re-focus the regenerated input and place the caret at end so typing flows
+    setTimeout(() => {
+      const inp = document.getElementById('cm-filter-search');
+      if (inp) {
+        inp.removeAttribute('readonly');
+        inp.focus();
+        const n = inp.value.length;
+        try { inp.setSelectionRange(n, n); } catch (_) {}
+      }
+    }, 0);
+  }, 220);
 }
 
 function openTeamChangeQuick(devoteeId, devoteeName, currentTeam) {

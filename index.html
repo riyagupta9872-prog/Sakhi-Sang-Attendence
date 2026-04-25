@@ -215,6 +215,7 @@
         <option value="">All Teams</option>
         <option>Lalita</option><option>Vishakha</option><option>Tungavidya</option><option>Indulekha</option>
         <option>Sudevi</option><option>Rangadevi</option><option>Chitralekha</option><option>Champaklata</option>
+        <option>Nilachal</option><option>New Devotees</option><option>Other</option>
       </select>
       <select id="filter-calling-by" class="filter-select" onchange="loadDevotees()">
         <option value="">All Callers</option>
@@ -645,27 +646,27 @@
         <div class="form-grid">
           <div class="form-group full">
             <label>Full Name <span class="req">*</span></label>
-            <input type="text" id="f-name" required placeholder="Enter full name">
+            <input type="text" id="f-name" placeholder="Enter full name">
           </div>
           <div class="form-group">
-            <label>Date of Birth <span class="req">*</span></label>
+            <label>Date of Birth <span class="field-hint">(optional)</span></label>
             <input type="date" id="f-dob">
           </div>
           <div class="form-group">
             <label>Mobile Number <span class="req">*</span></label>
             <input type="tel" id="f-mobile" placeholder="10-digit number"
-              inputmode="numeric" maxlength="10" pattern="[0-9]{10}"
+              inputmode="numeric" maxlength="10"
               oninput="this.value=this.value.replace(/\D/g,'').slice(0,10)">
             <span class="field-error" id="err-mobile">Mobile must be exactly 10 digits</span>
           </div>
           <div class="form-group">
             <label>Alternate Mobile <span class="field-hint">(optional)</span></label>
             <input type="tel" id="f-mobile-alt" placeholder="Alternate 10-digit number"
-              inputmode="numeric" maxlength="10" pattern="[0-9]{10}"
+              inputmode="numeric" maxlength="10"
               oninput="this.value=this.value.replace(/\D/g,'').slice(0,10)">
           </div>
           <div class="form-group full">
-            <label>Residential Address <span class="req">*</span></label>
+            <label>Residential Address <span class="field-hint">(optional)</span></label>
             <textarea id="f-address" rows="2" placeholder="Full residential address"></textarea>
           </div>
           <div class="form-group full">
@@ -894,6 +895,31 @@
     <div class="form-actions" style="padding:1rem 1.25rem">
       <button class="btn btn-secondary" onclick="closeModal('import-mapping-modal')">Cancel</button>
       <button class="btn btn-primary" onclick="confirmMappingImport()"><i class="fas fa-file-import"></i> Confirm &amp; Import</button>
+    </div>
+  </div>
+</div>
+
+<!-- Calling By Name Mapping Modal (import flow) -->
+<div id="import-callingby-modal" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:560px">
+    <div class="modal-header">
+      <h2><i class="fas fa-headset"></i> Map "Calling By" names</h2>
+      <button class="btn-icon close" onclick="closeModal('import-callingby-modal')"><i class="fas fa-times"></i></button>
+    </div>
+    <p style="padding:.75rem 1.25rem .25rem;font-size:.85rem">
+      The names in your Excel "Calling By" column may differ from the system login names.
+      For each Excel name below, pick the matching system user (or leave blank to keep the Excel name as-is).
+    </p>
+    <div class="mapping-scroll">
+      <table class="col-mapping-table" id="callingby-mapping-table">
+        <thead><tr><th>Excel Name</th><th>System Caller</th></tr></thead>
+        <tbody id="callingby-mapping-body"></tbody>
+      </table>
+    </div>
+    <p class="mapping-hint"><i class="fas fa-info-circle"></i> Auto-matched names are pre-filled. Blank means "keep the Excel value".</p>
+    <div class="form-actions" style="padding:1rem 1.25rem">
+      <button class="btn btn-secondary" onclick="closeModal('import-callingby-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmCallingByMapping()"><i class="fas fa-file-import"></i> Confirm &amp; Import</button>
     </div>
   </div>
 </div>

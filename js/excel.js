@@ -549,6 +549,51 @@ async function exportDevoteeDatabase() {
       XLSX.utils.book_append_sheet(wb, ws, 'All Teams');
     }
 
+    // ── Re-Import (Flat) sheet ───────────────────────────
+    // A simple flat sheet with the SAME headers as the import template, so
+    // the user can edit this sheet and re-import without any conversion.
+    {
+      const flatHeaders = [
+        'Name', 'Mobile', 'Alternate Mobile', 'Address', 'DOB',
+        'Date of Joining', 'Chanting Rounds', 'Kanthi', 'Gopi Dress', 'Tilak',
+        'Team', 'Status', 'Facilitator', 'Reference', 'Calling By',
+        'Education', 'Email', 'Profession', 'Family Favourable', 'Reading', 'Hearing',
+        'Hobbies',
+      ];
+      const yn = v => v ? 'Yes' : 'No';
+      const flatRows = [flatHeaders];
+      const sortedAll = [...allDevotees]
+        .filter(d => d.isActive !== false)
+        .sort((a, b) => (a.teamName || '').localeCompare(b.teamName || '') || (a.name || '').localeCompare(b.name || ''));
+      sortedAll.forEach(d => {
+        flatRows.push([
+          d.name || '',
+          d.mobile || '',
+          d.mobileAlt || '',
+          d.address || '',
+          d.dob || '',
+          d.dateOfJoining || '',
+          d.chantingRounds || 0,
+          yn(d.kanthi), yn(d.gopiDress), yn(d.tilak),
+          d.teamName || '',
+          d.devoteeStatus || '',
+          d.facilitator || '',
+          d.referenceBy || '',
+          d.callingBy || '',
+          d.education || '',
+          d.email || '',
+          d.profession || '',
+          d.familyFavourable || '',
+          d.reading || '',
+          d.hearing || '',
+          d.hobbies || '',
+        ]);
+      });
+      const wsFlat = XLSX.utils.aoa_to_sheet(flatRows);
+      wsFlat['!cols'] = flatHeaders.map(() => ({ wch: 16 }));
+      XLSX.utils.book_append_sheet(wb, wsFlat, 'Re-Import (Flat)');
+    }
+
     XLSX.writeFile(wb, `sakhi_sang_database_${getToday()}.xlsx`);
     showToast('Database exported!', 'success');
   } catch (e) {
@@ -679,28 +724,54 @@ async function handleImportFile(e) {
     const ab = await file.arrayBuffer();
     const wb = XLSX.read(ab, { type: 'array', cellDates: false });
 
+    // Prefer the "Re-Import (Flat)" sheet that exportDevoteeDatabase writes
+    // — it has clean headers in row 1 and no team/level banner rows. If the
+    // user uploads a full export, this gives a 100% lossless re-import.
+    const sheetOrder = [...wb.SheetNames].sort((a, b) => {
+      const isFlatA = /re.?import|flat/i.test(a) ? 0 : 1;
+      const isFlatB = /re.?import|flat/i.test(b) ? 0 : 1;
+      return isFlatA - isFlatB;
+    });
+
     let allRows = [];
-    for (const sheetName of wb.SheetNames) {
+    let usedFlat = false;
+    for (const sheetName of sheetOrder) {
       if (sheetName.toLowerCase().includes('instruction')) continue;
+      // Once we've consumed a flat sheet, skip the formatted ones — otherwise
+      // we'd double-count every devotee (once in their team sheet, once in
+      // "All Teams", once in the flat sheet).
+      if (usedFlat) continue;
       const ws = wb.Sheets[sheetName];
       let rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
       if (!rows.length) continue;
 
-      const firstKeys = Object.keys(rows[0] || {});
+      // For complex multi-section sheets (per-team export), the real header
+      // row may be several rows down. Walk down looking for a row whose keys
+      // include "Name" and one of the contact columns.
       const knownCols = ['Name','name','Contact','Mobile','NAAM','Devotee Name'];
+      const firstKeys = Object.keys(rows[0] || {});
       const hasHeader = firstKeys.some(k => knownCols.some(kc => k.toLowerCase() === kc.toLowerCase()));
       if (!hasHeader && rows.length > 1) {
-        rows = XLSX.utils.sheet_to_json(ws, { defval: '', range: 1 });
+        // Try parsing with each subsequent row as the header until one fits
+        for (let off = 1; off <= 6 && off < rows.length; off++) {
+          const reparsed = XLSX.utils.sheet_to_json(ws, { defval: '', range: off });
+          const keys = Object.keys(reparsed[0] || {});
+          if (keys.some(k => knownCols.some(kc => k.toLowerCase() === kc.toLowerCase()))) {
+            rows = reparsed; break;
+          }
+        }
       }
 
       rows = rows.filter(r => {
         const nm = importCol(r, ['Name','name','Devotee Name','NAAM','Contact']);
         if (!nm) return false;
+        // Filter banners + level/section labels from the formatted export
         if (/^(level|──|sr\.?\s*no|sno|s\.no|well wish|beginn|advanc|committ)/i.test(nm)) return false;
         return true;
       });
 
       allRows = allRows.concat(rows);
+      if (/re.?import|flat/i.test(sheetName) && allRows.length) usedFlat = true;
     }
 
     if (!allRows.length) {
@@ -762,6 +833,9 @@ function showColumnMappingUI(rows) {
   openModal('import-mapping-modal');
 }
 
+let _importColMap = {};
+let _importCallingByMap = {};
+
 async function confirmMappingImport() {
   if (!_importRows.length) return;
   const selects = document.querySelectorAll('#col-mapping-body select');
@@ -769,15 +843,88 @@ async function confirmMappingImport() {
   selects.forEach(sel => {
     if (sel.value) colMap[sel.dataset.col] = sel.value;
   });
-
+  _importColMap = colMap;
   closeModal('import-mapping-modal');
+
+  // Step 2: collect unique calling-by names from the file. If any of them
+  // don't exactly match a system user, ask the importer to map them.
+  const callingByExcelCol = Object.keys(colMap).find(c => colMap[c] === 'callingBy');
+  if (!callingByExcelCol) {
+    return _runImportNow();      // No calling-by column → import as-is
+  }
+
+  const excelNames = [...new Set(
+    _importRows.map(r => String(r[callingByExcelCol] ?? '').trim()).filter(Boolean)
+  )];
+  if (!excelNames.length) return _runImportNow();
+
+  let users = [];
+  try { users = await DB.getUsersForTeam(''); } catch (_) {}
+  const userByLower = {};
+  users.forEach(u => { if (u.name) userByLower[u.name.trim().toLowerCase()] = u.name; });
+
+  // Auto-match where exact (case-insensitive) match exists
+  _importCallingByMap = {};
+  const unmatched = [];
+  excelNames.forEach(n => {
+    const exact = userByLower[n.toLowerCase()];
+    if (exact) _importCallingByMap[n] = exact;
+    else       unmatched.push(n);
+  });
+
+  // If everything auto-matched, skip the modal
+  if (!unmatched.length) return _runImportNow();
+
+  // Render mapping rows
+  const userOptions = '<option value="">— Keep Excel name as-is —</option>' +
+    users.map(u => `<option value="${(u.name||'').replace(/"/g,'&quot;')}">${u.name}${u.teamName ? ' (' + u.teamName + ')' : ''}</option>`).join('');
+  const tbody = document.getElementById('callingby-mapping-body');
+  tbody.innerHTML = excelNames.map(n => {
+    const auto = _importCallingByMap[n] || '';
+    const isUnmatched = !auto;
+    return `<tr>
+      <td><strong>${n}</strong>${isUnmatched ? ' <span style="font-size:.7rem;color:var(--warning);font-weight:600">⚠ no match</span>' : ' <span style="font-size:.7rem;color:var(--success);font-weight:600">✓ auto</span>'}</td>
+      <td>
+        <select data-excel-name="${n.replace(/"/g,'&quot;')}" class="filter-select" style="width:100%">
+          ${userOptions.replace(`value="${auto.replace(/"/g,'&quot;')}"`, `value="${auto.replace(/"/g,'&quot;')}" selected`)}
+        </select>
+      </td>
+    </tr>`;
+  }).join('');
+  openModal('import-callingby-modal');
+}
+
+async function confirmCallingByMapping() {
+  document.querySelectorAll('#callingby-mapping-body select').forEach(sel => {
+    const excelName = sel.dataset.excelName;
+    const sysName   = sel.value || '';
+    if (sysName) _importCallingByMap[excelName] = sysName;
+    else delete _importCallingByMap[excelName];   // empty → keep original Excel value
+  });
+  closeModal('import-callingby-modal');
+  return _runImportNow();
+}
+
+async function _runImportNow() {
   const zone   = document.getElementById('import-drop-zone');
   const result = document.getElementById('import-result');
   zone.innerHTML = `<i class="fas fa-spinner" style="font-size:2rem;color:var(--secondary)"></i><p>Saving ${_importRows.length} rows…</p>`;
   result.classList.add('hidden');
 
+  // Apply calling-by mapping to rows in-place before import
+  const cbCol = Object.keys(_importColMap).find(c => _importColMap[c] === 'callingBy');
+  if (cbCol && Object.keys(_importCallingByMap).length) {
+    _importRows = _importRows.map(r => {
+      const orig = String(r[cbCol] ?? '').trim();
+      if (orig && _importCallingByMap[orig]) {
+        return { ...r, [cbCol]: _importCallingByMap[orig] };
+      }
+      return r;
+    });
+  }
+
   try {
-    const data = await importWithMapping(_importRows, colMap, _importMode);
+    const data = await importWithMapping(_importRows, _importColMap, _importMode);
     showImportReport(data, result);
     loadDevotees(); loadCallingPersonsFilter();
     showToast(`Import complete — ${data.imported} added${data.updated ? ', ' + data.updated + ' updated' : ''}`, 'success');
@@ -792,6 +939,8 @@ async function confirmMappingImport() {
     <small style="color:var(--text-muted)">Supports any column names — auto-detected</small>
     <input type="file" id="import-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleImportFile(event)">`;
   _importRows = [];
+  _importColMap = {};
+  _importCallingByMap = {};
 }
 
 async function importWithMapping(rows, colMap, mode = 'add') {
@@ -802,26 +951,14 @@ async function importWithMapping(rows, colMap, mode = 'add') {
 
   let imported = 0, updated = 0, skipped = [], errors = [];
   const list = await DevoteeCache.all();
-  const mobileMap = {}, nameMap = {};
-  list.forEach(d => {
-    if (d.mobile) mobileMap[d.mobile] = { id: d.id, name: d.name };
-    nameMap[d.name.toLowerCase()] = { id: d.id, name: d.name };
-  });
-
-  // Resolve a matching existing doc ID.
-  // Add mode: duplicate only if BOTH name AND mobile match the SAME record.
-  // Upsert mode: match by name (or by both if available).
+  // Single duplicate key = (name + mobile). Same name with a different number,
+  // or same number with a different name, are NOT duplicates.
+  const pairKey = (n, m) => `${(n || '').trim().toLowerCase()}|${(m || '').trim()}`;
+  const pairMap = {};
+  list.forEach(d => { pairMap[pairKey(d.name, d.mobile)] = { id: d.id, name: d.name }; });
   function resolveExistId(name, mobile) {
-    const byMobile = mobile ? mobileMap[mobile] : null;
-    const byName   = nameMap[name.toLowerCase()];
-    if (mode === 'upsert') {
-      if (byMobile && byName && byMobile.id === byName.id) return byMobile.id;
-      if (byName) return byName.id;
-      return null;
-    }
-    // Add mode: true duplicate = same name AND same mobile point to same record
-    if (byMobile && byName && byMobile.id === byName.id) return byMobile.id;
-    return null;
+    const ex = pairMap[pairKey(name, mobile)];
+    return ex ? ex.id : null;
   }
 
   const chunks = [];
@@ -841,9 +978,11 @@ async function importWithMapping(rows, colMap, mode = 'add') {
 
         const rawFamM = parseInt(getField(row, 'familyMembers'));
         const rawFamP = parseInt(getField(row, 'familyParticipants'));
+        const mobileAlt = String(getField(row, 'mobileAlt')).replace(/\D/g, '').slice(0, 10);
         const payload = {
           name,
           mobile:              mobile || null,
+          mobileAlt:           mobileAlt || null,
           address:             String(getField(row, 'address')) || null,
           dob:                 importDate(getField(row, 'dob')) || null,
           email:               String(getField(row, 'email')) || null,
@@ -876,14 +1015,12 @@ async function importWithMapping(rows, colMap, mode = 'add') {
             batch.update(fdb.collection('devotees').doc(existId), payload);
             updated++;
           } else {
-            const matched = nameMap[name.toLowerCase()]?.name || mobileMap[mobile]?.name || '';
-            skipped.push({ row: rowNum, name, mobile: mobile || '', reason: `Duplicate — already exists as "${matched}"`, payload });
+            skipped.push({ row: rowNum, name, mobile: mobile || '', reason: `Duplicate — same name + mobile already exists`, payload });
           }
         } else {
           const ref = fdb.collection('devotees').doc();
           batch.set(ref, { ...payload, lifetimeAttendance: 0, createdAt: TS() });
-          if (mobile) mobileMap[mobile] = { id: ref.id, name };
-          nameMap[name.toLowerCase()] = { id: ref.id, name };
+          pairMap[pairKey(name, mobile)] = { id: ref.id, name };
           imported++;
         }
         batchHasWrites = true;

@@ -117,16 +117,19 @@ const DB = {
   },
 
   async createDevotee(formData) {
+    // Duplicate rule: only same NAME + same MOBILE is a duplicate.
+    //   - same name + different mobile  → allowed (likely a different person sharing a name)
+    //   - different name + same mobile  → allowed (e.g. shared family number)
+    //   - same name + same mobile        → blocked as duplicate
     const list = await DevoteeCache.all();
     const mobile = (formData.mobile || '').trim();
-    if (mobile) {
-      const ex = list.find(d => d.mobile === mobile);
-      if (ex) throw { error: 'Duplicate', message: `Mobile already registered to ${ex.name}`, existingId: ex.id };
-    }
-    const name = (formData.name || '').trim();
-    if (name) {
-      const exn = list.find(d => d.name.trim().toLowerCase() === name.toLowerCase());
-      if (exn) throw { error: 'DuplicateName', message: `Name already exists: ${exn.name}`, existingId: exn.id };
+    const name   = (formData.name   || '').trim();
+    if (name && mobile) {
+      const ex = list.find(d =>
+        (d.mobile || '') === mobile &&
+        (d.name || '').trim().toLowerCase() === name.toLowerCase()
+      );
+      if (ex) throw { error: 'Duplicate', message: `"${ex.name}" with this mobile already exists`, existingId: ex.id };
     }
     const payload = { ...toCamel(formData), lifetimeAttendance: 0, isActive: true, inactivityFlag: false, createdAt: TS(), updatedAt: TS() };
     const ref = await fdb.collection('devotees').add(payload);
@@ -176,10 +179,13 @@ const DB = {
   async importDevotees(rows, mode = 'add') {
     let imported = 0, updated = 0, skipped = [], errors = [];
     const list = await DevoteeCache.all();
-    const mobileMap = {}, nameMap = {};
+    // Duplicate key = name + mobile (lowercased name).
+    // Same name with a different number, or same number with a different name,
+    // are NOT duplicates and will be imported as new devotees.
+    const pairKey = (name, mobile) => `${(name || '').trim().toLowerCase()}|${(mobile || '').trim()}`;
+    const pairMap = {};
     list.forEach(d => {
-      if (d.mobile) mobileMap[d.mobile] = { id: d.id, name: d.name };
-      nameMap[d.name.toLowerCase()] = { id: d.id, name: d.name };
+      pairMap[pairKey(d.name, d.mobile)] = { id: d.id, name: d.name };
     });
 
     for (let ci = 0; ci < rows.length; ci += 400) {
@@ -218,23 +224,17 @@ const DB = {
             isActive: true, inactivityFlag: false, updatedAt: TS(),
           };
 
-          const byMobile = mobile && mobileMap[mobile];
-          const byName   = nameMap[name.toLowerCase()];
-          const existingId = (byMobile || (mode === 'upsert' && byName))?.id || null;
+          const dupKey = pairKey(name, mobile);
+          const exact  = pairMap[dupKey];
 
-          if (mode === 'upsert' && existingId) {
-            batch.update(fdb.collection('devotees').doc(existingId), payload);
+          if (mode === 'upsert' && exact) {
+            batch.update(fdb.collection('devotees').doc(exact.id), payload);
             updated++; any = true;
-          } else if (existingId) {
-            const matchedName = (byMobile || byName)?.name || '';
-            const reason = byMobile
-              ? `Duplicate mobile — already registered as "${matchedName}"`
-              : `Duplicate name — already exists as "${matchedName}"`;
-            skipped.push({ row: rowNum, name, mobile: mobile || '', reason });
+          } else if (exact) {
+            skipped.push({ row: rowNum, name, mobile: mobile || '', reason: `Duplicate — same name + mobile already exists as "${exact.name}"` });
           } else {
             batch.set(fdb.collection('devotees').doc(), { ...payload, lifetimeAttendance: 0, createdAt: TS() });
-            if (mobile) mobileMap[mobile] = { id: 'new', name };
-            nameMap[name.toLowerCase()] = { id: 'new', name };
+            pairMap[dupKey] = { id: 'new', name };
             imported++; any = true;
           }
         } catch (e) { errors.push({ row: rowNum, name: '', mobile: '', reason: e.message }); }
@@ -842,7 +842,7 @@ const DB = {
 
   async getSeriousReport(weekDate, sessionId) {
     const teams = TEAMS;
-    const statuses = ['Expected to be Serious','Serious','Most Serious'];
+    const statuses = ['Expected to be Serious','Serious','Most Serious','New Devotee','Inactive'];
     const raw = await DevoteeCache.all();
     const [csSnap, atSnap] = await Promise.all([
       fdb.collection('callingStatus').where('weekDate', '==', weekDate).get(),
