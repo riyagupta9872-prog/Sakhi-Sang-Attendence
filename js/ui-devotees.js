@@ -238,8 +238,10 @@ function clearDevoteeForm() {
   document.getElementById('f-dob').value = '';
   document.getElementById('f-joining').value = getToday();
   document.getElementById('f-chanting').value = '0';
-  document.getElementById('f-team').value = '';
-  document.getElementById('f-status').value = 'Expected to be Serious';
+  // New devotees default to team "Other" and status "New Devotee" — super admin
+  // can re-assign later from the Calling Mgmt → New Comers tab.
+  document.getElementById('f-team').value = 'Other';
+  document.getElementById('f-status').value = 'New Devotee';
   document.getElementById('f-kanthi').value = '0';
   document.getElementById('f-gopi').value = '0';
   document.getElementById('f-family-favourable').value = '';
@@ -250,6 +252,8 @@ function clearDevoteeForm() {
   clearPicker('picker-reference',   'f-reference');
   clearPicker('picker-calling-by',  'f-calling-by');
   clearFieldError('mobile');
+  // Coordinators / facilitators who can only see their own team get that team
+  // pre-filled instead of "Other".
   if ((AppState.userRole === 'teamAdmin' || AppState.userRole === 'serviceDevotee') && AppState.userTeam) {
     document.getElementById('f-team').value = AppState.userTeam;
   }

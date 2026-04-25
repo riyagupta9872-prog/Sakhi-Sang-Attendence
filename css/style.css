@@ -911,12 +911,20 @@ button.contact-icon { border: none; padding: 0; }
   border-radius: var(--radius-sm); border: 1px solid var(--border);
   box-shadow: var(--shadow-xs);
 }
-.calling-stat {
+button.calling-stat {
   background: var(--gray-50); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: .42rem .85rem;
-  font-size: .81rem; display: flex; align-items: center; gap: .4rem;
+  font-size: .81rem; display: inline-flex; align-items: center; gap: .4rem;
   box-shadow: var(--shadow-xs);
+  cursor: pointer; font-family: inherit; color: var(--text);
+  transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
 }
+button.calling-stat:hover {
+  transform: translateY(-1px);
+  border-color: var(--brand-light);
+  box-shadow: var(--shadow-sm);
+}
+button.calling-stat:active { transform: translateY(0); }
 .calling-stat strong { color: var(--brand); font-size: 1rem; }
 
 /* Submission Report */
@@ -1107,6 +1115,17 @@ button.contact-icon { border: none; padding: 0; }
 }
 .sh-cancelled-cell { font-style: italic; color: #9ca3af !important; font-size: .71rem; }
 .sh-sno { font-weight: 700; color: var(--text-muted); min-width: 32px; }
+/* CS cell — full status text, wraps; hover shows the same text via title */
+.sh-cs-cell {
+  white-space: normal !important;
+  word-break: break-word;
+  text-align: left !important;
+  font-size: .68rem;
+  line-height: 1.25;
+  min-width: 120px; max-width: 180px;
+  padding: .35rem .45rem;
+}
+.sh-cs-cell br + * { font-style: italic; opacity: .82; }
 .attendance-sheet-table tbody tr:hover td { background-color: rgba(26,92,58,.04) !important; }
 
 /* Management column sticky */

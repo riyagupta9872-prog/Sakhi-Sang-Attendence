@@ -484,14 +484,15 @@ function renderCallingStats(devotees) {
   const festival  = devotees.filter(d => d.calling_reason === 'festival_calling').length;
   const notInt    = devotees.filter(d => d.calling_reason === 'not_interested_now').length;
   const uncalled  = devotees.filter(d => !d.coming_status && !d.calling_reason && !d.calling_notes).length;
+  // Each pill is clickable → opens a modal listing the devotees in that bucket.
   document.getElementById('calling-stats').innerHTML = `
-    <div class="calling-stat"><i class="fas fa-check-circle" style="color:var(--success)"></i> <strong>${yes}</strong> Confirmed</div>
-    <div class="calling-stat"><i class="fas fa-phone-slash" style="color:var(--danger)"></i> <strong>${reached}</strong> Not reached</div>
-    <div class="calling-stat"><i class="fas fa-calendar-times" style="color:#7b5ea7"></i> <strong>${unavail}</strong> Unavailable</div>
-    <div class="calling-stat"><i class="fas fa-laptop" style="color:#0288d1"></i> <strong>${online}</strong> Online</div>
-    ${festival ? `<div class="calling-stat"><i class="fas fa-star-and-crescent" style="color:#f57f17"></i> <strong>${festival}</strong> Festival</div>` : ''}
-    ${notInt ? `<div class="calling-stat"><i class="fas fa-ban" style="color:var(--danger)"></i> <strong>${notInt}</strong> Not Interested</div>` : ''}
-    <div class="calling-stat"><i class="fas fa-circle-notch" style="color:var(--text-muted)"></i> <strong>${uncalled}</strong> Not called</div>`;
+    <button class="calling-stat" onclick="openCallingStatList('confirmed')"     title="Click to see who confirmed"><i class="fas fa-check-circle" style="color:var(--success)"></i> <strong>${yes}</strong> Confirmed</button>
+    <button class="calling-stat" onclick="openCallingStatList('not_reached')"   title="Click to see who couldn't be reached"><i class="fas fa-phone-slash" style="color:var(--danger)"></i> <strong>${reached}</strong> Not reached</button>
+    <button class="calling-stat" onclick="openCallingStatList('unavailable')"   title="Click to see who is unavailable"><i class="fas fa-calendar-times" style="color:#7b5ea7"></i> <strong>${unavail}</strong> Unavailable</button>
+    <button class="calling-stat" onclick="openCallingStatList('online')"        title="Click to see online class devotees"><i class="fas fa-laptop" style="color:#0288d1"></i> <strong>${online}</strong> Online</button>
+    ${festival ? `<button class="calling-stat" onclick="openCallingStatList('festival')" title="Click to see festival calling list"><i class="fas fa-star-and-crescent" style="color:#f57f17"></i> <strong>${festival}</strong> Festival</button>` : ''}
+    ${notInt ? `<button class="calling-stat" onclick="openCallingStatList('not_interested')" title="Click to see Not Interested (this week)"><i class="fas fa-ban" style="color:var(--danger)"></i> <strong>${notInt}</strong> Not Interested</button>` : ''}
+    <button class="calling-stat" onclick="openCallingStatList('uncalled')"      title="Click to see who hasn't been called yet"><i class="fas fa-circle-notch" style="color:var(--text-muted)"></i> <strong>${uncalled}</strong> Not called</button>`;
 }
 
 function filterCallingList() {
@@ -499,7 +500,7 @@ function filterCallingList() {
   const s    = document.getElementById('calling-filter-status').value;
   const team = document.getElementById('calling-filter-team').value;
   const by   = document.getElementById('calling-filter-callingby').value;
-  renderCallingList(AppState.callingData.filter(d => {
+  const filtered = AppState.callingData.filter(d => {
     if (q    && !d.name.toLowerCase().includes(q) && !(d.mobile||'').includes(q)) return false;
     if (team && d.team_name !== team) return false;
     if (by   && d.calling_by !== by) return false;
@@ -509,7 +510,11 @@ function filterCallingList() {
       return d.calling_reason === s;
     }
     return true;
-  }), _callingLocked);
+  });
+  // Stats follow whichever filters are active so the numbers always match
+  // what's visible in the list below.
+  renderCallingStats(filtered);
+  renderCallingList(filtered, _callingLocked);
 }
 
 function renderCallingList(devotees, locked) {
@@ -807,13 +812,15 @@ async function _loadCallingSummary(week, el) {
     let gTotal=0, gCalled=0, gNC=0, gYes=0, gOnline=0, gFestival=0, gNI=0;
     let bodyRows = '';
 
-    teams.forEach(team => {
+    teams.forEach((team, ti) => {
       const t = report[team];
       gTotal += t.total; gCalled += t.called; gNC += t.notCalled;
       gYes += t.yes; gOnline += (t.online||0); gFestival += (t.festival||0); gNI += (t.notInterested||0);
 
-      bodyRows += `<tr style="background:var(--accent-light);font-weight:700;font-size:.83rem">
-        <td colspan="2">${teamBadge(team)}</td>
+      const teamId = 'team-' + ti;
+      // Team header row — clickable to expand/collapse facilitators
+      bodyRows += `<tr class="cs-team-row" data-team-id="${teamId}" style="background:var(--accent-light);font-weight:700;font-size:.83rem;cursor:pointer" onclick="_toggleCSReportTeam('${teamId}', this)">
+        <td colspan="2"><i class="fas fa-chevron-right cs-team-chev" style="font-size:.7rem;color:var(--text-muted);margin-right:.4rem"></i>${teamBadge(team)}</td>
         <td style="text-align:center">${t.total}</td>
         <td style="text-align:center">${t.called}</td>
         <td style="text-align:center;color:#c62828">${t.notCalled}</td>
@@ -833,17 +840,29 @@ async function _loadCallingSummary(week, el) {
         const posBadge = s.isCoordinator
           ? `<span style="font-size:.68rem;padding:.1rem .35rem;border-radius:.2rem;background:rgba(201,168,76,.2);color:#8B6914;font-weight:600">${posLabel}</span>`
           : `<span style="font-size:.68rem;padding:.1rem .35rem;border-radius:.2rem;background:rgba(82,183,136,.15);color:var(--primary)">${posLabel}</span>`;
-        bodyRows += `<tr style="font-size:.82rem">
-          <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}</td>
-          <td>${posBadge}</td>
-          <td style="text-align:center">${s.total}</td>
-          <td style="text-align:center">${s.called}</td>
-          <td style="text-align:center;color:#c62828">${s.notCalled}</td>
-          <td style="text-align:center;color:var(--success);font-weight:600">${s.yes}</td>
-          <td style="text-align:center;color:#0288d1">${s.online||0}</td>
-          <td style="text-align:center;color:#f57f17">${s.festival||0}</td>
-          <td style="text-align:center;color:var(--danger)">${s.notInterested||0}</td>
-        </tr>`;
+        // Hidden by default — shown when team row is clicked
+        if (s.submitted) {
+          bodyRows += `<tr class="cs-caller-row cs-caller-${teamId}" style="font-size:.82rem;display:none">
+            <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}</td>
+            <td>${posBadge}</td>
+            <td style="text-align:center">${s.total}</td>
+            <td style="text-align:center">${s.called}</td>
+            <td style="text-align:center;color:#c62828">${s.notCalled}</td>
+            <td style="text-align:center;color:var(--success);font-weight:600">${s.yes}</td>
+            <td style="text-align:center;color:#0288d1">${s.online||0}</td>
+            <td style="text-align:center;color:#f57f17">${s.festival||0}</td>
+            <td style="text-align:center;color:var(--danger)">${s.notInterested||0}</td>
+          </tr>`;
+        } else {
+          bodyRows += `<tr class="cs-caller-row cs-caller-${teamId}" style="font-size:.82rem;display:none;background:#fff8e1">
+            <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}</td>
+            <td>${posBadge}</td>
+            <td style="text-align:center">${s.total}</td>
+            <td colspan="6" style="text-align:center;color:#c62828;font-weight:600">
+              <i class="fas fa-clock"></i> Not Submitted — counts excluded from team total
+            </td>
+          </tr>`;
+        }
       });
     });
 
@@ -1204,4 +1223,157 @@ function saveLateRemark(statusId, remarks) {
   _lateRemarksTimers[statusId] = setTimeout(async () => {
     try { await DB.saveCallingRemarks(statusId, remarks); } catch (_) {}
   }, 800);
+}
+
+// Calling Summary — click team row to expand/collapse its facilitators
+function _toggleCSReportTeam(teamId, rowEl) {
+  const rows = document.querySelectorAll('.cs-caller-' + teamId);
+  if (!rows.length) return;
+  const open = rows[0].style.display !== 'none';
+  rows.forEach(r => { r.style.display = open ? 'none' : ''; });
+  const chev = rowEl.querySelector('.cs-team-chev');
+  if (chev) chev.style.transform = open ? '' : 'rotate(90deg)';
+}
+
+// ── Calling-stat detail modal ─────────────────────────────────
+// Click any stat pill (Confirmed / Not reached / Online / Festival / Not Interested
+// / Not called) to see the actual devotees behind that number, with bulk-action
+// support for super admins to move people between status lists or change team.
+let _csModalDevotees = [];
+let _csModalSelected = new Set();
+let _csModalTitle = '';
+
+function openCallingStatList(type) {
+  // Respect the currently-active filters on the Calling page so the stat
+  // drilldown shows only the devotees the user is currently looking at.
+  const allRaw = AppState.callingData || [];
+  const fTeam = document.getElementById('calling-filter-team')?.value      || '';
+  const fBy   = document.getElementById('calling-filter-callingby')?.value || '';
+  const fQ    = (document.getElementById('calling-search')?.value || '').toLowerCase();
+  const all = allRaw.filter(d => {
+    if (fTeam && d.team_name !== fTeam) return false;
+    if (fBy   && d.calling_by !== fBy)  return false;
+    if (fQ && !((d.name || '').toLowerCase().includes(fQ) || (d.mobile || '').includes(fQ))) return false;
+    return true;
+  });
+  const map = {
+    confirmed:      { title: '✓ Confirmed Coming',          icon: 'fas fa-check-circle',  color: 'var(--success)', filter: d => d.coming_status === 'Yes' },
+    not_reached:    { title: 'Not Reached',                  icon: 'fas fa-phone-slash',   color: 'var(--danger)',  filter: d => ['did_not_pick','incoming_na','wrong_number','out_of_service'].includes(d.calling_reason) },
+    unavailable:    { title: 'Temporarily Unavailable',      icon: 'fas fa-calendar-times',color: '#7b5ea7',        filter: d => ['out_of_station','exams'].includes(d.calling_reason) },
+    online:         { title: 'Online Class (this week)',     icon: 'fas fa-laptop',        color: '#0288d1',        filter: d => d.calling_reason === 'online_class' },
+    festival:       { title: 'Festival Calling',             icon: 'fas fa-star-and-crescent', color: '#f57f17',    filter: d => d.calling_reason === 'festival_calling' },
+    not_interested: { title: 'Not Interested (this week)',   icon: 'fas fa-ban',           color: 'var(--danger)',  filter: d => d.calling_reason === 'not_interested_now' },
+    uncalled:       { title: 'Not Called Yet',               icon: 'fas fa-circle-notch',  color: 'var(--text-muted)', filter: d => !d.coming_status && !d.calling_reason && !d.calling_notes },
+  };
+  const cfg = map[type];
+  if (!cfg) return;
+  _csModalDevotees = all.filter(cfg.filter);
+  _csModalSelected.clear();
+  _csModalTitle = `<i class="${cfg.icon}" style="color:${cfg.color}"></i> ${cfg.title}`;
+  document.getElementById('cs-modal-title').innerHTML =
+    `${_csModalTitle} <span style="color:var(--text-muted);font-weight:400;font-size:.85rem">(${_csModalDevotees.length})</span>`;
+  document.getElementById('cs-modal-search').value = '';
+  document.getElementById('cs-modal-checkall').checked = false;
+
+  // Populate Team filter from teams represented in this list
+  const teamSel = document.getElementById('cs-modal-team');
+  const teamsHere = [...new Set(_csModalDevotees.map(d => d.team_name).filter(Boolean))].sort();
+  teamSel.innerHTML = '<option value="">All Teams</option>' +
+    teamsHere.map(t => `<option value="${t}">${t}</option>`).join('');
+  teamSel.value = '';
+
+  _populateCSModalCallers();
+  _renderCSModal();
+  openModal('calling-stat-modal');
+}
+
+// Calling By dropdown is sub-filter of Team — when team is selected, only
+// callers from that team are listed.
+function _populateCSModalCallers() {
+  const teamVal = document.getElementById('cs-modal-team')?.value || '';
+  const bySel   = document.getElementById('cs-modal-by');
+  if (!bySel) return;
+  const pool = teamVal ? _csModalDevotees.filter(d => d.team_name === teamVal) : _csModalDevotees;
+  const callers = [...new Set(pool.map(d => d.calling_by).filter(Boolean))].sort();
+  bySel.innerHTML = '<option value="">All Calling By</option>' +
+    callers.map(c => `<option value="${c.replace(/"/g,'&quot;')}">${c}</option>`).join('');
+}
+
+function _onCSModalTeamChange() {
+  // Reset Calling By when Team changes, then re-render
+  _populateCSModalCallers();
+  _renderCSModal();
+}
+
+function _renderCSModal() {
+  const q       = (document.getElementById('cs-modal-search')?.value || '').trim().toLowerCase();
+  const teamVal = document.getElementById('cs-modal-team')?.value   || '';
+  const byVal   = document.getElementById('cs-modal-by')?.value     || '';
+  const isAdmin = AppState.userRole === 'superAdmin';
+  const list = _csModalDevotees.filter(d => {
+    if (teamVal && d.team_name !== teamVal) return false;
+    if (byVal   && d.calling_by !== byVal)  return false;
+    if (q && !((d.name || '').toLowerCase().includes(q) ||
+               (d.mobile || '').includes(q) ||
+               (d.mobile_alt || '').includes(q))) return false;
+    return true;
+  });
+  const el = document.getElementById('cs-modal-content');
+  if (!list.length) {
+    el.innerHTML = '<div class="empty-state" style="padding:2rem"><i class="fas fa-inbox"></i><p>No devotees</p></div>';
+    _updateCSModalCount();
+    return;
+  }
+  el.innerHTML = `
+    <table class="report-table">
+      <thead><tr>
+        ${isAdmin ? '<th style="width:30px"></th>' : ''}
+        <th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th>
+      </tr></thead>
+      <tbody>${list.map((d, i) => {
+        const checked = _csModalSelected.has(d.id) ? ' checked' : '';
+        return `<tr>
+          ${isAdmin ? `<td><input type="checkbox" data-id="${d.id}" class="cs-modal-row-check" onchange="_csModalToggle('${d.id}', this.checked)"${checked}></td>` : ''}
+          <td style="color:var(--text-muted)">${i + 1}</td>
+          <td><button class="cm-link" onclick="openProfileModal('${d.id}')">${d.name || '—'}</button></td>
+          <td>${d.mobile ? contactIcons(d.mobile, { altMobile: d.mobile_alt, devoteeId: d.id, name: d.name }) + ' <span style="font-size:.78rem">' + d.mobile + '</span>' : '—'}</td>
+          <td>${teamBadge(d.team_name)}</td>
+          <td style="font-size:.82rem">${d.calling_by || '—'}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  _updateCSModalCount();
+}
+
+function _csModalToggle(id, checked) {
+  if (checked) _csModalSelected.add(id);
+  else _csModalSelected.delete(id);
+  _updateCSModalCount();
+}
+function _csModalSelectAll(checked) {
+  document.querySelectorAll('#cs-modal-content input.cs-modal-row-check').forEach(b => {
+    b.checked = checked;
+    if (checked) _csModalSelected.add(b.dataset.id);
+    else         _csModalSelected.delete(b.dataset.id);
+  });
+  _updateCSModalCount();
+}
+function _updateCSModalCount() {
+  const el = document.getElementById('cs-modal-sel-count');
+  if (el) el.textContent = _csModalSelected.size;
+}
+
+// Bulk action from inside the calling-stat modal — reuses the Calling Mgmt
+// bulk-action modal so super admins can re-assign team / calling-by, shift
+// to online / festival / not-interested, etc.
+function _csModalOpenBulk() {
+  if (AppState.userRole !== 'superAdmin') { showToast('Super Admin only', 'error'); return; }
+  if (!_csModalSelected.size) { showToast('Select at least one devotee', 'error'); return; }
+  // Pipe selection into the Calling Mgmt bulk-action infrastructure
+  if (typeof _cmSelected !== 'undefined') {
+    _cmSelected.clear();
+    _csModalSelected.forEach(id => _cmSelected.add(id));
+  }
+  closeModal('calling-stat-modal');
+  if (typeof openBulkAction === 'function') openBulkAction();
 }

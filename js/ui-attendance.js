@@ -101,7 +101,9 @@ function buildSimpleRoster(devotees, teamFilter) {
 function buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
   let rows = [...devotees];
   if (teamFilter) rows = rows.filter(d => d.teamName === teamFilter);
-  rows.sort((a, b) => (a.teamName || '').localeCompare(b.teamName || '') || a.name.localeCompare(b.name));
+  // Sort strictly A → Z by name (team filter narrows the set, but the list
+  // itself is alphabetical so it's easy to scan).
+  rows.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
   let h1 = `<th rowspan="2" class="sh-header sh-sno">Sno</th>
     <th rowspan="2" class="sh-header" style="min-width:120px">Name</th>
@@ -143,7 +145,11 @@ function buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
       } else {
         const cs = csMap[s.sessionDate]?.[d.id] || null;
         const at = attMap[s.id]?.has(d.id) || false;
-        cells += `<td class="sh-cell sh-center" style="${csColor(cs)}">${csLabel(cs)}</td>`;
+        const label = csLabel(cs);
+        const safeTitle = label.replace(/"/g, '&quot;');
+        // Keep newlines from csLabel so notes appear on a second visual line
+        const html = label.replace(/\n/g, '<br>');
+        cells += `<td class="sh-cell sh-cs-cell" style="${csColor(cs)}" title="${safeTitle}">${html}</td>`;
         cells += `<td class="sh-cell sh-center" style="${at ? 'background:#a5d6a7;font-weight:700' : ''}">${at ? 'P' : ''}</td>`;
       }
     });
@@ -182,11 +188,57 @@ function sheetFmtShortMonth(dateStr) {
   const [, m, d] = dateStr.split('-');
   return `${+d} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m - 1]}`;
 }
+// Full reason labels (long-form). Used everywhere on the attendance sheet —
+// the cells wrap so the entire text is visible. Hover also shows the same
+// text via a title tooltip.
+const _CS_REASON_LABELS = {
+  did_not_pick:        'Did not pick call',
+  incoming_na:         'Incoming not available',
+  wrong_number:        'Wrong number',
+  online_class:        'Shifted to online class',
+  out_of_service:      'Temporarily out of service',
+  out_of_station:      'Out of station',
+  exams:               'Exams',
+  festival_calling:    'Festival Calling',
+  not_interested_now:  'Not Interested (this week)',
+};
+// status can be a legacy string ("Yes"/"Not Interested") OR an object
+// { comingStatus, callingReason, callingNotes, availableFrom }.
+// Returns the FULL status string — the user explicitly wants the long form.
 function csLabel(status) {
-  return { Yes: 'Coming', 'Not Interested': 'N/I' }[status] || (status || '');
+  if (!status) return '';
+  if (typeof status === 'string') {
+    if (status === 'Yes') return 'Confirmed Coming';
+    return status;
+  }
+  let main = '';
+  if (status.comingStatus === 'Yes')      main = 'Confirmed Coming';
+  else if (status.callingReason)          main = _CS_REASON_LABELS[status.callingReason] || status.callingReason;
+  else if (status.comingStatus)           main = status.comingStatus;
+  if (!main && !status.callingNotes)      return '';
+  // Append availability date for "out of station" / "exams"
+  if (status.availableFrom) {
+    const af = (typeof formatDate === 'function') ? formatDate(status.availableFrom) : status.availableFrom;
+    main = main ? `${main} · from ${af}` : `from ${af}`;
+  }
+  // Append the caller's notes verbatim
+  if (status.callingNotes) {
+    main = main ? `${main}\n"${status.callingNotes}"` : `"${status.callingNotes}"`;
+  }
+  return main;
 }
 function csColor(status) {
   if (!status) return '';
+  // Convert object form to comingStatus for legacy color map below
+  if (typeof status === 'object') {
+    if (status.comingStatus === 'Yes') return 'background:#c8e6c9';
+    const r = status.callingReason;
+    if (r === 'online_class')        return 'background:#bbdefb';
+    if (r === 'festival_calling')    return 'background:#fff9c4';
+    if (r === 'not_interested_now')  return 'background:#ffcdd2';
+    if (r)                           return 'background:#ffe0b2';
+    return '';
+  }
   if (status === 'Yes')            return 'background:#c8e6c9';
   if (status === 'Not Interested') return 'background:#ffccbc';
   return 'background:#ffcdd2';
