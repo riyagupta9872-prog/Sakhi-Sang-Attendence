@@ -41,6 +41,95 @@ function loadReports() {
   if (id === 'serious-analysis')  loadSeriousAnalysis();
   if (id === 'team-leaderboard')  loadTeamLeaderboard();
   if (id === 'trends')            loadTrends();
+  if (id === 'newcomers-report')  loadNewComersReport();
+}
+
+// Reports → Attendance Reports → New Comers
+async function loadNewComersReport() {
+  const el = document.getElementById('newcomers-report-content');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  try {
+    const sess = _reportActive;
+    if (!sess) { el.innerHTML = '<div class="empty-state"><i class="fas fa-calendar-times"></i><p>Pick a session above</p></div>'; return; }
+
+    const [attSnap, all] = await Promise.all([
+      fdb.collection('attendanceRecords')
+        .where('sessionId', '==', sess.id)
+        .where('isNewDevotee', '==', true).get(),
+      DevoteeCache.all(),
+    ]);
+
+    const byId = Object.fromEntries(all.map(d => [d.id, d]));
+    const seen = new Set();
+    const list = [];
+
+    attSnap.docs.forEach(doc => {
+      const a = doc.data();
+      if (seen.has(a.devoteeId)) return;
+      seen.add(a.devoteeId);
+      const d = byId[a.devoteeId] || {};
+      list.push({
+        id: a.devoteeId,
+        name: d.name || a.devoteeName || '—',
+        mobile: d.mobile || a.mobile || '',
+        teamName: d.teamName || a.teamName || '',
+        callingBy: d.callingBy || a.callingBy || '',
+        referenceBy: d.referenceBy || '',
+        chantingRounds: d.chantingRounds || 0,
+        source: 'attended',
+      });
+    });
+    all.forEach(d => {
+      if (seen.has(d.id))                        return;
+      if (d.isActive === false)                  return;
+      if (!d.dateOfJoining)                      return;
+      if (d.dateOfJoining !== sess.session_date) return;
+      seen.add(d.id);
+      list.push({
+        id: d.id,
+        name: d.name || '—',
+        mobile: d.mobile || '',
+        teamName: d.teamName || '',
+        callingBy: d.callingBy || '',
+        referenceBy: d.referenceBy || '',
+        chantingRounds: d.chantingRounds || 0,
+        source: 'joined',
+      });
+    });
+
+    if (!list.length) {
+      el.innerHTML = `<div class="empty-state"><i class="fas fa-seedling"></i><p>No new devotees for ${formatDate(sess.session_date)}</p></div>`;
+      return;
+    }
+
+    el.innerHTML = `
+      <div style="font-size:.84rem;margin-bottom:.6rem;color:var(--text-muted)">
+        <i class="fas fa-user-plus"></i> ${list.length} new for
+        <strong style="color:var(--primary)">${formatDate(sess.session_date)}</strong>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="report-table">
+          <thead><tr>
+            <th>#</th><th>Name</th><th>Source</th><th>Mobile</th><th>Reference</th>
+            <th>Team</th><th>Calling By</th><th style="text-align:center">C.R.</th>
+          </tr></thead>
+          <tbody>${list.map((d, i) => `<tr>
+            <td style="color:var(--text-muted)">${i + 1}</td>
+            <td><button class="cm-link" onclick="openProfileModal('${d.id}')">${d.name}</button></td>
+            <td>${d.source === 'attended' ? '<span class="newcomer-tag tag-attended">Attended</span>' : '<span class="newcomer-tag tag-joined">Joined</span>'}</td>
+            <td>${d.mobile ? contactIcons(d.mobile) + ' <span style="font-size:.78rem">' + d.mobile + '</span>' : '—'}</td>
+            <td style="font-size:.82rem">${d.referenceBy || '—'}</td>
+            <td>${d.teamName ? teamBadge(d.teamName) : '<span style="color:var(--text-muted);font-size:.78rem">— Unassigned —</span>'}</td>
+            <td style="font-size:.82rem">${d.callingBy || '<span style="color:var(--text-muted)">— Unassigned —</span>'}</td>
+            <td style="text-align:center">${d.chantingRounds || 0}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+  } catch (e) {
+    console.error('loadNewComersReport', e);
+    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+  }
 }
 
 // ── REPORT SESSION FILTER ─────────────────────────────
@@ -167,7 +256,7 @@ async function loadSeriousAnalysis() {
     const statuses = ['Most Serious','Serious','Expected to be Serious'];
     c.innerHTML = `<div style="overflow-x:auto"><table class="report-table">
       <thead>
-        <tr><th>Team</th>${statuses.map(s => `<th colspan="2" style="text-align:center">${s}</th>`).join('')}</tr>
+        <tr><th>Team</th>${statuses.map(s => `<th colspan="2" style="text-align:center">${shortStatus(s)}</th>`).join('')}</tr>
         <tr><th></th>${statuses.map(() => '<th>Promised</th><th>Arrived</th>').join('')}</tr>
       </thead>
       <tbody>${teams.map(team => {
@@ -1324,7 +1413,7 @@ async function openChangeCallingBy(devoteeId, devoteeName, team, currentCaller) 
     }
     sel.innerHTML = '<option value="">— Select caller —</option>' +
       users.map(u => {
-        const pos = u.position || (u.role === 'teamAdmin' ? 'Coordinator' : 'Sevak');
+        const pos = u.position || (u.role === 'teamAdmin' ? 'Coordinator' : 'Facilitator');
         const selected = (u.name === currentCaller) ? ' selected' : '';
         return `<option value="${(u.name||'').replace(/"/g,'&quot;')}"${selected}>${u.name} (${pos})</option>`;
       }).join('');
@@ -1381,62 +1470,119 @@ function _renderCMShifted() {
   el.innerHTML = html || `<div class="empty-state"><i class="fas fa-check-circle" style="color:var(--success)"></i><p>No shifted devotees</p></div>`;
 }
 
-// ── CALLING MGMT — NEW COMERS (this week's newly-attending devotees) ──
+// ── NEW COMERS data: any devotee who joined for / attended the latest past
+// session as new — covers two paths:
+//   1. Registered via the Attendance FAB → has attendanceRecord.isNewDevotee
+//   2. Added directly via Devotees tab with dateOfJoining === session date
+async function _getNewComersForLatestSession() {
+  const today = getToday();
+  const sessSnap = await fdb.collection('sessions')
+    .where('sessionDate', '<=', today)
+    .orderBy('sessionDate', 'desc').limit(1).get();
+  if (sessSnap.empty) return { sessionDate: null, sessionId: null, list: [] };
+  const sess = sessSnap.docs[0];
+  const sessionId   = sess.id;
+  const sessionDate = sess.data().sessionDate;
+
+  const [attSnap, all] = await Promise.all([
+    fdb.collection('attendanceRecords')
+      .where('sessionId', '==', sessionId)
+      .where('isNewDevotee', '==', true).get(),
+    DevoteeCache.all(),
+  ]);
+
+  const byId       = Object.fromEntries(all.map(d => [d.id, d]));
+  const seen       = new Set();
+  const list       = [];
+
+  // 1) Attendance-flagged new devotees
+  attSnap.docs.forEach(doc => {
+    const a = doc.data();
+    if (seen.has(a.devoteeId)) return;
+    seen.add(a.devoteeId);
+    const d = byId[a.devoteeId] || {};
+    list.push({
+      id:        a.devoteeId,
+      name:      d.name || a.devoteeName || '—',
+      mobile:    d.mobile || a.mobile || '',
+      mobileAlt: d.mobileAlt || '',
+      teamName:  d.teamName || a.teamName || '',
+      callingBy: d.callingBy || a.callingBy || '',
+      referenceBy:    d.referenceBy || '',
+      chantingRounds: d.chantingRounds || 0,
+      source: 'attended',
+    });
+  });
+
+  // 2) Devotees whose dateOfJoining is the same session date — even if
+  //    they were added directly to the database without being marked present
+  all.forEach(d => {
+    if (seen.has(d.id))                  return;
+    if (d.isActive === false)            return;
+    if (!d.dateOfJoining)                return;
+    if (d.dateOfJoining !== sessionDate) return;
+    seen.add(d.id);
+    list.push({
+      id:        d.id,
+      name:      d.name || '—',
+      mobile:    d.mobile || '',
+      mobileAlt: d.mobileAlt || '',
+      teamName:  d.teamName || '',
+      callingBy: d.callingBy || '',
+      referenceBy:    d.referenceBy || '',
+      chantingRounds: d.chantingRounds || 0,
+      source: 'joined',
+    });
+  });
+
+  return { sessionDate, sessionId, list };
+}
+
+// ── CALLING MGMT — NEW COMERS sub-tab ──
 async function _renderCMNewComers() {
   const el = document.getElementById('cm-newcomers-content');
   if (!el) return;
   el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
-    const today = getToday();
-    const sessSnap = await fdb.collection('sessions')
-      .where('sessionDate', '<=', today)
-      .orderBy('sessionDate', 'desc').limit(1).get();
-    if (sessSnap.empty) {
+    const { sessionDate, list } = await _getNewComersForLatestSession();
+    if (!sessionDate) {
       el.innerHTML = '<div class="empty-state"><i class="fas fa-user-plus"></i><p>No past session found yet.</p></div>';
       return;
     }
-    const sess = sessSnap.docs[0];
-    const sessionId   = sess.id;
-    const sessionDate = sess.data().sessionDate;
-    const attSnap = await fdb.collection('attendanceRecords')
-      .where('sessionId', '==', sessionId)
-      .where('isNewDevotee', '==', true).get();
-    if (attSnap.empty) {
-      el.innerHTML = `<div class="empty-state"><i class="fas fa-seedling"></i><p>No new devotees attended on ${formatDate(sessionDate)}.</p></div>`;
+    if (!list.length) {
+      el.innerHTML = `<div class="empty-state"><i class="fas fa-seedling"></i><p>No new devotees for ${formatDate(sessionDate)}.</p></div>`;
       return;
     }
-    const all = await DevoteeCache.all();
-    const byId = Object.fromEntries(all.map(d => [d.id, d]));
-    const rows = attSnap.docs.map((doc, i) => {
-      const a = doc.data();
-      const d = byId[a.devoteeId] || {};
-      const safeName = (d.name || a.devoteeName || '—').replace(/'/g, "\\'");
-      const team     = d.teamName || a.teamName || '';
-      const safeTeam = (team || '').replace(/'/g, "\\'");
-      const caller   = d.callingBy || a.callingBy || '';
+    const rows = list.map((d, i) => {
+      const safeName = (d.name || '—').replace(/'/g, "\\'");
+      const safeTeam = (d.teamName || '').replace(/'/g, "\\'");
+      const sourceTag = d.source === 'attended'
+        ? '<span class="newcomer-tag tag-attended">Attended</span>'
+        : '<span class="newcomer-tag tag-joined">Joined</span>';
       return `<tr>
         <td style="color:var(--text-muted);text-align:center">${i + 1}</td>
         <td>
-          <button class="cm-link" onclick="openProfileModal('${a.devoteeId}')">${d.name || a.devoteeName || '—'}</button>
-          ${a.mobile ? `<div style="font-size:.7rem;color:var(--text-muted)">${a.mobile}</div>` : ''}
+          <button class="cm-link" onclick="openProfileModal('${d.id}')">${d.name}</button>
+          ${d.mobile ? `<div style="font-size:.7rem;color:var(--text-muted)">${d.mobile}</div>` : ''}
         </td>
+        <td>${sourceTag}</td>
         <td style="font-size:.78rem">${d.referenceBy || '—'}</td>
         <td style="padding:.3rem .4rem;white-space:nowrap">
-          ${team
-            ? `<button class="cm-team-btn" onclick="openTeamChangeQuick('${a.devoteeId}','${safeName}','${safeTeam}')" title="Change team">${teamBadge(team)}</button>
-               <button class="cm-team-history-btn" onclick="showMgmtTeamHistory('${a.devoteeId}','${safeName}')" title="Past team history"><i class="fas fa-pencil-alt"></i></button>`
-            : `<button class="btn btn-secondary" style="padding:.18rem .55rem;font-size:.72rem" onclick="openTeamChangeQuick('${a.devoteeId}','${safeName}','')"><i class="fas fa-users"></i> Assign Team</button>`
+          ${d.teamName
+            ? `<button class="cm-team-btn" onclick="openTeamChangeQuick('${d.id}','${safeName}','${safeTeam}')" title="Change team">${teamBadge(d.teamName)}</button>
+               <button class="cm-team-history-btn" onclick="showMgmtTeamHistory('${d.id}','${safeName}')" title="Past team history"><i class="fas fa-pencil-alt"></i></button>`
+            : `<button class="btn btn-secondary" style="padding:.18rem .55rem;font-size:.72rem" onclick="openTeamChangeQuick('${d.id}','${safeName}','')"><i class="fas fa-users"></i> Assign Team</button>`
           }
         </td>
         <td>
-          ${caller
-            ? `<button class="cm-link cm-link-muted" onclick="openChangeCallingBy('${a.devoteeId}','${safeName}','${safeTeam}','${caller.replace(/'/g,"\\'")}')">${caller}</button>`
-            : `<button class="btn btn-secondary" style="padding:.18rem .55rem;font-size:.72rem" onclick="openChangeCallingBy('${a.devoteeId}','${safeName}','${safeTeam}','')"><i class="fas fa-headset"></i> Assign Caller</button>`
+          ${d.callingBy
+            ? `<button class="cm-link cm-link-muted" onclick="openChangeCallingBy('${d.id}','${safeName}','${safeTeam}','${d.callingBy.replace(/'/g,"\\'")}')">${d.callingBy}</button>`
+            : `<button class="btn btn-secondary" style="padding:.18rem .55rem;font-size:.72rem" onclick="openChangeCallingBy('${d.id}','${safeName}','${safeTeam}','')"><i class="fas fa-headset"></i> Assign Caller</button>`
           }
         </td>
         <td style="text-align:center">${d.chantingRounds || 0}</td>
         <td style="text-align:center">
-          <button onclick="openMgmtAction('${a.devoteeId}','${safeName}')"
+          <button onclick="openMgmtAction('${d.id}','${safeName}')"
             style="font-size:.72rem;padding:.2rem .5rem;background:var(--accent-light);border:1px solid var(--border);border-radius:4px;cursor:pointer;color:var(--primary);font-weight:600;white-space:nowrap">
             <i class="fas fa-bolt"></i> Action
           </button>
@@ -1445,15 +1591,17 @@ async function _renderCMNewComers() {
     }).join('');
     el.innerHTML = `
       <div style="font-size:.84rem;margin-bottom:.6rem;color:var(--text-muted)">
-        <i class="fas fa-user-plus"></i> ${attSnap.size} new devotee${attSnap.size === 1 ? '' : 's'} attended on
+        <i class="fas fa-user-plus"></i> ${list.length} new devotee${list.length === 1 ? '' : 's'} for
         <strong style="color:var(--primary)">${formatDate(sessionDate)}</strong>
+        <span style="margin-left:.5rem;font-size:.72rem;color:var(--text-light)">(joined or attended fresh)</span>
       </div>
       <div style="overflow-x:auto">
         <table class="calling-table">
           <thead><tr>
             <th style="min-width:30px">#</th>
             <th style="min-width:160px">Name</th>
-            <th style="min-width:130px">Reference</th>
+            <th style="min-width:80px">Source</th>
+            <th style="min-width:120px">Reference</th>
             <th style="min-width:120px">Team</th>
             <th style="min-width:140px">Calling By</th>
             <th style="min-width:48px;text-align:center">C.R.</th>
@@ -1555,7 +1703,7 @@ async function _onBulkActionTypeChange() {
       const users = await DB.getUsersForTeam('');
       sel.innerHTML = '<option value="">— Select caller —</option>' +
         users.map(u => {
-          const pos = u.position || (u.role === 'teamAdmin' ? 'Coordinator' : 'Sevak');
+          const pos = u.position || (u.role === 'teamAdmin' ? 'Coordinator' : 'Facilitator');
           const team = u.teamName ? ` · ${u.teamName}` : '';
           return `<option value="${(u.name||'').replace(/"/g,'&quot;')}">${u.name} (${pos}${team})</option>`;
         }).join('');

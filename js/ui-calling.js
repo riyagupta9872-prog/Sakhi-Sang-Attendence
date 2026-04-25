@@ -830,7 +830,7 @@ async function _loadCallingSummary(week, el) {
         return 0;
       });
       sortedCallers.forEach(([caller, s]) => {
-        const posLabel = s.isCoordinator ? 'Coordinator' : (s.position || 'Calling Sevak');
+        const posLabel = s.isCoordinator ? 'Coordinator' : (s.position || 'Calling Facilitator');
         const posBadge = s.isCoordinator
           ? `<span style="font-size:.68rem;padding:.1rem .35rem;border-radius:.2rem;background:rgba(201,168,76,.2);color:#8B6914;font-weight:600">${posLabel}</span>`
           : `<span style="font-size:.68rem;padding:.1rem .35rem;border-radius:.2rem;background:rgba(82,183,136,.15);color:var(--primary)">${posLabel}</span>`;

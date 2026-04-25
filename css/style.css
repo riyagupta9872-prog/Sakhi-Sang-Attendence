@@ -502,6 +502,8 @@ h3 { font-size: .93rem; }
 .badge-serious { background: var(--gold-light); color: #92400e; }
 .badge-most-serious { background: #fce7f3; color: #9d174d; }
 .badge-expected { background: var(--success-light); color: var(--success); }
+.badge-new-devotee { background: #dbeafe; color: #1e3a8a; }
+.badge-inactive    { background: #e5e7eb; color: #4b5563; }
 
 /* ── CONTACT ICONS ── */
 .contact-icons { display: flex; gap: .28rem; flex-shrink: 0; }
@@ -602,6 +604,16 @@ button.contact-icon { border: none; padding: 0; }
   transition: color .12s, opacity .12s;
 }
 .cm-team-history-btn:hover { color: var(--brand); opacity: 1; }
+
+/* New comer source pill */
+.newcomer-tag {
+  display: inline-block; padding: .12rem .5rem;
+  border-radius: var(--radius-full);
+  font-size: .68rem; font-weight: 700;
+  letter-spacing: .25px;
+}
+.newcomer-tag.tag-attended { background: #dcfce7; color: #166534; }
+.newcomer-tag.tag-joined   { background: #dbeafe; color: #1e3a8a; }
 
 .cm-status-cell { display: flex; flex-direction: column; gap: .22rem; }
 .cm-pill {

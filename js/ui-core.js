@@ -256,7 +256,7 @@ function _applySidebarInfo() {
     const p = AppState.userPosition;
     role.textContent = r === 'superAdmin' ? 'Super Admin'
       : r === 'teamAdmin' ? (t ? `${t} · Coordinator` : 'Coordinator')
-      : (t ? `${t} · ${p || 'Sevak'}` : (p || 'Sevak'));
+      : (t ? `${t} · ${p || 'Facilitator'}` : (p || 'Facilitator'));
   }
   const pic = AppState.profilePic;
   if (img && inits) {
@@ -385,7 +385,7 @@ function renderUserMgmtList() {
   }
   list.innerHTML = filtered.map(u => {
     const roleLabel = u.role === 'superAdmin' ? 'Super Admin'
-      : u.role === 'teamAdmin' ? 'Coordinator' : 'Sevak';
+      : u.role === 'teamAdmin' ? 'Coordinator' : 'Facilitator';
     const meta = [roleLabel, u.teamName || '', u.position || ''].filter(Boolean).join(' · ');
     return `<div class="um-row" onclick="openUserAction('${u.uid}')">
       <div class="um-avatar">${initials(u.name || u.email)}</div>
@@ -455,7 +455,7 @@ function applyRoleUI() {
   const pos = AppState.userPosition;
   pill.textContent = role === 'superAdmin' ? 'Super Admin'
     : role === 'teamAdmin' ? (team ? `${team} - Coordinator` : 'Coordinator')
-    : (team ? `${team} - ${pos || 'Sevak'}` : (pos || 'Sevak'));
+    : (team ? `${team} - ${pos || 'Facilitator'}` : (pos || 'Facilitator'));
   pill.style.background = role === 'superAdmin' ? 'rgba(201,168,76,.5)' : role === 'teamAdmin' ? 'rgba(82,183,136,.4)' : 'rgba(82,183,136,.25)';
 
   if (role === 'superAdmin') {
@@ -520,7 +520,7 @@ async function openAdminPanel() {
         </div>
         <div class="admin-user-controls">
           <select class="filter-select" id="role-${u.uid}" onchange="updateUserRole('${u.uid}')">
-            <option value="serviceDevotee"${u.role==='serviceDevotee'?' selected':''}>Sevak</option>
+            <option value="serviceDevotee"${u.role==='serviceDevotee'?' selected':''}>Facilitator</option>
             <option value="teamAdmin"${u.role==='teamAdmin'?' selected':''}>Coordinator</option>
             <option value="superAdmin"${u.role==='superAdmin'?' selected':''}>Super Admin</option>
           </select>
@@ -735,24 +735,36 @@ function setupUserPicker(containerId, hiddenId, getTeam) {
   const dropdown = container.querySelector('.picker-dropdown');
   const hidden   = document.getElementById(hiddenId);
 
-  input.addEventListener('input', debounce(async () => {
-    const q = input.value.trim();
-    hidden.value = '';
-    input.classList.remove('has-value');
-    if (q.length < 2) { dropdown.classList.add('hidden'); dropdown.innerHTML = ''; return; }
+  async function showResults(q) {
     const team = getTeam();
     const results = await DB.getUsersForTeam(team, q);
     if (!results.length) {
-      dropdown.innerHTML = `<div class="picker-no-result">No login found${team ? ' for ' + team + ' team' : ''}</div>`;
+      dropdown.innerHTML = `<div class="picker-no-result">No login found${team ? ' for ' + team + ' team' : ''}.${team ? '<br><small>Pick a different team or have an admin assign a login first.</small>' : ''}</div>`;
       dropdown.classList.remove('hidden'); return;
     }
-    dropdown.innerHTML = results.slice(0, 8).map(u => `
-      <div class="picker-option" onclick="selectPicker('${containerId}','${hiddenId}','${(u.name||'').replace(/'/g,"\\'")}','${u.uid}')">
-        <span>${u.name || u.email}</span>
-        <span class="picker-team">${u.teamName || ''}${u.teamName ? ' · ' : ''}${u.role === 'teamAdmin' ? 'Coordinator' : 'Calling Sevak'}</span>
-      </div>`).join('');
+    dropdown.innerHTML = results.slice(0, 12).map(u => {
+      const display = (u.name || u.email || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+      const meta = `${u.teamName || ''}${u.teamName ? ' · ' : ''}${u.role === 'teamAdmin' ? 'Coordinator' : 'Calling Facilitator'}`;
+      return `<div class="picker-option" onclick="selectPicker('${containerId}','${hiddenId}','${display}','${u.uid}')">
+        <span>${u.name || u.email || '(no name)'}</span>
+        <span class="picker-team">${meta}</span>
+      </div>`;
+    }).join('');
     dropdown.classList.remove('hidden');
-  }, 280));
+  }
+
+  // Show all candidates when the field gains focus (so the user sees options
+  // immediately, without having to type 2+ characters first).
+  input.addEventListener('focus', () => {
+    const q = input.value.trim();
+    showResults(q);
+  });
+
+  input.addEventListener('input', debounce(() => {
+    hidden.value = '';
+    input.classList.remove('has-value');
+    showResults(input.value.trim());
+  }, 200));
 
   document.addEventListener('click', (e) => {
     if (!container.contains(e.target)) dropdown.classList.add('hidden');
@@ -894,6 +906,7 @@ function switchSubTab(btn, id) {
   if (id === 'serious-analysis')  loadSeriousAnalysis();
   if (id === 'team-leaderboard')  loadTeamLeaderboard();
   if (id === 'attendance-detail') loadAttendanceDetail();
+  if (id === 'newcomers-report')  loadNewComersReport?.();
 }
 
 // ── EXPORT ATTENDANCE ─────────────────────────────────

@@ -36,7 +36,7 @@ const AppState = {
 };
 
 // ── TEAMS LIST (single source of truth) ───────────────
-const TEAMS = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata','Nilachal','New Devotees'];
+const TEAMS = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata','Nilachal','New Devotees','Other'];
 
 // ── ATTENDANCE TIME COLOUR ─────────────────────────────
 function attTimeStyle(markedAtISO) {
@@ -102,10 +102,19 @@ function isBirthdayWeek(dob) {
 }
 
 // ── FORMAT HELPERS ─────────────────────────────────────
+// "Expected to be Serious" is stored verbatim in Firestore for backward
+// compatibility, but we always render it as the short label "ETS".
+function shortStatus(s) {
+  if (!s || s === 'Expected to be Serious') return 'ETS';
+  return s;
+}
 function statusBadge(s) {
-  if (s === 'Most Serious') return `<span class="badge badge-most-serious">${s}</span>`;
-  if (s === 'Serious')      return `<span class="badge badge-serious">${s}</span>`;
-  return `<span class="badge badge-expected">${s || 'Expected to be Serious'}</span>`;
+  const label = shortStatus(s);
+  if (s === 'Most Serious') return `<span class="badge badge-most-serious">${label}</span>`;
+  if (s === 'Serious')      return `<span class="badge badge-serious">${label}</span>`;
+  if (s === 'New Devotee')  return `<span class="badge badge-new-devotee">${label}</span>`;
+  if (s === 'Inactive')     return `<span class="badge badge-inactive">${label}</span>`;
+  return `<span class="badge badge-expected">${label}</span>`;
 }
 function teamBadge(t) { return t ? `<span class="badge badge-team">${t}</span>` : ''; }
 // contactIcons(mobile) → direct call/whatsapp links (single number).

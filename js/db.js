@@ -320,14 +320,20 @@ const DB = {
     const cfg = cfgSnap.exists ? cfgSnap.data() : null;
     // callingStatus docs use callingDate as weekDate, not sessionDate
     const weekDate = (cfg?.sessionDate === sessionDate) ? (cfg.callingDate || sessionDate) : sessionDate;
-    const [cs, at] = await Promise.all([
+    const [cs, at, allDevotees] = await Promise.all([
       fdb.collection('callingStatus').where('weekDate', '==', weekDate).get(),
-      fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get()
+      fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get(),
+      DevoteeCache.all(),
     ]);
     const confirmed = cs.docs.filter(d => d.data().comingStatus === 'Yes').length;
     const present   = at.size;
-    const newD      = at.docs.filter(d => d.data().isNewDevotee).length;
-    return { confirmed, present, newDevotees: newD, totalPresent: present };
+    // "New" = anyone marked isNewDevotee on attendance record OR a devotee whose
+    // dateOfJoining matches this session date (direct DB additions)
+    const flaggedIds = new Set(at.docs.filter(d => d.data().isNewDevotee).map(d => d.data().devoteeId));
+    allDevotees.forEach(d => {
+      if (d.dateOfJoining === sessionDate && d.isActive !== false) flaggedIds.add(d.id);
+    });
+    return { confirmed, present, newDevotees: flaggedIds.size, totalPresent: present };
   },
 
   /* ATTENDANCE */
@@ -727,7 +733,7 @@ const DB = {
           else if (cs.callingReason === 'not_interested_now') { s.notInterested++; }
         });
         s.isCoordinator = userRoleMap[caller]?.role === 'teamAdmin';
-        s.position = s.isCoordinator ? 'Coordinator' : (userRoleMap[caller]?.position || 'Calling Sevak');
+        s.position = s.isCoordinator ? 'Coordinator' : (userRoleMap[caller]?.position || 'Calling Facilitator');
         result[team].callers[caller] = s;
         STAT_KEYS.forEach(k => { result[team][k] += s[k]; });
       });

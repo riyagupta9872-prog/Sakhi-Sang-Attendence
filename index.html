@@ -72,7 +72,7 @@
       <div class="auth-field">
         <label>Your Role</label>
         <select id="signup-role">
-          <option value="serviceDevotee">Service Devotee (Attendance only)</option>
+          <option value="serviceDevotee">Facilitator (Calling &amp; Attendance)</option>
           <option value="teamAdmin">Team Admin (Team access)</option>
         </select>
       </div>
@@ -82,7 +82,7 @@
           <option value="">Select Team</option>
           <option>Lalita</option><option>Vishakha</option><option>Tungavidya</option><option>Indulekha</option>
           <option>Sudevi</option><option>Rangadevi</option><option>Chitralekha</option><option>Champaklata</option>
-          <option>Nilachal</option><option>New Devotees</option>
+          <option>Nilachal</option><option>New Devotees</option><option>Other</option>
         </select>
       </div>
       <button type="submit" class="auth-btn"><i class="fas fa-user-plus"></i> Create Account</button>
@@ -221,7 +221,11 @@
       </select>
       <select id="filter-status" class="filter-select" onchange="loadDevotees()">
         <option value="">All Statuses</option>
-        <option>Expected to be Serious</option><option>Serious</option><option>Most Serious</option>
+        <option value="Expected to be Serious">ETS</option>
+        <option>Serious</option>
+        <option>Most Serious</option>
+        <option>New Devotee</option>
+        <option>Inactive</option>
       </select>
     </div>
     <div id="devotee-count" class="result-count"></div>
@@ -352,6 +356,7 @@
     <div id="reports-cat-attendance" class="reports-cat-panel active">
       <div class="sub-tabs">
         <button class="sub-tab active" onclick="switchSubTab(this,'attendance-detail'); loadYearlySheet()"><i class="fas fa-table"></i> Attendance Sheet</button>
+        <button class="sub-tab" onclick="switchSubTab(this,'newcomers-report')"><i class="fas fa-user-plus"></i> New Comers</button>
         <button class="sub-tab" onclick="switchSubTab(this,'serious-analysis')"><i class="fas fa-star"></i> Serious</button>
         <button class="sub-tab" onclick="switchSubTab(this,'team-leaderboard')"><i class="fas fa-trophy"></i> Teams</button>
         <button class="sub-tab" onclick="switchSubTab(this,'trends')"><i class="fas fa-chart-line"></i> Trends</button>
@@ -362,7 +367,7 @@
             <option value="">All Teams</option>
             <option>Lalita</option><option>Vishakha</option><option>Tungavidya</option><option>Indulekha</option>
             <option>Sudevi</option><option>Rangadevi</option><option>Chitralekha</option><option>Champaklata</option>
-            <option>Nilachal</option><option>New Devotees</option>
+            <option>Nilachal</option><option>New Devotees</option><option>Other</option>
           </select>
           <button class="btn btn-secondary" onclick="exportYearlySheetExcel()">
             <i class="fas fa-file-excel"></i> Export Excel
@@ -372,6 +377,7 @@
           <div class="empty-state"><i class="fas fa-table"></i><p>Loading…</p></div>
         </div>
       </div>
+      <div id="subtab-newcomers-report" class="sub-panel"><div id="newcomers-report-content"></div></div>
       <div id="subtab-serious-analysis" class="sub-panel"><div id="serious-analysis-content"></div></div>
       <div id="subtab-team-leaderboard" class="sub-panel"><div id="team-leaderboard-content"></div></div>
       <div id="subtab-trends" class="sub-panel">
@@ -380,7 +386,7 @@
             <option value="">All Teams</option>
             <option>Lalita</option><option>Vishakha</option><option>Tungavidya</option><option>Indulekha</option>
             <option>Sudevi</option><option>Rangadevi</option><option>Chitralekha</option><option>Champaklata</option>
-            <option>Nilachal</option><option>New Devotees</option>
+            <option>Nilachal</option><option>New Devotees</option><option>Other</option>
           </select>
         </div>
         <div class="chart-container"><canvas id="trends-chart"></canvas></div>
@@ -782,13 +788,17 @@
               <option value="">Select Team</option>
               <option>Lalita</option><option>Vishakha</option><option>Tungavidya</option><option>Indulekha</option>
               <option>Sudevi</option><option>Rangadevi</option><option>Chitralekha</option><option>Champaklata</option>
-              <option>Nilachal</option><option>New Devotees</option>
+              <option>Nilachal</option><option>New Devotees</option><option>Other</option>
             </select>
           </div>
           <div class="form-group">
             <label>Devotee Status</label>
             <select id="f-status">
-              <option>Expected to be Serious</option><option>Serious</option><option>Most Serious</option>
+              <option value="Expected to be Serious">ETS</option>
+        <option>Serious</option>
+        <option>Most Serious</option>
+        <option>New Devotee</option>
+        <option>Inactive</option>
             </select>
           </div>
           <div class="form-group">
@@ -1101,7 +1111,7 @@
           <option>Lalita</option><option>Vishakha</option><option>Tungavidya</option>
           <option>Indulekha</option><option>Sudevi</option><option>Rangadevi</option>
           <option>Chitralekha</option><option>Champaklata</option><option>Nilachal</option>
-          <option>New Devotees</option>
+          <option>New Devotees</option><option>Other</option>
         </select>
         <div id="edit-profile-team-readonly" class="form-control" style="display:none;background:var(--accent-light);color:var(--text-muted);cursor:default"></div>
         <p id="edit-profile-team-note" style="font-size:.72rem;color:var(--text-muted);margin-top:.25rem;display:none">Contact Super Admin to change your team.</p>
@@ -1109,7 +1119,7 @@
       <!-- Position field -->
       <div class="form-group">
         <label for="edit-profile-position">Position</label>
-        <input type="text" id="edit-profile-position" class="form-control" placeholder="e.g. Facilitator, Calling Sevak…" maxlength="60">
+        <input type="text" id="edit-profile-position" class="form-control" placeholder="e.g. Facilitator, Coordinator…" maxlength="60">
       </div>
       <!-- Error -->
       <div id="edit-profile-error" style="color:var(--danger);font-size:.82rem;margin:.5rem 0;display:none"></div>
@@ -1152,7 +1162,7 @@
           <option>Lalita</option><option>Vishakha</option><option>Tungavidya</option>
           <option>Indulekha</option><option>Sudevi</option><option>Rangadevi</option>
           <option>Chitralekha</option><option>Champaklata</option><option>Nilachal</option>
-          <option>New Devotees</option>
+          <option>New Devotees</option><option>Other</option>
         </select>
         <button class="btn btn-primary" onclick="doMgmtAction('team_confirm')"><i class="fas fa-check"></i> Confirm Team Change</button>
       </div>
@@ -1213,7 +1223,7 @@
           <option>Lalita</option><option>Vishakha</option><option>Tungavidya</option>
           <option>Indulekha</option><option>Sudevi</option><option>Rangadevi</option>
           <option>Chitralekha</option><option>Champaklata</option><option>Nilachal</option>
-          <option>New Devotees</option>
+          <option>New Devotees</option><option>Other</option>
         </select>
       </div>
       <div class="form-group" id="bulk-callingby-wrap" style="display:none">
@@ -1370,7 +1380,7 @@
     <div style="padding:1.25rem;display:flex;flex-direction:column;gap:.75rem">
       <div class="form-group">
         <label><i class="fas fa-briefcase"></i> Change Position</label>
-        <input type="text" id="ua-position" placeholder="e.g. Facilitator, Calling Sevak…">
+        <input type="text" id="ua-position" placeholder="e.g. Facilitator, Coordinator…">
       </div>
       <div class="form-group">
         <label><i class="fas fa-users"></i> Change Team</label>
@@ -1379,13 +1389,13 @@
           <option>Lalita</option><option>Vishakha</option><option>Tungavidya</option>
           <option>Indulekha</option><option>Sudevi</option><option>Rangadevi</option>
           <option>Chitralekha</option><option>Champaklata</option><option>Nilachal</option>
-          <option>New Devotees</option>
+          <option>New Devotees</option><option>Other</option>
         </select>
       </div>
       <div class="form-group">
         <label><i class="fas fa-user-tag"></i> Role</label>
         <select id="ua-role">
-          <option value="serviceDevotee">Caller / Sevak</option>
+          <option value="serviceDevotee">Caller / Facilitator</option>
           <option value="teamAdmin">Team Coordinator</option>
           <option value="superAdmin">Super Admin</option>
         </select>
