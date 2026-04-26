@@ -1,13 +1,213 @@
 /* ══ UI-ANALYTICS.JS – Reports, Care, Events tabs ══ */
 
-// ── REPORTS TAB ───────────────────────────────────────
+// ── DASHBOARD TAB ─────────────────────────────────────
+// Single home screen for everyone. Shows the "Overall Coordinators Reports"
+// table — Attendance section is wired live from Firestore; Service / Chanting /
+// Registration / Book Distribution / Donation are shown as "Coming Soon"
+// placeholders for now (UI only, no backing data yet).
+async function loadDashboard() {
+  const el = document.getElementById('dashboard-content');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+
+  try {
+    // Anchor on the master Session — fall back to most recent past session
+    // if the master Session is in the future or unset.
+    let sessionDate = (typeof getFilterSessionId === 'function') ? getFilterSessionId() : null;
+    let sessionId   = null;
+    const today = getToday();
+    if (sessionDate) {
+      const sn = await fdb.collection('sessions').where('sessionDate', '==', sessionDate).limit(1).get();
+      if (!sn.empty) sessionId = sn.docs[0].id;
+    }
+    if (!sessionId) {
+      const sn = await fdb.collection('sessions')
+        .where('sessionDate', '<=', today).orderBy('sessionDate', 'desc').limit(1).get();
+      if (!sn.empty) {
+        sessionDate = sn.docs[0].data().sessionDate;
+        sessionId   = sn.docs[0].id;
+      }
+    }
+
+    // Derive the calling week date for the chosen session — Saturday before
+    // Sunday by default; if settings/callingWeek matches the session, use
+    // the configured callingDate instead (handles teams that calendar shift).
+    let callingDate = '';
+    if (sessionDate) {
+      const cfg = await DB.getCallingWeekConfig().catch(() => null);
+      if (cfg?.sessionDate === sessionDate && cfg?.callingDate) {
+        callingDate = cfg.callingDate;
+      } else {
+        const d = new Date(sessionDate + 'T00:00:00');
+        d.setDate(d.getDate() - 1);
+        callingDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      }
+    }
+
+    const [allDevotees, csSnap, atSnap] = await Promise.all([
+      DevoteeCache.all(),
+      callingDate
+        ? fdb.collection('callingStatus').where('weekDate', '==', callingDate).get()
+        : Promise.resolve({ docs: [] }),
+      sessionId
+        ? fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get()
+        : Promise.resolve({ docs: [] }),
+    ]);
+
+    // Maps
+    const csByDevotee = {};
+    csSnap.docs.forEach(d => { csByDevotee[d.data().devoteeId] = d.data(); });
+    const presentSet = new Set(atSnap.docs.map(d => d.data().devoteeId));
+
+    // Master Team filter narrows the dashboard to one team if super admin
+    // wants a single-team view. Empty = all teams (one row per).
+    const filterTeam = (typeof getFilterTeam === 'function') ? getFilterTeam() : '';
+    const teamsToShow = filterTeam ? [filterTeam] : TEAMS;
+
+    // Per-team aggregation
+    const TARGET_PER_TEAM = 11;   // editable later from a settings doc
+    const rows = teamsToShow.map(team => {
+      const members = allDevotees.filter(d =>
+        d.teamName === team
+        && d.isActive !== false
+        && !d.isNotInterested
+        && d.callingMode !== 'not_interested'
+        && d.callingMode !== 'online'
+      );
+      const called   = members.filter(d => d.callingBy && d.callingBy.trim());
+      const coming   = called.filter(d => csByDevotee[d.id]?.comingStatus === 'Yes');
+      const attended = members.filter(d => presentSet.has(d.id));
+      const target   = TARGET_PER_TEAM;
+      const pct      = target > 0 ? Math.round((attended.length / target) * 100) : 0;
+      return {
+        team,
+        called:   called.length,
+        coming:   coming.length,
+        attended: attended.length,
+        target,
+        pct,
+        comingIds:   coming.map(d => d.id),
+        attendedIds: attended.map(d => d.id),
+        calledIds:   called.map(d => d.id),
+      };
+    });
+
+    // Grand totals row
+    const total = rows.reduce((acc, r) => ({
+      called:   acc.called   + r.called,
+      coming:   acc.coming   + r.coming,
+      attended: acc.attended + r.attended,
+      target:   acc.target   + r.target,
+    }), { called: 0, coming: 0, attended: 0, target: 0 });
+    const totalPct = total.target > 0 ? Math.round((total.attended / total.target) * 100) : 0;
+
+    function pctCls(p) { return p >= 80 ? 'dt-pct-good' : p >= 50 ? 'dt-pct-mid' : 'dt-pct-low'; }
+    const sessLabel = sessionDate
+      ? new Date(sessionDate + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' })
+      : '— no session —';
+
+    el.innerHTML = `
+      <div style="margin-bottom:.6rem;font-size:.82rem;color:var(--text-muted)">
+        <i class="fas fa-calendar-check"></i> Reporting session: <strong style="color:var(--brand)">${sessLabel}</strong>
+        ${filterTeam ? `&nbsp;·&nbsp; team: <strong>${filterTeam}</strong>` : ''}
+      </div>
+      <div class="dashboard-wrap">
+        <table class="dashboard-table">
+          <thead>
+            <tr>
+              <th rowspan="2">Team</th>
+              <th colspan="5">Attendance</th>
+              <th rowspan="2">Service<br><span style="font-weight:400;font-size:.7rem">Number</span></th>
+              <th rowspan="2">Chanting<br><span style="font-weight:400;font-size:.7rem">Number</span></th>
+              <th rowspan="2">Registration<br><span style="font-weight:400;font-size:.7rem">Number</span></th>
+              <th rowspan="2">Book Distribution<br><span style="font-weight:400;font-size:.7rem">Number</span></th>
+              <th rowspan="2">Donation<br><span style="font-weight:400;font-size:.7rem">Amount</span></th>
+            </tr>
+            <tr class="dt-sub">
+              <th>Devotees Called</th>
+              <th>Coming</th>
+              <th>Attendance</th>
+              <th>Target</th>
+              <th>Target Achieved</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => `<tr>
+              <td class="dt-team">${r.team}</td>
+              <td class="dt-num"><button onclick="openDashboardList('called',   '${r.team.replace(/'/g,"\\'")}')">${r.called}</button></td>
+              <td class="dt-num"><button onclick="openDashboardList('coming',   '${r.team.replace(/'/g,"\\'")}')">${r.coming}</button></td>
+              <td class="dt-num"><button onclick="openDashboardList('attended', '${r.team.replace(/'/g,"\\'")}')">${r.attended}</button></td>
+              <td class="dt-num">${r.target}</td>
+              <td class="dt-pct ${pctCls(r.pct)}">${r.pct}%</td>
+              <td class="dt-soon">Coming Soon</td>
+              <td class="dt-soon">Coming Soon</td>
+              <td class="dt-soon">Coming Soon</td>
+              <td class="dt-soon">Coming Soon</td>
+              <td class="dt-soon">Coming Soon</td>
+            </tr>`).join('')}
+            <tr>
+              <td class="dt-team">Grand Total</td>
+              <td class="dt-num">${total.called}</td>
+              <td class="dt-num">${total.coming}</td>
+              <td class="dt-num">${total.attended}</td>
+              <td class="dt-num">${total.target}</td>
+              <td class="dt-pct ${pctCls(totalPct)}" style="color:${totalPct>=80?'#86efac':totalPct>=50?'#fde68a':'#fca5a5'}">${totalPct}%</td>
+              <td class="dt-soon">—</td>
+              <td class="dt-soon">—</td>
+              <td class="dt-soon">—</td>
+              <td class="dt-soon">—</td>
+              <td class="dt-soon">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>`;
+
+    // Cache for click handlers
+    AppState._dashboard = { rows, sessionId, sessionDate, callingDate, csByDevotee, presentSet, allDevotees };
+  } catch (e) {
+    console.error('loadDashboard', e);
+    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load dashboard</p></div>';
+  }
+}
+
+// Click handler for the dashboard's clickable numbers — opens the existing
+// care-detail modal with the devotees behind that number.
+function openDashboardList(kind, team) {
+  const dash = AppState._dashboard;
+  if (!dash) return;
+  const all = dash.allDevotees;
+  const row = dash.rows.find(r => r.team === team);
+  if (!row) return;
+  let ids = [], title = '';
+  if      (kind === 'called')   { ids = row.calledIds;   title = `${team} — Devotees Called`; }
+  else if (kind === 'coming')   { ids = row.comingIds;   title = `${team} — Confirmed Coming`; }
+  else if (kind === 'attended') { ids = row.attendedIds; title = `${team} — Attended`; }
+  const list = ids.map(id => {
+    const d = all.find(x => x.id === id) || {};
+    return {
+      id, name: d.name || '—',
+      mobile: d.mobile || '',
+      team_name: d.teamName || '',
+      calling_by: d.callingBy || '',
+      reference_by: d.referenceBy || '',
+      chanting_rounds: d.chantingRounds || 0,
+    };
+  });
+  // Reuse the care-detail modal (already wired with table + export)
+  if (typeof _careCache !== 'undefined') {
+    _careCache._dashboard = { title, list };
+    _careCurrentType = '_dashboard';
+    if (typeof openCareDetail === 'function') openCareDetail('_dashboard');
+  }
+}
 let _reportsCategory = 'attendance';
 
 function switchReportsCategory(cat, btn) {
   _reportsCategory = cat;
-  const tabsRow = btn?.parentElement;
+  const tabsRow = btn?.parentElement || document.querySelector('#tab-reports .att-sub-tabs');
   if (tabsRow) tabsRow.querySelectorAll('.att-sub-tab').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
+  else document.querySelector(`#tab-reports .att-sub-tab[onclick*="'${cat}'"]`)?.classList.add('active');
   document.getElementById('reports-cat-attendance')?.classList.toggle('active', cat === 'attendance');
   document.getElementById('reports-cat-calling')?.classList.toggle('active', cat === 'calling');
   if (cat === 'calling') {
@@ -15,6 +215,7 @@ function switchReportsCategory(cat, btn) {
   } else {
     loadReports();
   }
+  renderBreadcrumb?.();
 }
 
 function switchCallingRptSub(btn, which) {
@@ -132,91 +333,99 @@ async function loadNewComersReport() {
   }
 }
 
-// ── REPORT SESSION FILTER ─────────────────────────────
-// Replaces weekly/monthly + date picker. Reports are pinned to a specific
-// past session (the session dates configured in Session Configuration).
-let _reportSessions = [];        // [{ id, session_date, topic, ... }]
-let _reportMonths   = [];        // distinct "YYYY-MM" (past sessions only)
-let _reportActive   = null;      // { id, session_date }
+// ── REPORT SESSION + PERIOD FILTER ────────────────────
+// Reports anchor on the master Session (AppState.filters.sessionId). The
+// Period segment (Single Session / Month / Quarter / FY) widens the window
+// for aggregation. _reportActive is now a thin live shim off the master state
+// so existing references keep compiling without rewriting them.
+let _reportSessions = [];        // populated once for export-FY helpers etc.
+
+const _reportActive = new Proxy({}, {
+  get(_t, prop) {
+    const sid = AppState.filters?.sessionId;
+    if (!sid) return undefined;
+    if (prop === 'id' || prop === 'session_date') return sid;
+    if (prop === 'topic') return AppState.sessionsCache?.[sid]?.topic || '';
+    return undefined;
+  },
+});
 
 function getWeekDate() {
-  // Prefer the selected session date; fall back to today so callers never get empty.
-  return _reportActive?.session_date
-      || document.getElementById('report-session')?.value
-      || getToday();
+  // Always read from master filter — single source of truth.
+  return AppState.filters?.sessionId || getToday();
 }
 
-function _monthLabel(ym) {
-  const [y, m] = ym.split('-');
-  return new Date(+y, +m - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+// Compute the date range covered by the current Period selection. Anchor is
+// the master Session. Returns { start, end } as YYYY-MM-DD strings.
+function _reportRange() {
+  const f = AppState.filters || {};
+  const anchor = f.sessionId || f.periodAnchor || getToday();
+  const [y, m] = anchor.split('-').map(Number);
+  const period = f.period || 'session';
+  if (period === 'session') return { start: anchor, end: anchor, period };
+  if (period === 'month') {
+    const last = new Date(y, m, 0).getDate();
+    return {
+      start: `${y}-${String(m).padStart(2,'0')}-01`,
+      end:   `${y}-${String(m).padStart(2,'0')}-${String(last).padStart(2,'0')}`,
+      period,
+    };
+  }
+  if (period === 'quarter') {
+    const qStart = m <= 3 ? 1 : m <= 6 ? 4 : m <= 9 ? 7 : 10;
+    const endM = qStart + 2;
+    const last = new Date(y, endM, 0).getDate();
+    return {
+      start: `${y}-${String(qStart).padStart(2,'0')}-01`,
+      end:   `${y}-${String(endM).padStart(2,'0')}-${String(last).padStart(2,'0')}`,
+      period,
+    };
+  }
+  // FY: April → March
+  const fyStart = m >= 4 ? y : y - 1;
+  return { start: `${fyStart}-04-01`, end: `${fyStart + 1}-03-31`, period };
+}
+
+function _reportPeriodLabel() {
+  const r = _reportRange();
+  if (r.period === 'session') return '';
+  const fmt = ds => new Date(ds + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year: r.period === 'fy' ? '2-digit' : undefined });
+  if (r.period === 'month')   return `Month: ${fmt(r.start).split(' ').slice(1).join(' ')}`;
+  if (r.period === 'quarter') return `Quarter: ${fmt(r.start)} – ${fmt(r.end)}`;
+  if (r.period === 'fy')      return `FY: ${r.start.slice(0, 4)}–${r.end.slice(2, 4)}`;
+  return '';
+}
+
+function _updateReportPeriodSummary() {
+  const el = document.getElementById('rpt-period-summary');
+  if (el) el.textContent = _reportPeriodLabel();
+}
+
+// Period segment click → mutate filter, refresh the active Reports view.
+function setReportPeriod(period) {
+  document.querySelectorAll('.rpt-period-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.period === period);
+  });
+  dispatchFilters({ period });
+  _updateReportPeriodSummary();
+  _refreshAfterFilter();
 }
 
 async function initReportsSessionFilter() {
   try {
     const today = getToday();
-    const all = await DB.getSessions();                  // newest first, up to 52
-    // Only past sessions (past & today) are reportable
-    _reportSessions = all.filter(s => s.session_date <= today);
-    if (!_reportSessions.length) {
-      document.getElementById('report-month').innerHTML   = '<option value="">No past sessions</option>';
-      document.getElementById('report-session').innerHTML = '<option value="">—</option>';
-      return;
-    }
-    _reportMonths = [...new Set(_reportSessions.map(s => s.session_date.slice(0, 7)))];
-    const monthSel = document.getElementById('report-month');
-    monthSel.innerHTML = _reportMonths.map(m => `<option value="${m}">${_monthLabel(m)}</option>`).join('');
-
-    // Default: latest past session → its month and that session selected
-    const latest = _reportSessions[0];
-    monthSel.value = latest.session_date.slice(0, 7);
-    _populateReportSessionSelect(monthSel.value);
-    document.getElementById('report-session').value = latest.id;
-    _reportActive = latest;
-    AppState.currentReportSessionId = latest.id;
+    _reportSessions = (await DB.getSessions()).filter(s => s.session_date <= today);
   } catch (e) { console.error('initReportsSessionFilter', e); }
-}
-
-function _populateReportSessionSelect(ym) {
-  const sessionSel = document.getElementById('report-session');
-  if (!sessionSel) return;
-  const inMonth = _reportSessions.filter(s => s.session_date.slice(0, 7) === ym);
-  sessionSel.innerHTML = inMonth.map(s => {
-    const d = new Date(s.session_date + 'T00:00:00')
-      .toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
-    return `<option value="${s.id}">${d}${s.topic ? ' · ' + s.topic.slice(0, 32) : ''}</option>`;
-  }).join('');
+  _updateReportPeriodSummary();
 }
 
 function _refreshAfterFilter() {
   if (_reportsCategory === 'calling') {
     const activeSub = document.querySelector('#reports-cat-calling .sub-panel.active');
     if (activeSub?.id === 'subtab-calling-submission') loadLateReports?.();
-    else { _populateReportWeeks?.().then(() => loadCallingReports?.()); }
+    else loadCallingReports?.();
   } else {
     loadReports();
-  }
-}
-
-function _onReportMonthChange() {
-  const ym = document.getElementById('report-month').value;
-  if (!ym) return;
-  _populateReportSessionSelect(ym);
-  const inMonth = _reportSessions.filter(s => s.session_date.slice(0, 7) === ym);
-  if (inMonth.length) {
-    document.getElementById('report-session').value = inMonth[0].id;
-    _reportActive = inMonth[0];
-    AppState.currentReportSessionId = inMonth[0].id;
-    _refreshAfterFilter();
-  }
-}
-
-function _onReportSessionChange() {
-  const id = document.getElementById('report-session').value;
-  const sess = _reportSessions.find(s => s.id === id);
-  if (sess) {
-    _reportActive = sess;
-    AppState.currentReportSessionId = sess.id;
-    _refreshAfterFilter();
   }
 }
 
@@ -302,8 +511,10 @@ async function loadTeamLeaderboard() {
 
 async function loadTrends() {
   try {
-    const period = 'weekly';  // main Session filter replaces per-sub-tab period
-    const team = document.getElementById('trend-team')?.value || '';
+    // Trend granularity: weekly always; range is implicit from data window.
+    // Team comes from master filter.
+    const period = 'weekly';
+    const team = getFilterTeam();
     const data = await DB.getTrends(period, team);
     const canvas = document.getElementById('trends-chart');
     if (!canvas) return;
@@ -351,19 +562,30 @@ async function loadCareData() {
   ]);
 }
 
+// Care lists respect the master Team filter so admins can scope the alerts
+// to their team without leaving the Care tab.
+function _careTeamFilter(list) {
+  const team = getFilterTeam();
+  if (!team) return list;
+  return list.filter(d => (d.team_name || d.teamName) === team);
+}
+
 async function loadAbsentDevotees() {
   try {
-    const { absentThisWeek, absentPast2Weeks } = await DB.getCareAbsent();
-    document.getElementById('absent-week-count').textContent   = absentThisWeek.length;
-    document.getElementById('absent-2weeks-count').textContent = absentPast2Weeks.length;
-    _careCache.absentWeek.list   = absentThisWeek;
-    _careCache.absent2Weeks.list = absentPast2Weeks;
+    const sessionDate = getFilterSessionId();
+    const { absentThisWeek, absentPast2Weeks } = await DB.getCareAbsent(sessionDate || undefined);
+    const w1 = _careTeamFilter(absentThisWeek || []);
+    const w2 = _careTeamFilter(absentPast2Weeks || []);
+    document.getElementById('absent-week-count').textContent   = w1.length;
+    document.getElementById('absent-2weeks-count').textContent = w2.length;
+    _careCache.absentWeek.list   = w1;
+    _careCache.absent2Weeks.list = w2;
   } catch (_) {}
 }
 
 async function loadReturningNewcomers() {
   try {
-    const devotees = await DB.getCareNewcomers();
+    const devotees = _careTeamFilter(await DB.getCareNewcomers());
     document.getElementById('newcomers-count').textContent = devotees.length;
     _careCache.newcomers.list = devotees;
   } catch (_) {}
@@ -371,21 +593,25 @@ async function loadReturningNewcomers() {
 
 async function loadInactiveDevotees() {
   try {
-    const devotees = await DB.getCareInactive();
+    const devotees = _careTeamFilter(await DB.getCareInactive());
     document.getElementById('inactive-count').textContent = devotees.length;
     _careCache.inactive.list = devotees;
   } catch (_) {}
 }
 
-// Said coming on the most recent past Sunday's calling but didn't attend.
+// Said-coming-but-didn't-come — anchored on the master Session (or latest past
+// session if the master Session is in the future). Honours the master Team filter.
 async function loadSaidComingDidntCome() {
   try {
     const today = getToday();
-    const sessSnap = await fdb.collection('sessions')
-      .where('sessionDate', '<=', today)
-      .orderBy('sessionDate', 'desc').limit(1).get();
-    if (sessSnap.empty) { document.getElementById('said-coming-count').textContent = '0'; return; }
-    const weekDate = sessSnap.docs[0].data().sessionDate;
+    let weekDate = getFilterSessionId();
+    if (!weekDate || weekDate > today) {
+      const sessSnap = await fdb.collection('sessions')
+        .where('sessionDate', '<=', today)
+        .orderBy('sessionDate', 'desc').limit(1).get();
+      if (sessSnap.empty) { document.getElementById('said-coming-count').textContent = '0'; return; }
+      weekDate = sessSnap.docs[0].data().sessionDate;
+    }
     const { list } = await DB.getYesAbsentList(weekDate);
     // Enrich with extra fields from the devotee cache so the detail table has
     // reference / chanting_rounds etc.
@@ -403,8 +629,9 @@ async function loadSaidComingDidntCome() {
         chanting_rounds: d.chantingRounds || 0,
       };
     });
-    document.getElementById('said-coming-count').textContent = enriched.length;
-    _careCache.saidComing.list     = enriched;
+    const filtered = _careTeamFilter(enriched);
+    document.getElementById('said-coming-count').textContent = filtered.length;
+    _careCache.saidComing.list     = filtered;
     _careCache.saidComing.weekDate = weekDate;
   } catch (e) {
     console.error('loadSaidComingDidntCome', e);
@@ -959,13 +1186,21 @@ function _fyRangeFor(dateStr) {
 async function loadYearlySheet() {
   const wrap = document.getElementById('yearly-sheet-wrap');
   if (!wrap) return;
-  const { start, end } = _fyRangeFor(_reportActive?.session_date);
-  const teamFilter = document.getElementById('yearly-sheet-team')?.value || '';
+  // Period segment drives the date range. For Period=session a one-day range
+  // is meaningless on a yearly sheet, so fall back to the FY containing it.
+  const r = _reportRange();
+  let start, end;
+  if (r.period === 'session') {
+    ({ start, end } = _fyRangeFor(r.start));
+  } else {
+    start = r.start; end = r.end;
+  }
+  const teamFilter = getFilterTeam();
   wrap.innerHTML = '<div class="loading" style="padding:2rem"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
     const { sessions, devotees, attMap, csMap } = await DB.getSheetData(start, end);
     if (!sessions.length) {
-      wrap.innerHTML = '<div class="empty-state"><i class="fas fa-table"></i><p>No sessions found for this year</p></div>';
+      wrap.innerHTML = `<div class="empty-state"><i class="fas fa-table"></i><p>No sessions in this ${r.period === 'session' ? 'FY' : r.period} for ${teamFilter || 'any team'}</p></div>`;
       return;
     }
     wrap.innerHTML = buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter);
@@ -1016,7 +1251,8 @@ async function saveCMCallingDates() {
 function switchCallingMgmtTab(tab, btn) {
   _cmActiveSubtab = tab;
   document.querySelectorAll('#calling-mgmt-tabs .att-sub-tab').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
+  if (btn) btn.classList.add('active');
+  else document.querySelector(`#calling-mgmt-tabs .att-sub-tab[onclick*="'${tab}'"]`)?.classList.add('active');
   ['calling', 'newcomers', 'online', 'notinterested', 'festival'].forEach(p => {
     const el = document.getElementById('calling-mgmt-panel-' + p);
     if (el) el.classList.toggle('active', p === tab);
@@ -1026,6 +1262,7 @@ function switchCallingMgmtTab(tab, btn) {
   if (tab === 'online')        _renderCMSingleList('online');
   if (tab === 'notinterested') _renderCMSingleList('notinterested');
   if (tab === 'festival')      _renderCMSingleList('festival');
+  renderBreadcrumb?.();
 }
 
 async function loadCallingMgmtTab() {
@@ -1163,8 +1400,9 @@ function _renderCMWeek() {
     return;
   }
 
-  const savedTeam = document.getElementById('cm-filter-team')?.value || '';
-  const savedBy   = document.getElementById('cm-filter-by')?.value   || '';
+  // Team + Calling By come from the master filter bar; search stays local.
+  const savedTeam = (typeof getFilterTeam      === 'function') ? getFilterTeam()      : '';
+  const savedBy   = (typeof getFilterCallingBy === 'function') ? getFilterCallingBy() : '';
   const savedQ    = (document.getElementById('cm-filter-search')?.value || '').trim().toLowerCase();
 
   const currentWkData = gridData.find(w => w.callingDate === currentWeek) || { csMap: {}, atSet: new Set() };
@@ -1203,14 +1441,7 @@ function _renderCMWeek() {
     teamMap[t].push(d);
   });
 
-  // Build Team + Calling By dropdowns (Calling By is sub-filter of Team)
-  const allTeams = [...new Set(activeDevotees.map(d => d.teamName).filter(Boolean))].sort();
-  const byPool   = savedTeam ? activeDevotees.filter(d => d.teamName === savedTeam) : activeDevotees;
-  const callers  = [...new Set(byPool.map(d => d.callingBy).filter(Boolean))].sort();
-  const teamOpts = '<option value="">All Teams</option>' +
-    allTeams.map(t => `<option value="${t}"${savedTeam === t ? ' selected' : ''}>${t}</option>`).join('');
-  const byOpts = '<option value="">All Calling By</option>' +
-    callers.map(c => `<option value="${c.replace(/"/g,'&quot;')}"${savedBy === c ? ' selected' : ''}>${c}</option>`).join('');
+  // Team + Calling By come from master filter bar — no per-tab dropdowns here.
 
   function csChip(cs) {
     if (!cs || (!cs.comingStatus && !cs.callingReason))
@@ -1334,12 +1565,6 @@ function _renderCMWeek() {
             readonly onfocus="this.removeAttribute('readonly')"
             oninput="_onCMSearch(this.value)">
         </div>
-        <select id="cm-filter-team" class="filter-select" style="font-size:.82rem" onchange="_onCMTeamChange()">
-          ${teamOpts}
-        </select>
-        <select id="cm-filter-by" class="filter-select" style="font-size:.82rem" onchange="_renderCMWeek()">
-          ${byOpts}
-        </select>
       </div>
     </div>
 

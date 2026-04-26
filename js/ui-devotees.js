@@ -1,12 +1,13 @@
 /* ══ UI-DEVOTEES.JS – Devotee list, form modal, profile modal ══ */
 
 async function loadDevotees() {
+  // Team + Calling By are read from the master filter bar. Search + Status
+  // stay as local content filters. Team-locked roles are honoured by
+  // dispatchFilters() so AppState.filters.team is already correct here.
   const filters = {
     search:     document.getElementById('devotee-search').value.trim(),
-    team:       AppState.userRole === 'teamAdmin' && AppState.userTeam
-                  ? AppState.userTeam
-                  : document.getElementById('filter-team').value,
-    calling_by: document.getElementById('filter-calling-by').value,
+    team:       getFilterTeam(),
+    calling_by: getFilterCallingBy(),
     status:     document.getElementById('filter-status').value,
   };
   const list  = document.getElementById('devotee-list');

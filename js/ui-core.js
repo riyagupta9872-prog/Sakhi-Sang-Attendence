@@ -9,25 +9,46 @@ auth.onAuthStateChanged(async (user) => {
   try {
     let userDoc = await fdb.collection('users').doc(user.uid).get();
     if (!userDoc.exists) {
+      // First user EVER bootstraps as superAdmin (so the system has someone
+      // who can approve future requests). Everyone else must wait for approval.
       let isFirst = false;
       try {
         const allUsers = await fdb.collection('users').limit(1).get();
         isFirst = allUsers.empty;
       } catch (_) { isFirst = false; }
-      const role = isFirst ? 'superAdmin' : 'serviceDevotee';
-      const data = { email: user.email, name: user.displayName || user.email.split('@')[0], role, teamName: null, createdAt: TS() };
-      await fdb.collection('users').doc(user.uid).set(data);
-      userDoc = { data: () => data };
+      if (isFirst) {
+        const data = { email: user.email, name: user.displayName || user.email.split('@')[0], role: 'superAdmin', teamName: null, createdAt: TS() };
+        await fdb.collection('users').doc(user.uid).set(data);
+        userDoc = { data: () => data };
+      } else {
+        // No users-doc and not the first user → must be approved.
+        showPendingApprovalScreen();
+        return;
+      }
     }
     const ud = userDoc.data();
+    if (ud.status === 'rejected') {
+      // Their sign-up was explicitly rejected — block sign-in.
+      await auth.signOut();
+      showAuthScreen();
+      const errEl = document.getElementById('login-error');
+      if (errEl) {
+        errEl.textContent = 'This account was not approved. Please contact your Super Admin.';
+        errEl.classList.add('show');
+      }
+      return;
+    }
     AppState.userRole     = ud.role;
     AppState.userTeam     = ud.teamName   || null;
     AppState.userPosition = ud.position   || null;
     AppState.userName     = ud.name       || user.email;
     AppState.profilePic   = ud.profilePic || null;
     hideAuthScreen();
+    hidePendingApprovalScreen();
     applyRoleUI();
     await initApp();
+    // Super admin only: keep a live count of pending sign-up requests.
+    if (AppState.userRole === 'superAdmin') subscribePendingSignups();
   } catch (e) {
     if (e.code === 'permission-denied') {
       document.getElementById('auth-screen').classList.remove('hidden');
@@ -42,6 +63,8 @@ auth.onAuthStateChanged(async (user) => {
 
 function showAuthScreen() { document.getElementById('auth-screen').classList.remove('hidden'); }
 function hideAuthScreen() { document.getElementById('auth-screen').classList.add('hidden'); }
+function showPendingApprovalScreen() { document.getElementById('pending-approval-screen')?.classList.remove('hidden'); document.getElementById('auth-screen').classList.add('hidden'); }
+function hidePendingApprovalScreen() { document.getElementById('pending-approval-screen')?.classList.add('hidden'); }
 
 function switchAuthTab(tab, btn) {
   document.querySelectorAll('.auth-tab').forEach(b => b.classList.remove('active'));
@@ -91,13 +114,27 @@ async function doSignup(e) {
   try {
     const cred = await auth.createUserWithEmailAndPassword(email, password);
     await cred.user.updateProfile({ displayName: name });
+    // First user EVER bootstraps as approved superAdmin. Everyone else lands
+    // in signupRequests for super admin to approve.
     const existing = await fdb.collection('users').limit(2).get();
     const isFirst = existing.docs.filter(d => d.id !== cred.user.uid).length === 0;
-    await fdb.collection('users').doc(cred.user.uid).set({
-      email, name, role: isFirst ? 'superAdmin' : role,
-      teamName: role === 'teamAdmin' ? (team || null) : null,
-      createdAt: TS()
+    if (isFirst) {
+      await fdb.collection('users').doc(cred.user.uid).set({
+        email, name, role: 'superAdmin', teamName: null, createdAt: TS()
+      });
+      return;  // onAuthStateChanged will pick them up as super admin
+    }
+    // Record the request and immediately sign them out — they'll see the
+    // "Awaiting approval" gate on next sign-in.
+    await fdb.collection('signupRequests').doc(cred.user.uid).set({
+      uid:            cred.user.uid,
+      email, name,
+      requestedRole:  role,
+      requestedTeam:  role === 'teamAdmin' ? (team || null) : null,
+      status:         'pending',
+      createdAt:      TS(),
     });
+    showPendingApprovalScreen();
   } catch (ex) {
     err.textContent = ex.code === 'auth/email-already-in-use' ? 'Email already registered' : ex.message;
     err.classList.add('show');
@@ -137,6 +174,153 @@ async function doForgotPassword() {
 async function doLogout() {
   if (!confirm('Log out?')) return;
   await auth.signOut();
+}
+
+// ── SIGN-UP REQUESTS (super admin) ─────────────────────
+let _signupReqUnsub = null;
+let _signupReqCache = [];
+
+function subscribePendingSignups() {
+  if (_signupReqUnsub) return;
+  try {
+    _signupReqUnsub = fdb.collection('signupRequests')
+      .where('status', '==', 'pending')
+      .onSnapshot(snap => {
+        _signupReqCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        _updateSignupBadges(_signupReqCache.length);
+        // If the modal is open, refresh its content
+        const open = !document.getElementById('signup-requests-modal')?.classList.contains('hidden');
+        if (open) renderSignupRequests();
+      }, err => { console.error('signupRequests subscription', err); });
+  } catch (e) { console.error('subscribePendingSignups', e); }
+}
+
+function _updateSignupBadges(count) {
+  const navBadge = document.getElementById('sidebar-badge');
+  const itemBadge = document.getElementById('signup-pending-badge');
+  if (navBadge) {
+    navBadge.classList.toggle('hidden', !count);
+    navBadge.textContent = count > 9 ? '9+' : String(count);
+  }
+  if (itemBadge) {
+    itemBadge.classList.toggle('hidden', !count);
+    itemBadge.textContent = String(count);
+  }
+}
+
+function openSignupRequests() {
+  closeSidebar();
+  openModal('signup-requests-modal');
+  renderSignupRequests();
+}
+
+function renderSignupRequests() {
+  const el = document.getElementById('signup-requests-list');
+  if (!el) return;
+  if (!_signupReqCache.length) {
+    el.innerHTML = '<div class="empty-state" style="padding:2rem"><i class="fas fa-check-circle" style="color:var(--success)"></i><p>No pending sign-up requests.</p></div>';
+    return;
+  }
+  // Sort newest first
+  const rows = [..._signupReqCache].sort((a, b) => {
+    const ta = a.createdAt?.toMillis?.() || 0;
+    const tb = b.createdAt?.toMillis?.() || 0;
+    return tb - ta;
+  });
+  const teamOptions = '<option value="">— No team —</option>' +
+    TEAMS.map(t => `<option value="${t}">${t}</option>`).join('');
+  el.innerHTML = rows.map(r => {
+    const when = r.createdAt?.toDate
+      ? r.createdAt.toDate().toLocaleString('en-IN', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' })
+      : '—';
+    const safeName = (r.name || '').replace(/"/g, '&quot;');
+    return `<div class="signup-req-row">
+      <div class="devotee-avatar" style="width:42px;height:42px;font-size:.85rem;flex-shrink:0">${initials(r.name || r.email)}</div>
+      <div class="signup-req-info">
+        <div class="signup-req-name">${r.name || '(unnamed)'}</div>
+        <div class="signup-req-meta">
+          <i class="fas fa-envelope"></i> ${r.email || '—'}
+          &nbsp;·&nbsp; requested ${when}
+          ${r.requestedRole ? '&nbsp;·&nbsp; wants <strong>' + (r.requestedRole === 'teamAdmin' ? 'Coordinator' : 'Facilitator') + '</strong>' : ''}
+          ${r.requestedTeam ? ' for <strong>' + r.requestedTeam + '</strong>' : ''}
+        </div>
+      </div>
+      <div class="signup-req-actions">
+        <select id="srq-role-${r.id}" class="filter-select">
+          <option value="serviceDevotee"${r.requestedRole==='serviceDevotee'?' selected':''}>Facilitator</option>
+          <option value="teamAdmin"${r.requestedRole==='teamAdmin'?' selected':''}>Coordinator</option>
+          <option value="superAdmin">Super Admin</option>
+        </select>
+        <select id="srq-team-${r.id}" class="filter-select">
+          ${teamOptions.replace(`value="${(r.requestedTeam||'').replace(/"/g,'&quot;')}"`, `value="${(r.requestedTeam||'').replace(/"/g,'&quot;')}" selected`)}
+        </select>
+        <button class="btn btn-secondary" onclick="contactSignupRequest('${r.email||''}','${safeName}')" title="Email"><i class="fas fa-envelope"></i></button>
+        <button class="btn btn-primary" onclick="approveSignupRequest('${r.id}')"><i class="fas fa-check"></i> Approve</button>
+        <button class="btn btn-danger" onclick="rejectSignupRequest('${r.id}')"><i class="fas fa-times"></i> Reject</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function approveSignupRequest(id) {
+  const r = _signupReqCache.find(x => x.id === id);
+  if (!r) return;
+  const role = document.getElementById('srq-role-' + id)?.value || 'serviceDevotee';
+  const team = document.getElementById('srq-team-' + id)?.value || null;
+  try {
+    // Create the users/{uid} doc — this is what onAuthStateChanged looks for.
+    await fdb.collection('users').doc(r.uid).set({
+      email: r.email,
+      name:  r.name,
+      role,
+      teamName: team || null,
+      createdAt: TS(),
+      approvedBy: AppState.userName,
+      approvedAt: TS(),
+    });
+    await fdb.collection('signupRequests').doc(id).update({
+      status: 'approved',
+      decidedBy: AppState.userName,
+      decidedAt: TS(),
+      assignedRole: role,
+      assignedTeam: team || null,
+    });
+    showToast(`Approved ${r.name || r.email}`, 'success');
+  } catch (e) {
+    showToast('Approval failed: ' + (e.message || 'Error'), 'error');
+  }
+}
+
+async function rejectSignupRequest(id) {
+  const r = _signupReqCache.find(x => x.id === id);
+  if (!r) return;
+  if (!confirm(`Reject sign-up request from ${r.name || r.email}?\n\nThey won't be able to access the app.`)) return;
+  try {
+    const now = TS();
+    // Write a users doc with status:'rejected' so onAuthStateChanged can block sign-in.
+    await fdb.collection('users').doc(r.uid).set({
+      email: r.email || '', name: r.name || '', status: 'rejected',
+      role: 'serviceDevotee', teamName: null,
+      rejectedBy: AppState.userName, rejectedAt: now,
+    });
+    await fdb.collection('signupRequests').doc(id).update({
+      status: 'rejected',
+      decidedBy: AppState.userName,
+      decidedAt: now,
+    });
+    showToast(`Rejected ${r.name || r.email}`, 'success');
+  } catch (e) {
+    showToast('Reject failed: ' + (e.message || 'Error'), 'error');
+  }
+}
+
+// Open the super admin's mail client pre-filled to the requester. Client-side
+// JavaScript can't reliably send email itself; mailto is the universal fallback.
+function contactSignupRequest(email, name) {
+  if (!email) { showToast('No email on this request', 'error'); return; }
+  const subj = encodeURIComponent('Your Sakhi Sang account');
+  const body = encodeURIComponent(`Hare Krishna ${name || ''},\n\nRegarding your Sakhi Sang sign-up request — `);
+  window.location.href = `mailto:${email}?subject=${subj}&body=${body}`;
 }
 
 // ── EDIT PROFILE ─────────────────────────────────────
@@ -467,6 +651,7 @@ function applyRoleUI() {
   });
 
   const tabs = {
+    dashboard:   ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     devotees:    ['superAdmin'],
     calling:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     attendance:  ['superAdmin', 'teamAdmin', 'serviceDevotee'],
@@ -584,6 +769,13 @@ async function clearDataForDate() {
       chunk.forEach(d => { b.delete(d.ref); });
       await b.commit();
     }
+    const submSnap = await fdb.collection('callingSubmissions').where('weekDate', '==', date).get();
+    const submBatches = chunkArray(submSnap.docs, 400);
+    for (const chunk of submBatches) {
+      const b = fdb.batch();
+      chunk.forEach(d => { b.delete(d.ref); });
+      await b.commit();
+    }
     const devoteeIds = [...new Set(attSnap.docs.map(d => d.data().devoteeId))];
     const dbatches = chunkArray(devoteeIds, 400);
     for (const chunk of dbatches) {
@@ -631,7 +823,7 @@ async function clearAllData() {
   try {
     closeModal('clear-data-modal');
     showToast('Erasing all data…');
-    const collections = ['devotees','sessions','attendanceRecords','callingStatus','events','profileChanges'];
+    const collections = ['devotees','sessions','attendanceRecords','callingStatus','callingSubmissions','callingWeekHistory','events','profileChanges'];
     for (const col of collections) {
       let snap = await fdb.collection(col).limit(400).get();
       while (!snap.empty) {
@@ -650,12 +842,219 @@ async function clearAllData() {
 // ── INIT ─────────────────────────────────────────────
 async function initApp() {
   await initSession();
+  await initMasterFilterBar();
   loadDevotees();
   loadCallingPersonsFilter();
   loadBirthdays();
   initReportsSessionFilter?.();
   initAllPickers();
+  initHomeDevoteePickers?.();
   initSheetYearSelector();
+  // Default current tab follows the HTML's active panel.
+  if (!AppState.currentTab) {
+    const activePanel = document.querySelector('.tab-panel.active');
+    AppState.currentTab = activePanel?.id?.replace('tab-', '') || 'dashboard';
+  }
+  if (AppState.currentTab === 'dashboard') { loadHome?.(); loadDashboard?.(); }
+  renderBreadcrumb?.();
+}
+
+// ── MASTER FILTER BAR ───────────────────────────────────
+// Stage 2: bar is visible and editable, but tabs still also use their legacy
+// widgets. The bar mirrors values in both directions through dispatchFilters
+// + a 'filtersChanged' listener that syncs legacy <select> values back.
+async function initMasterFilterBar() {
+  // Populate Team — for non-super-admin, render the static chip and hide the
+  // editable select (they cannot change away from their own team).
+  const teamSel  = document.getElementById('mfb-team');
+  const teamChip = document.getElementById('mfb-team-chip');
+  if (AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam) {
+    if (teamSel) teamSel.style.display = 'none';
+    if (teamChip) {
+      teamChip.style.display = '';
+      teamChip.innerHTML = `<i class="fas fa-lock" style="font-size:.7rem"></i> ${AppState.userTeam}`;
+    }
+    AppState.filters.team = AppState.userTeam;
+  } else if (teamSel) {
+    teamSel.value = AppState.filters.team || '';
+  }
+
+  // Populate Session — past sessions newest first, with the upcoming Sunday
+  // promoted to the top with an "Upcoming" badge.
+  await _mfbReloadSessionOptions();
+
+  // Populate Calling By based on current Team
+  _mfbReloadCallingByOptions();
+
+  // Listen to dispatchFilters firing → keep widgets in sync (legacy + master)
+  window.addEventListener('filtersChanged', _mfbOnFiltersChanged);
+
+  // Mirror back: when legacy widgets change, push their value into the master
+  // state so the master bar updates too (and the active tab re-loads).
+  _mfbAttachLegacyMirror();
+
+  _mfbUpdateCaption();
+}
+
+function _mfbAttachLegacyMirror() {
+  const teamIds = ['filter-team','calling-filter-team','yearly-sheet-team','trend-team','cm-filter-team'];
+  const byIds   = ['filter-calling-by','calling-filter-callingby','cm-filter-by'];
+  teamIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => dispatchFilters({ team: el.value }));
+  });
+  byIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => dispatchFilters({ callingBy: el.value }));
+  });
+}
+
+async function _mfbReloadSessionOptions() {
+  const sel = document.getElementById('mfb-session');
+  if (!sel) return;
+  try {
+    const today    = getToday();
+    const sessions = await DB.getSessions();          // newest first, up to 52
+    const upcoming = sessions.filter(s => s.session_date >  today)
+                              .sort((a, b) => a.session_date.localeCompare(b.session_date));
+    const past     = sessions.filter(s => s.session_date <= today);
+    let html = '';
+    if (upcoming[0]) {
+      const u = upcoming[0];
+      const lbl = new Date(u.session_date + 'T00:00:00')
+        .toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+      html += `<option value="${u.id}" data-date="${u.session_date}">▶ ${lbl} (Upcoming)</option>`;
+      html += `<option disabled>──────────────</option>`;
+    }
+    past.forEach(s => {
+      const lbl = new Date(s.session_date + 'T00:00:00')
+        .toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+      html += `<option value="${s.id}" data-date="${s.session_date}">${lbl}${s.topic ? ' · ' + s.topic.slice(0, 28) : ''}</option>`;
+    });
+    sel.innerHTML = html || '<option value="">No sessions yet</option>';
+    // Options use the Firestore doc ID as their value; filters.sessionId is the date string.
+    // Try to select by matching data-date to the current filter; fall back to upcoming/past.
+    const currentFilter = AppState.filters.sessionId;
+    if (currentFilter) {
+      const match = Array.from(sel.options).find(o => o.dataset?.date === currentFilter);
+      if (match) sel.value = match.value;
+    }
+    if (!sel.value) { const fb = upcoming[0] || past[0]; if (fb) sel.value = fb.id; }
+    if (sel.value && sel.value !== AppState._currentSessionId) {
+      const opt2 = sel.options[sel.selectedIndex];
+      dispatchFilters({ sessionId: opt2?.dataset?.date || sel.value, _sessionDocId: sel.value });
+    }
+  } catch (e) { console.error('mfbReloadSessionOptions', e); }
+}
+
+function _mfbReloadCallingByOptions() {
+  const sel = document.getElementById('mfb-by');
+  if (!sel) return;
+  // Source from DevoteeCache so callers list stays consistent everywhere.
+  DevoteeCache.all().then(all => {
+    const team = AppState.filters.team || '';
+    const pool = team ? all.filter(d => d.teamName === team) : all;
+    const callers = [...new Set(pool.map(d => d.callingBy).filter(Boolean))].sort();
+    const prev = AppState.filters.callingBy || '';
+    sel.innerHTML = '<option value="">All Callers</option>' +
+      callers.map(c => `<option value="${c.replace(/"/g,'&quot;')}"${c===prev?' selected':''}>${c}</option>`).join('');
+    // Hide entirely if there are no callers in the chosen team
+    const field = document.getElementById('mfb-by-field');
+    if (field) field.style.display = callers.length ? '' : 'none';
+    // If the current callingBy isn't in the new pool, clear it
+    if (prev && !callers.includes(prev)) {
+      dispatchFilters({ callingBy: '' });
+    }
+  }).catch(() => {});
+}
+
+function _mfbOnSession(value) {
+  const sel = document.getElementById('mfb-session');
+  if (!sel) return;
+  const opt = sel.options[sel.selectedIndex];
+  const dateStr = opt?.dataset?.date || null;
+  const docId   = opt?.value || null;
+  dispatchFilters({ sessionId: dateStr, _sessionDocId: docId });
+}
+
+function _mfbOnTeam(value) {
+  dispatchFilters({ team: value || '' });
+  _mfbReloadCallingByOptions();
+}
+
+function _mfbOnCallingBy(value) {
+  dispatchFilters({ callingBy: value || '' });
+}
+
+function _mfbUpdateCaption() {
+  const cap = document.getElementById('mfb-caption');
+  if (!cap) return;
+  const f = AppState.filters || {};
+  const parts = [];
+  if (f.team)      parts.push(`<strong>${f.team}</strong> team`);
+  else             parts.push('all teams');
+  if (f.callingBy) parts.push(`called by <strong>${f.callingBy}</strong>`);
+  if (f.sessionId) {
+    const lbl = new Date(f.sessionId + 'T00:00:00')
+      .toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' });
+    parts.push(`for <strong>${lbl}</strong>`);
+  }
+  cap.innerHTML = 'Showing ' + parts.join(', ');
+}
+
+// Sync between master bar + legacy widgets. Fires on every dispatchFilters call.
+function _mfbOnFiltersChanged(e) {
+  const f = AppState.filters;
+  // Master bar widgets
+  const mfbTeam = document.getElementById('mfb-team');
+  if (mfbTeam && mfbTeam.value !== (f.team || '')) mfbTeam.value = f.team || '';
+  const mfbBy   = document.getElementById('mfb-by');
+  if (mfbBy && mfbBy.value !== (f.callingBy || '')) mfbBy.value = f.callingBy || '';
+  const mfbSes  = document.getElementById('mfb-session');
+  if (mfbSes && f.sessionId) {
+    // Match the option whose data-date equals the canonical sessionId
+    Array.from(mfbSes.options).forEach(o => {
+      if (o.dataset && o.dataset.date === f.sessionId) mfbSes.value = o.value;
+    });
+  }
+  // Legacy widgets (mirrors so both stay in sync until later stages drop them)
+  const pairs = [
+    ['filter-team',           f.team],
+    ['calling-filter-team',   f.team],
+    ['yearly-sheet-team',     f.team],
+    ['trend-team',            f.team],
+    ['cm-filter-team',        f.team],
+    ['cs-modal-team',         f.team],
+    ['filter-calling-by',     f.callingBy],
+    ['calling-filter-callingby', f.callingBy],
+    ['cm-filter-by',          f.callingBy],
+    ['cs-modal-by',           f.callingBy],
+  ];
+  pairs.forEach(([id, val]) => {
+    const el = document.getElementById(id);
+    if (el && el.value !== (val || '')) {
+      el.value = val || '';
+    }
+  });
+  _mfbUpdateCaption();
+
+  // Re-render the visible tab so it picks up the new filter values.
+  // Each load* is idempotent and reads from filters / legacy widgets (now
+  // already synced above). Reports has its own dispatch in _refreshAfterFilter.
+  const tab = AppState.currentTab;
+  if (tab === 'dashboard'    && typeof loadDashboard === 'function')       loadDashboard();
+  if (tab === 'devotees'     && typeof loadDevotees === 'function')        loadDevotees();
+  const _sessionChanged = e?.detail?.before && e.detail.before.sessionId !== AppState.filters.sessionId;
+  if (tab === 'calling') {
+    if (_sessionChanged) loadCallingStatus?.();
+    else if (typeof filterCallingList === 'function' && AppState.callingData?.length) filterCallingList();
+  }
+  if (tab === 'attendance') loadAttendanceTab?.();
+  if (tab === 'reports'      && typeof _refreshAfterFilter === 'function') _refreshAfterFilter();
+  if (tab === 'care'         && typeof loadCareData === 'function')        loadCareData();
+  if (tab === 'calling-mgmt' && typeof loadCallingMgmtTab === 'function')  loadCallingMgmtTab();
 }
 
 // ── MOBILE VALIDATION ─────────────────────────────────
@@ -884,16 +1283,22 @@ function switchTab(tab, btn) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + tab).classList.add('active');
-  btn.classList.add('active');
+  // btn may be omitted when called programmatically (e.g. via breadcrumb).
+  if (btn) btn.classList.add('active');
+  else document.querySelector(`.tab-btn[data-tab="${tab}"]`)?.classList.add('active');
   AppState.currentTab = tab;
+  renderBreadcrumb();
   document.getElementById('register-fab')?.classList.toggle('hidden', tab !== 'attendance');
   document.getElementById('add-devotee-fab')?.classList.toggle('hidden', tab !== 'devotees');
+  if (tab === 'dashboard')  { loadHome?.(); loadDashboard?.(); }
   if (tab === 'calling')    loadCallingStatus();
   if (tab === 'attendance') loadAttendanceTab();
   if (tab === 'reports')    loadReports();
   if (tab === 'care')       loadCareData();
   if (tab === 'events')     loadEvents();
   if (tab === 'calling-mgmt') loadCallingMgmtTab?.();
+  // Sync legacy widgets on the newly-shown tab to current filter values.
+  if (typeof _mfbOnFiltersChanged === 'function') _mfbOnFiltersChanged();
 }
 
 function switchSubTab(btn, id) {
@@ -907,6 +1312,7 @@ function switchSubTab(btn, id) {
   if (id === 'team-leaderboard')  loadTeamLeaderboard();
   if (id === 'attendance-detail') loadAttendanceDetail();
   if (id === 'newcomers-report')  loadNewComersReport?.();
+  renderBreadcrumb?.();
 }
 
 // ── EXPORT ATTENDANCE ─────────────────────────────────
@@ -918,4 +1324,74 @@ async function exportAttendance() {
     const rows = records.map(r => ({ Name: r.name, Mobile: r.mobile || '', 'Chanting Rounds': r.chanting_rounds, Team: r.team_name || '', 'Calling By': r.calling_by || '', Type: r.is_new_devotee ? 'New' : 'Regular' }));
     downloadExcel(rows, `attendance_${getToday()}.xlsx`);
   } catch (_) { showToast('Export failed', 'error'); }
+}
+
+// ── BREADCRUMB ──────────────────────────────────────────
+// Renders the current location as a clickable path. Reads tab + sub-tab state
+// from the DOM so we don't need a separate registry.
+function renderBreadcrumb() {
+  const el = document.getElementById('breadcrumb-trail');
+  if (!el) return;
+  const tabLabels = {
+    dashboard:      'Dashboard',
+    devotees:       'Devotees',
+    calling:        'Calling',
+    attendance:     'Attendance',
+    reports:        'Reports',
+    care:           'Care',
+    events:         'Events',
+    'calling-mgmt': 'Calling Mgmt',
+  };
+  const tab = AppState.currentTab || 'dashboard';
+  const segments = [
+    { label: '<i class="fas fa-home"></i>', cls: 'bc-home', onClick: `switchTab('dashboard', null)` },
+  ];
+  if (tab !== 'dashboard') segments.push({ label: tabLabels[tab] || tab, onClick: `switchTab('${tab}', null)` });
+
+  // Reports: two-level nesting (category → sub-tab)
+  if (tab === 'reports') {
+    const cat = document.querySelector('.reports-cat-panel.active')?.id || '';
+    if (cat === 'reports-cat-attendance') {
+      segments.push({ label: 'Attendance Reports', onClick: `switchReportsCategory('attendance', document.querySelector('#tab-reports .att-sub-tab'))` });
+    } else if (cat === 'reports-cat-calling') {
+      segments.push({ label: 'Calling Reports', onClick: `switchReportsCategory('calling', document.querySelectorAll('#tab-reports .att-sub-tab')[1])` });
+    }
+    const subId = document.querySelector('.reports-cat-panel.active .sub-panel.active')?.id || '';
+    const subLabels = {
+      'subtab-attendance-detail':  'Attendance Sheet',
+      'subtab-newcomers-report':   'New Comers',
+      'subtab-serious-analysis':   'Serious',
+      'subtab-team-leaderboard':   'Teams',
+      'subtab-trends':             'Trends',
+      'subtab-calling-weekly':     'Weekly Report',
+      'subtab-calling-submission': 'Submission Reports',
+    };
+    if (subLabels[subId]) segments.push({ label: subLabels[subId], current: true });
+  }
+
+  // Calling Mgmt: 5-way sub-tabs
+  if (tab === 'calling-mgmt') {
+    const cmLabels = {
+      'calling-mgmt-panel-calling':       'Calling List',
+      'calling-mgmt-panel-newcomers':     'New Comers',
+      'calling-mgmt-panel-online':        'Online Class',
+      'calling-mgmt-panel-notinterested': 'Not Interested',
+      'calling-mgmt-panel-festival':      'Festival Calling',
+    };
+    const subId = document.querySelector('#tab-calling-mgmt .att-sub-panel.active')?.id || '';
+    if (cmLabels[subId]) segments.push({ label: cmLabels[subId], current: true });
+  }
+
+  // Mark final segment as current
+  if (segments.length && !segments[segments.length - 1].current) {
+    segments[segments.length - 1].current = true;
+  }
+
+  el.innerHTML = segments.map((s, i) => {
+    const sep = i > 0 ? '<span class="bc-sep">›</span>' : '';
+    if (s.current) {
+      return `${sep}<span class="bc-seg bc-current ${s.cls || ''}">${s.label}</span>`;
+    }
+    return `${sep}<button class="bc-seg ${s.cls || ''}" onclick="${s.onClick || ''}">${s.label}</button>`;
+  }).join('');
 }

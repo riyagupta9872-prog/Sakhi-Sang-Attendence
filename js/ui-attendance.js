@@ -292,7 +292,10 @@ async function loadAttendanceCandidates() {
   const list   = document.getElementById('attendance-list');
   list.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
-    const candidates = await DB.getAttendanceCandidates(AppState.currentSessionId, search);
+    let candidates = await DB.getAttendanceCandidates(AppState.currentSessionId, search);
+    // Master filter — narrow candidates by Team if set
+    const team = (typeof getFilterTeam === 'function') ? getFilterTeam() : '';
+    if (team) candidates = candidates.filter(d => d.team_name === team);
     AppState.attendanceCandidates = {};
     candidates.forEach(d => { AppState.attendanceCandidates[d.id] = d; });
     if (!candidates.length) {

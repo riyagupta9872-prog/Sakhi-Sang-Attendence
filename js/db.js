@@ -154,7 +154,7 @@ const DB = {
     Object.entries(trackMap).forEach(([fKey, formKey]) => {
       const nv = updates[fKey], ov = ex[fKey];
       if (nv !== undefined && String(nv ?? '') !== String(ov ?? '')) {
-        batch.set(fdb.collection('profileChanges').doc(), { devoteeId: id, fieldName: formKey, oldValue: String(ov ?? ''), newValue: String(nv ?? ''), changedAt: TS(), changedBy: 'Coordinator' });
+        batch.set(fdb.collection('profileChanges').doc(), { devoteeId: id, fieldName: formKey, oldValue: String(ov ?? ''), newValue: String(nv ?? ''), changedAt: TS(), changedBy: AppState.userName || 'Coordinator' });
       }
     });
     batch.update(fdb.collection('devotees').doc(id), updates);
@@ -892,8 +892,11 @@ const DB = {
   },
 
   /* CARE */
-  async getCareAbsent() {
-    const sSnap = await fdb.collection('sessions').orderBy('sessionDate', 'desc').limit(5).get();
+  async getCareAbsent(anchorDate) {
+    const q = anchorDate
+      ? fdb.collection('sessions').where('sessionDate', '<=', anchorDate).orderBy('sessionDate', 'desc').limit(5)
+      : fdb.collection('sessions').orderBy('sessionDate', 'desc').limit(5);
+    const sSnap = await q.get();
     const sessions = sSnap.docs.map(d => ({ id: d.id }));
     if (sessions.length < 2) return { absentThisWeek: [], absentPast2Weeks: [] };
     const [latest, ...prev] = sessions;
@@ -1067,12 +1070,138 @@ const DB = {
     await fdb.collection('devotees').doc(devoteeId).update(updateData);
     await fdb.collection('profileChanges').add({
       devoteeId,
-      changedBy: AppState.userId || '',
-      changedByName: AppState.userName || '',
-      changeType: 'callingMode',
+      fieldName: 'calling_mode',
+      oldValue: '',
       newValue: mode || '',
-      timestamp: TS(),
+      changedAt: TS(),
+      changedBy: AppState.userName || '',
     });
     DevoteeCache.bust();
+  },
+
+  // ── ATTENDANCE SESSION REPORT (home drawer) ──────────
+  // Returns one row per team with calling + attendance stats for a single session.
+  async getAttendanceSessionReport(sessionId, callingDate) {
+    const [allDevotees, attSnap, csSnap] = await Promise.all([
+      DevoteeCache.all(),
+      sessionId
+        ? fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get()
+        : Promise.resolve({ docs: [] }),
+      callingDate
+        ? fdb.collection('callingStatus').where('weekDate', '==', callingDate).get()
+        : Promise.resolve({ docs: [] }),
+    ]);
+    const teamMap = {};
+    const ensure = t => { if (!teamMap[t]) teamMap[t] = { team: t, total: 0, called: 0, saidComing: new Set(), came: new Set() }; };
+    allDevotees.forEach(d => { const t = d.teamName || 'Other'; ensure(t); teamMap[t].total++; });
+    const devById = Object.fromEntries(allDevotees.map(d => [d.id, d]));
+    csSnap.docs.forEach(d => {
+      const dt = d.data();
+      const t = devById[dt.devoteeId]?.teamName || dt.teamName || 'Other';
+      ensure(t);
+      teamMap[t].called++;
+      if (dt.comingStatus === 'Yes') teamMap[t].saidComing.add(dt.devoteeId);
+    });
+    attSnap.docs.forEach(d => {
+      const dt = d.data();
+      const t = dt.teamName || devById[dt.devoteeId]?.teamName || 'Other';
+      ensure(t);
+      teamMap[t].came.add(dt.devoteeId);
+    });
+    return Object.values(teamMap).filter(r => r.total > 0).map(r => ({
+      team: r.team,
+      total: r.total,
+      called: r.called,
+      saidComing: r.saidComing.size,
+      actuallyCame: r.came.size,
+      saidComingNotCame: [...r.saidComing].filter(id => !r.came.has(id)).length,
+    })).sort((a, b) => a.team.localeCompare(b.team));
+  },
+
+  // ── BOOK DISTRIBUTION ────────────────────────────────
+  async addBookDistribution({ devoteeId, devoteeName, teamName, date, quantity }) {
+    await fdb.collection('bookDistributions').add({
+      devoteeId: devoteeId || '',
+      devoteeName: devoteeName || '',
+      teamName: teamName || '',
+      date: date || localDateStr(new Date()),
+      quantity: parseInt(quantity) || 0,
+      addedBy: AppState.userName || '',
+      createdAt: TS(),
+    });
+  },
+
+  async getBookDistributions({ startDate, endDate } = {}) {
+    let q = fdb.collection('bookDistributions');
+    if (startDate) q = q.where('date', '>=', startDate);
+    if (endDate)   q = q.where('date', '<=', endDate);
+    const snap = await q.get();
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  },
+
+  // ── DONATION ─────────────────────────────────────────
+  async addDonation({ teamName, amount, date, note }) {
+    await fdb.collection('donations').add({
+      teamName: teamName || '',
+      amount: parseFloat(amount) || 0,
+      date: date || localDateStr(new Date()),
+      note: note || '',
+      addedBy: AppState.userName || '',
+      createdAt: TS(),
+    });
+  },
+
+  async getDonations({ startDate, endDate } = {}) {
+    let q = fdb.collection('donations');
+    if (startDate) q = q.where('date', '>=', startDate);
+    if (endDate)   q = q.where('date', '<=', endDate);
+    const snap = await q.get();
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  },
+
+  // ── REGISTRATION ─────────────────────────────────────
+  async addRegistration({ devoteeId, devoteeName, teamName, date, count }) {
+    await fdb.collection('registrations').add({
+      devoteeId: devoteeId || '',
+      devoteeName: devoteeName || '',
+      teamName: teamName || '',
+      date: date || localDateStr(new Date()),
+      count: parseInt(count) || 0,
+      addedBy: AppState.userName || '',
+      createdAt: TS(),
+    });
+  },
+
+  async getRegistrations({ startDate, endDate } = {}) {
+    let q = fdb.collection('registrations');
+    if (startDate) q = q.where('date', '>=', startDate);
+    if (endDate)   q = q.where('date', '<=', endDate);
+    const snap = await q.get();
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  },
+
+  // ── SERVICE ──────────────────────────────────────────
+  async addService({ devoteeId, devoteeName, teamName, date, serviceDescription }) {
+    await fdb.collection('services').add({
+      devoteeId: devoteeId || '',
+      devoteeName: devoteeName || '',
+      teamName: teamName || '',
+      date: date || localDateStr(new Date()),
+      serviceDescription: serviceDescription || '',
+      addedBy: AppState.userName || '',
+      createdAt: TS(),
+    });
+  },
+
+  async getServices({ startDate, endDate } = {}) {
+    let q = fdb.collection('services');
+    if (startDate) q = q.where('date', '>=', startDate);
+    if (endDate)   q = q.where('date', '<=', endDate);
+    const snap = await q.get();
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   },
 };

@@ -215,7 +215,7 @@ async function saveQuickStatus() {
     await DB.updateCallingStatus(devoteeId, week, { coming_status: status, calling_reason: reason, calling_notes: '' });
     closeModal('quick-status-modal');
     showToast('Status updated!', 'success');
-    loadManagementTab();
+    loadCallingMgmtTab?.();
   } catch(e) {
     showToast('Failed: ' + (e.message || 'Error'), 'error');
   }
@@ -239,12 +239,29 @@ async function loadCallingStatus() {
   document.getElementById('calling-list').innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
     const cfg = await DB.getCallingWeekConfig();
+    const masterSession = (typeof getFilterSessionId === 'function') ? getFilterSessionId() : null;
+
     let week = cfg?.callingDate || '';
     let sessionDate = cfg?.sessionDate || '';
     let isHistoryFallback = false;
     let beforeCallingDate = false;
+    let isHistoricalView = false;
 
-    if (week) {
+    // If the master Session points to a different week than what's currently
+    // configured, treat this as a historical (read-only) view of that week's
+    // calling list. Calling week date = the day before the Sunday session.
+    if (masterSession && masterSession !== sessionDate) {
+      isHistoricalView = true;
+      sessionDate = masterSession;
+      const d = new Date(masterSession + 'T00:00:00');
+      d.setDate(d.getDate() - 1);
+      week = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      _callingLocked = true;       // submit / edit disabled
+    }
+
+    if (isHistoricalView) {
+      // Historical view: already locked; skip today-vs-callingDate gating.
+    } else if (week) {
       const today = getToday();
       if (today < week) {
         // Before calling date → list is read-only, no submit yet
@@ -299,19 +316,12 @@ async function loadCallingStatus() {
     ]);
     AppState.callingData = devotees;
 
-    const teamSel = document.getElementById('calling-filter-team');
-    const prevTeam = teamSel.value;
-    teamSel.innerHTML = '<option value="">All Teams</option>' +
-      TEAMS.map(t => `<option value="${t}"${prevTeam===t?' selected':''}>${t}</option>`).join('');
-    const bySel = document.getElementById('calling-filter-callingby');
-    const prevBy = bySel.value;
-    const callers = [...new Set(devotees.map(d => d.calling_by).filter(Boolean))].sort();
-    bySel.innerHTML = '<option value="">All Calling By</option>' +
-      callers.map(c => `<option value="${c}"${prevBy===c?' selected':''}>${c}</option>`).join('');
+    // Team / Calling By dropdowns moved to the master filter bar — nothing to
+    // populate locally on this tab any more.
 
     renderCallingStats(devotees);
     if (_callingLocked) {
-      _renderLockedBanner(isHistoryFallback, week, window._beforeCallingDate);
+      _renderLockedBanner(isHistoryFallback, week, window._beforeCallingDate, isHistoricalView, sessionDate);
     } else {
       _renderCallingSubmitBar(week, mySubmission);
     }
@@ -355,12 +365,28 @@ function _renderSessionInfoChip(cfg, sessionDate) {
   chip.innerHTML = parts.join('');
 }
 
-function _renderLockedBanner(isHistoryFallback, weekDate, beforeCallingDate) {
+function _renderLockedBanner(isHistoryFallback, weekDate, beforeCallingDate, isHistoricalView, sessionDate) {
   const bar = document.getElementById('calling-submit-bar');
   if (!bar) return;
   const weekLabel = weekDate
     ? new Date(weekDate + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric', weekday:'short' })
     : '';
+  if (isHistoricalView) {
+    const sessLabel = sessionDate
+      ? new Date(sessionDate + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' })
+      : '';
+    bar.style.background  = '#ede9fe';
+    bar.style.borderColor = '#c4b5fd';
+    bar.innerHTML = `<div style="flex:1">
+      <span style="font-size:.9rem;font-weight:700;color:#5b21b6">
+        <i class="fas fa-history"></i> Viewing historical session — <strong>${sessLabel}</strong>
+      </span>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem">
+        This is a read-only view of a past session's calling list. Use the master Session filter at the top to switch back to the current session.
+      </div>
+    </div>`;
+    return;
+  }
   if (beforeCallingDate) {
     bar.style.background  = '#fff8e1';
     bar.style.borderColor = '#ffcc80';
@@ -496,10 +522,11 @@ function renderCallingStats(devotees) {
 }
 
 function filterCallingList() {
-  const q    = document.getElementById('calling-search').value.toLowerCase();
-  const s    = document.getElementById('calling-filter-status').value;
-  const team = document.getElementById('calling-filter-team').value;
-  const by   = document.getElementById('calling-filter-callingby').value;
+  const q    = document.getElementById('calling-search')?.value.toLowerCase() || '';
+  const s    = document.getElementById('calling-filter-status')?.value || '';
+  // Team + Calling By come from the master filter bar.
+  const team = (typeof getFilterTeam      === 'function') ? getFilterTeam()      : '';
+  const by   = (typeof getFilterCallingBy === 'function') ? getFilterCallingBy() : '';
   const filtered = AppState.callingData.filter(d => {
     if (q    && !d.name.toLowerCase().includes(q) && !(d.mobile||'').includes(q)) return false;
     if (team && d.team_name !== team) return false;
@@ -769,32 +796,19 @@ function switchReportType(type, btn) {
   loadCallingReports();
 }
 
-async function _populateReportWeeks() {
-  const sel = document.getElementById('calling-report-week');
-  if (!sel) return;
-  try {
-    const weeks = await DB.getCallingWeeksList();
-    if (!weeks.length) {
-      sel.innerHTML = '<option value="">No data yet</option>';
-      return;
-    }
-    const current = sel.value;
-    sel.innerHTML = weeks.map(w => {
-      const label = new Date(w + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' });
-      return `<option value="${w}"${w === current ? ' selected' : ''}>${label}</option>`;
-    }).join('');
-    if (!sel.value) sel.value = weeks[0];
-  } catch (e) {
-    sel.innerHTML = '<option value="">Failed to load</option>';
-  }
-}
+// _populateReportWeeks is a no-op now that the Week dropdown is gone — kept
+// as a stub so existing callers (_refreshAfterFilter) don't error.
+async function _populateReportWeeks() { return; }
 
 async function loadCallingReports() {
-  const sel = document.getElementById('calling-report-week');
-  const week = sel?.value || '';
+  // Always reads from the master Session — no duplicate Week dropdown.
+  const week = (typeof getFilterSessionId === 'function' && getFilterSessionId())
+            || (typeof getWeekDate === 'function' && getWeekDate())
+            || '';
   if (!week) return;
 
   const el = document.getElementById('calling-reports-content');
+  if (!el) return;
   el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   if (_reportType === 'summary') return _loadCallingSummary(week, el);
   return _loadAccuracyReport(week, el);
@@ -1028,8 +1042,8 @@ async function openAbsentModal(week, callingBy, team) {
 }
 
 async function downloadCurrentReportExcel() {
-  const week = document.getElementById('calling-report-week')?.value;
-  if (!week) { showToast('Select a week first', 'error'); return; }
+  const week = (typeof getFilterSessionId === 'function' && getFilterSessionId()) || '';
+  if (!week) { showToast('Select a session in the master filter first', 'error'); return; }
   if (_reportType === 'summary') return _downloadSummaryExcel([week], `Calling_Summary_${week}.xlsx`);
   return _downloadAccuracyExcel([week], `Accuracy_Report_${week}.xlsx`);
 }
@@ -1275,40 +1289,20 @@ function openCallingStatList(type) {
   document.getElementById('cs-modal-search').value = '';
   document.getElementById('cs-modal-checkall').checked = false;
 
-  // Populate Team filter from teams represented in this list
-  const teamSel = document.getElementById('cs-modal-team');
-  const teamsHere = [...new Set(_csModalDevotees.map(d => d.team_name).filter(Boolean))].sort();
-  teamSel.innerHTML = '<option value="">All Teams</option>' +
-    teamsHere.map(t => `<option value="${t}">${t}</option>`).join('');
-  teamSel.value = '';
-
-  _populateCSModalCallers();
   _renderCSModal();
   openModal('calling-stat-modal');
 }
 
-// Calling By dropdown is sub-filter of Team — when team is selected, only
-// callers from that team are listed.
-function _populateCSModalCallers() {
-  const teamVal = document.getElementById('cs-modal-team')?.value || '';
-  const bySel   = document.getElementById('cs-modal-by');
-  if (!bySel) return;
-  const pool = teamVal ? _csModalDevotees.filter(d => d.team_name === teamVal) : _csModalDevotees;
-  const callers = [...new Set(pool.map(d => d.calling_by).filter(Boolean))].sort();
-  bySel.innerHTML = '<option value="">All Calling By</option>' +
-    callers.map(c => `<option value="${c.replace(/"/g,'&quot;')}">${c}</option>`).join('');
-}
-
-function _onCSModalTeamChange() {
-  // Reset Calling By when Team changes, then re-render
-  _populateCSModalCallers();
-  _renderCSModal();
-}
+// Stubs kept so any inline onchange="…" on legacy markup doesn't error during
+// the rollout. The master filter bar now drives team / callingBy.
+function _populateCSModalCallers() {}
+function _onCSModalTeamChange() {}
 
 function _renderCSModal() {
   const q       = (document.getElementById('cs-modal-search')?.value || '').trim().toLowerCase();
-  const teamVal = document.getElementById('cs-modal-team')?.value   || '';
-  const byVal   = document.getElementById('cs-modal-by')?.value     || '';
+  // Modal always inherits the master bar's Team and Calling By context.
+  const teamVal = (typeof getFilterTeam      === 'function') ? getFilterTeam()      : '';
+  const byVal   = (typeof getFilterCallingBy === 'function') ? getFilterCallingBy() : '';
   const isAdmin = AppState.userRole === 'superAdmin';
   const list = _csModalDevotees.filter(d => {
     if (teamVal && d.team_name !== teamVal) return false;

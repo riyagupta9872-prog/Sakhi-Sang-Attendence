@@ -18,7 +18,13 @@ fdb.enablePersistence({ synchronizeTabs: true }).catch(() => {});
 // ── APP STATE ─────────────────────────────────────────
 const AppState = {
   currentTab: 'devotees',
-  currentSessionId: null,
+  // Legacy single-session ids — kept as live aliases so existing code paths
+  // (DB.getSessionStats, markPresent, etc.) keep working unchanged. They mirror
+  // AppState.filters.sessionId via the derived getters defined below.
+  // _currentSessionId / _currentReportSessionId hold the actual storage; the
+  // public names redirect through Object.defineProperty further down.
+  _currentSessionId: null,
+  _currentReportSessionId: null,
   currentDevoteeId: null,
   currentEventId: null,
   trendsChart: null,
@@ -33,7 +39,106 @@ const AppState = {
   userName: '',
   userId: null,
   profilePic: null,            // base64 string or null
+
+  // ── MASTER FILTER STATE ─────────────────────────────────
+  // Single source of truth for context filters (Session / Team / Calling By).
+  // Every tab's load* function reads from here. Per-tab content filters
+  // (search boxes, status dropdowns) stay local.
+  filters: {
+    sessionId:     null,    // canonical session date 'YYYY-MM-DD'
+    team:          '',       // '' = All teams
+    callingBy:     '',       // '' = All callers
+    period:        'session',// 'session'|'month'|'quarter'|'fy' (Reports-only)
+    periodAnchor:  null,    // 'YYYY-MM-DD' anchor for period aggregation
+  },
 };
+
+// ── FILTER ALIASES ─────────────────────────────────────
+// Existing DB.* calls reference AppState.currentSessionId and
+// AppState.currentReportSessionId. We keep both as derived aliases off the
+// new master filter so nothing else needs touching during scaffolding.
+Object.defineProperty(AppState, 'currentSessionId', {
+  get() { return this._currentSessionId; },
+  set(v) {
+    this._currentSessionId = v;
+    // Mirror into the master filter so UI bound to it stays in sync.
+    if (v && this.filters && this.filters.sessionId !== v) {
+      this.filters.sessionId = v;
+      if (!this.filters.periodAnchor) this.filters.periodAnchor = v;
+    }
+  },
+  configurable: true,
+});
+Object.defineProperty(AppState, 'currentReportSessionId', {
+  get() { return this._currentReportSessionId || this._currentSessionId; },
+  set(v) {
+    this._currentReportSessionId = v;
+    if (v && this.filters && this.filters.sessionId !== v) {
+      this.filters.sessionId = v;
+      if (!this.filters.periodAnchor) this.filters.periodAnchor = v;
+    }
+  },
+  configurable: true,
+});
+
+// ── FILTER DISPATCHER ──────────────────────────────────
+// Single mutator for the master filter. Validates, derives, fires the
+// 'filtersChanged' event. Tabs subscribe with one listener and re-render only
+// when they're the visible tab.
+//
+// Patch shape: { sessionId, team, callingBy, period, periodAnchor }
+function dispatchFilters(patch) {
+  const f = AppState.filters;
+  if (!f) return;
+  const before = { ...f };
+
+  if (patch.sessionId !== undefined) {
+    f.sessionId = patch.sessionId || null;
+    if (f.sessionId && !f.periodAnchor) f.periodAnchor = f.sessionId;
+    // _currentSessionId holds the Firestore doc ID for DB calls (attendance, etc.)
+    // filters.sessionId holds the canonical date string for display and calling/care queries.
+    const docId = patch._sessionDocId || f.sessionId;
+    AppState._currentSessionId       = docId;
+    AppState._currentReportSessionId = docId;
+    if (patch._sessionDocId && f.sessionId && !AppState.sessionsCache[patch._sessionDocId]) {
+      AppState.sessionsCache[patch._sessionDocId] = {
+        id: patch._sessionDocId, session_date: f.sessionId, topic: '', is_cancelled: false
+      };
+    }
+  }
+  if (patch.team !== undefined) {
+    // Team-locked roles cannot change away from their assigned team.
+    if (AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam) {
+      f.team = AppState.userTeam;
+    } else {
+      f.team = patch.team || '';
+    }
+  }
+  if (patch.callingBy !== undefined) {
+    f.callingBy = patch.callingBy || '';
+  }
+  if (patch.period !== undefined) {
+    f.period = patch.period || 'session';
+  }
+  if (patch.periodAnchor !== undefined) {
+    f.periodAnchor = patch.periodAnchor || null;
+  }
+
+  // Skip the event if nothing actually changed (mirrors from legacy widgets
+  // can fire spuriously).
+  const changed = ['sessionId','team','callingBy','period','periodAnchor']
+    .some(k => before[k] !== f[k]);
+  if (!changed) return;
+
+  try {
+    window.dispatchEvent(new CustomEvent('filtersChanged', { detail: { ...f, before } }));
+  } catch (_) {}
+}
+
+// Convenience read helpers — used by tab code.
+function getFilterTeam()      { return AppState.filters?.team      || ''; }
+function getFilterCallingBy() { return AppState.filters?.callingBy || ''; }
+function getFilterSessionId() { return AppState.filters?.sessionId || null; }
 
 // ── TEAMS LIST (single source of truth) ───────────────
 const TEAMS = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata','Nilachal','New Devotees','Other'];
@@ -79,17 +184,28 @@ function snapToSunday(dateStr) {
 }
 function initials(name = '') { return name.split(' ').slice(0, 2).map(w => w[0]?.toUpperCase() || '').join(''); }
 function formatDate(iso) {
-  if (!iso) return '—';
-  return new Date(iso + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  if (!iso || typeof iso !== 'string') return '—';
+  // Accept either YYYY-MM-DD or full ISO; reject anything else cleanly so we
+  // never render "Invalid Date" to the user.
+  const isYmd = /^\d{4}-\d{2}-\d{2}/.test(iso);
+  const d = isYmd ? new Date(iso.slice(0, 10) + 'T00:00:00') : new Date(iso);
+  if (!d || isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 function formatBirthday(dob) {
-  if (!dob) return '';
-  const [, m, d] = dob.split('-');
-  return `${parseInt(d)} ${'Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split(' ')[parseInt(m)-1]}`;
+  if (!dob || typeof dob !== 'string') return '';
+  const m = dob.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return '';
+  const mi = parseInt(m[2], 10);
+  const di = parseInt(m[3], 10);
+  if (!mi || !di || mi < 1 || mi > 12) return '';
+  return `${di} ${'Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split(' ')[mi - 1]}`;
 }
 function formatDateTime(iso) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const d = new Date(iso);
+  if (!d || isNaN(d.getTime())) return '—';
+  return d.toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 function isBirthdayWeek(dob) {
   if (!dob) return false;
