@@ -504,6 +504,99 @@ async function saveSessionConfig() {
   }
 }
 
+// ── CALLING DATE RESOLVER ──────────────────────────────
+// callingStatus docs store Saturday's date as weekDate, not the Sunday session date.
+// All callingStatus queries must use the calling date, not the session date.
+async function resolveCallingDate(sessionDate) {
+  if (!sessionDate) return null;
+  try {
+    const cfg = await DB.getCallingWeekConfig();
+    if (cfg?.sessionDate === sessionDate && cfg?.callingDate) return cfg.callingDate;
+  } catch (_) {}
+  const d = new Date(sessionDate + 'T00:00:00');
+  d.setDate(d.getDate() - 1);
+  return localDateStr(d);
+}
+
+// ── SESSION MANAGEMENT ─────────────────────────────────
+async function openSessionManagement() {
+  closeSidebar();
+  openModal('session-mgmt-modal');
+  await loadSessionManagementList();
+}
+
+async function loadSessionManagementList() {
+  const body = document.getElementById('sess-mgmt-body');
+  body.innerHTML = '<tr><td colspan="4" class="loading-cell"><i class="fas fa-spinner fa-spin"></i> Loading sessions…</td></tr>';
+  try {
+    const sessions = await DB.getSessionsWithPresent();
+    if (!sessions.length) {
+      body.innerHTML = '<tr><td colspan="4" class="empty-cell">No sessions found.</td></tr>';
+      return;
+    }
+    const today = getToday();
+    body.innerHTML = sessions.map(s => {
+      const isPast    = s.session_date <= today;
+      const dateLabel = new Date(s.session_date + 'T00:00:00')
+        .toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' });
+      const topicHtml = s.topic
+        ? `<span style="font-size:.83rem">${s.topic}</span>`
+        : `<span style="color:var(--text-muted);font-size:.8rem;font-style:italic">—</span>`;
+      const cancelBadge = s.is_cancelled
+        ? `<span style="background:#fce4ec;color:#c62828;font-size:.7rem;padding:.1rem .35rem;border-radius:4px;margin-left:.35rem">Cancelled</span>` : '';
+      const presentBadge = isPast
+        ? `<span class="smgr-present">${s.present}</span>`
+        : `<span style="color:var(--text-muted);font-size:.8rem">—</span>`;
+      const topicStr   = (s.topic || '').replace(/'/g, "\\'");
+      const cancelVal  = s.is_cancelled ? 'true' : 'false';
+      return `<tr>
+        <td class="smgr-date">${dateLabel}${cancelBadge}</td>
+        <td class="smgr-topic">${topicHtml}</td>
+        <td class="smgr-cnt">${presentBadge}</td>
+        <td class="smgr-act">
+          <button class="btn-icon smgr-edit-btn" title="Edit"
+            onclick="openEditSessionModal('${s.id}','${s.session_date}','${topicStr}',${cancelVal})">
+            <i class="fas fa-pencil-alt"></i>
+          </button>
+        </td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="4" class="empty-cell">Error: ${e.message}</td></tr>`;
+  }
+}
+
+function openEditSessionModal(sessionId, sessionDate, topic, isCancelled) {
+  document.getElementById('esm-session-id').value   = sessionId;
+  document.getElementById('esm-session-date').value = sessionDate;
+  document.getElementById('esm-topic').value        = topic || '';
+  document.getElementById('esm-cancelled').checked  = !!isCancelled;
+  const label = new Date(sessionDate + 'T00:00:00')
+    .toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+  document.getElementById('esm-date-label').textContent = label;
+  openModal('edit-session-modal');
+}
+
+async function saveEditSession() {
+  const sessionId   = document.getElementById('esm-session-id').value;
+  const topic       = document.getElementById('esm-topic').value.trim();
+  const isCancelled = document.getElementById('esm-cancelled').checked;
+  if (!sessionId) return;
+  try {
+    await DB.configureSunday(sessionId, { topic, isCancelled });
+    closeModal('edit-session-modal');
+    showToast('Session updated! Hare Krishna 🙏', 'success');
+    await loadSessionManagementList();
+    // Refresh session cache
+    if (AppState.sessionsCache[sessionId]) {
+      AppState.sessionsCache[sessionId].topic        = topic;
+      AppState.sessionsCache[sessionId].is_cancelled = isCancelled;
+    }
+  } catch (e) {
+    showToast('Save failed: ' + (e.message || 'Check connection'), 'error');
+  }
+}
+
 // ── CHANGE PASSWORD ────────────────────────────────────
 function openChangePassword() {
   closeSidebar();
@@ -651,14 +744,18 @@ function applyRoleUI() {
   });
 
   const tabs = {
-    dashboard:   ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    devotees:    ['superAdmin'],
-    calling:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    attendance:  ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    reports:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    care:        ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    events:      ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    'calling-mgmt':  ['superAdmin'],
+    dashboard:    ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    devotees:     ['superAdmin'],
+    calling:      ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    attendance:   ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    books:        ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    service:      ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    registration: ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    donation:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    reports:      ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    care:         ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    events:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    'calling-mgmt': ['superAdmin'],
   };
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const tab = btn.dataset.tab;
@@ -864,33 +961,30 @@ async function initApp() {
 // widgets. The bar mirrors values in both directions through dispatchFilters
 // + a 'filtersChanged' listener that syncs legacy <select> values back.
 async function initMasterFilterBar() {
-  // Populate Team — for non-super-admin, render the static chip and hide the
-  // editable select (they cannot change away from their own team).
-  const teamSel  = document.getElementById('mfb-team');
-  const teamChip = document.getElementById('mfb-team-chip');
+  // Mark Team chip as locked for non-superAdmin users (they cannot change team).
+  const teamChip    = document.getElementById('mfb-team-chip');
+  const teamChipBox = document.getElementById('fr-chip-team');
   if (AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam) {
-    if (teamSel) teamSel.style.display = 'none';
+    if (teamChipBox) teamChipBox.dataset.locked = 'true';
     if (teamChip) {
       teamChip.style.display = '';
       teamChip.innerHTML = `<i class="fas fa-lock" style="font-size:.7rem"></i> ${AppState.userTeam}`;
     }
     AppState.filters.team = AppState.userTeam;
-  } else if (teamSel) {
-    teamSel.value = AppState.filters.team || '';
   }
 
-  // Populate Session — past sessions newest first, with the upcoming Sunday
-  // promoted to the top with an "Upcoming" badge.
+  // Populate dropdown panels
+  _mfbReloadTeamOptions();
   await _mfbReloadSessionOptions();
-
-  // Populate Calling By based on current Team
   _mfbReloadCallingByOptions();
+
+  // Click outside any chip to close all open dropdowns
+  _frInitOutsideClose();
 
   // Listen to dispatchFilters firing → keep widgets in sync (legacy + master)
   window.addEventListener('filtersChanged', _mfbOnFiltersChanged);
 
-  // Mirror back: when legacy widgets change, push their value into the master
-  // state so the master bar updates too (and the active tab re-loads).
+  // Mirror back: legacy per-tab <select>s push values into master state.
   _mfbAttachLegacyMirror();
 
   _mfbUpdateCaption();
@@ -911,82 +1005,150 @@ function _mfbAttachLegacyMirror() {
   });
 }
 
+// ── Custom dropdown panels (replace native <select>) ──
+// Each chip has a sibling <div class="fr-dropdown"> that holds clickable items.
+// Toggling opens/closes the panel; clicking an item dispatches the filter.
+
+function _frToggle(event, chip) {
+  event?.stopPropagation();
+  // Don't open dropdown when user clicked the chip's ✕ clear button
+  if (event?.target?.closest('.fr-chip-clear')) return;
+  // Locked team chip (non-superAdmin) is non-interactive
+  if (chip === 'team') {
+    const isLocked = AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam;
+    if (isLocked) return;
+  }
+  const dd = document.getElementById('fr-dropdown-' + chip);
+  if (!dd) return;
+  const wasHidden = dd.classList.contains('hidden');
+  document.querySelectorAll('.fr-dropdown').forEach(d => d.classList.add('hidden'));
+  if (wasHidden) dd.classList.remove('hidden');
+}
+
+function _frCloseAll() {
+  document.querySelectorAll('.fr-dropdown').forEach(d => d.classList.add('hidden'));
+}
+
+// Bound once at startup — close any open dropdown when clicking outside.
+let _frOutsideClickBound = false;
+function _frInitOutsideClose() {
+  if (_frOutsideClickBound) return;
+  _frOutsideClickBound = true;
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.fr-chip-wrap')) _frCloseAll();
+  });
+}
+
+// Item-click handlers — called inline from generated dropdown items.
+function _frPickTeam(value) {
+  dispatchFilters({ team: value || '' });
+  _frCloseAll();
+  _mfbReloadCallingByOptions?.();
+}
+function _frPickCallingBy(value) {
+  dispatchFilters({ callingBy: value || '' });
+  _frCloseAll();
+}
+function _frPickSession(dateStr, docId) {
+  if (!dateStr) {
+    dispatchFilters({ sessionId: null, _sessionDocId: null });
+  } else {
+    dispatchFilters({ sessionId: dateStr, _sessionDocId: docId || null });
+  }
+  _frCloseAll();
+}
+
+// Repopulate Team dropdown from TEAMS array (single source of truth).
+function _mfbReloadTeamOptions() {
+  const list = document.getElementById('fr-dropdown-list-team');
+  if (!list) return;
+  const current = AppState.filters?.team || '';
+  const items = [{ value: '', label: 'All Teams' }, ...TEAMS.map(t => ({ value: t, label: t }))];
+  list.innerHTML = items.map(it => {
+    const safe = it.value.replace(/'/g, "\\'");
+    return `<div class="fr-dropdown-item${it.value === current ? ' active' : ''}"
+                 data-value="${it.value}"
+                 onclick="_frPickTeam('${safe}')">
+              <span class="fr-dropdown-item-label">${it.label}</span>
+            </div>`;
+  }).join('');
+}
+
 async function _mfbReloadSessionOptions() {
-  const sel = document.getElementById('mfb-session');
-  if (!sel) return;
+  const list = document.getElementById('fr-dropdown-list-session');
+  if (!list) return;
   try {
     const today    = getToday();
-    const sessions = await DB.getSessions();          // newest first, up to 52
+    const sessions = await DB.getSessions();
     const upcoming = sessions.filter(s => s.session_date >  today)
                               .sort((a, b) => a.session_date.localeCompare(b.session_date));
     const past     = sessions.filter(s => s.session_date <= today);
+    const current  = AppState.filters?.sessionId || '';
     let html = '';
     if (upcoming[0]) {
       const u = upcoming[0];
       const lbl = new Date(u.session_date + 'T00:00:00')
         .toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-      html += `<option value="${u.id}" data-date="${u.session_date}">▶ ${lbl} (Upcoming)</option>`;
-      html += `<option disabled>──────────────</option>`;
+      html += `<div class="fr-dropdown-item${u.session_date === current ? ' active' : ''}"
+                    data-value="${u.session_date}"
+                    onclick="_frPickSession('${u.session_date}','${u.id}')">
+                 <span class="fr-dropdown-item-label">${lbl}</span>
+                 <span class="fr-dropdown-item-sub">Upcoming</span>
+               </div>
+               <div class="fr-dropdown-divider"></div>`;
     }
     past.forEach(s => {
       const lbl = new Date(s.session_date + 'T00:00:00')
         .toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-      html += `<option value="${s.id}" data-date="${s.session_date}">${lbl}${s.topic ? ' · ' + s.topic.slice(0, 28) : ''}</option>`;
+      const topic = s.topic ? ` · ${s.topic.slice(0, 24)}` : '';
+      html += `<div class="fr-dropdown-item${s.session_date === current ? ' active' : ''}"
+                    data-value="${s.session_date}"
+                    onclick="_frPickSession('${s.session_date}','${s.id}')">
+                 <span class="fr-dropdown-item-label">${lbl}${topic}</span>
+               </div>`;
     });
-    sel.innerHTML = html || '<option value="">No sessions yet</option>';
-    // Options use the Firestore doc ID as their value; filters.sessionId is the date string.
-    // Try to select by matching data-date to the current filter; fall back to upcoming/past.
-    const currentFilter = AppState.filters.sessionId;
-    if (currentFilter) {
-      const match = Array.from(sel.options).find(o => o.dataset?.date === currentFilter);
-      if (match) sel.value = match.value;
-    }
-    if (!sel.value) { const fb = upcoming[0] || past[0]; if (fb) sel.value = fb.id; }
-    if (sel.value && sel.value !== AppState._currentSessionId) {
-      const opt2 = sel.options[sel.selectedIndex];
-      dispatchFilters({ sessionId: opt2?.dataset?.date || sel.value, _sessionDocId: sel.value });
+    list.innerHTML = html || '<div class="fr-dropdown-empty">No sessions yet</div>';
+
+    // First-load auto-select: if no session is set yet, default to upcoming or most recent past.
+    if (!AppState.filters.sessionId) {
+      const fb = upcoming[0] || past[0];
+      if (fb) dispatchFilters({ sessionId: fb.session_date, _sessionDocId: fb.id });
     }
   } catch (e) { console.error('mfbReloadSessionOptions', e); }
 }
 
 function _mfbReloadCallingByOptions() {
-  const sel = document.getElementById('mfb-by');
-  if (!sel) return;
+  const list = document.getElementById('fr-dropdown-list-by');
+  const wrap = document.getElementById('fr-chip-by')?.closest('.fr-chip-wrap');
+  if (!list) return;
   // Source from DevoteeCache so callers list stays consistent everywhere.
   DevoteeCache.all().then(all => {
     const team = AppState.filters.team || '';
     const pool = team ? all.filter(d => d.teamName === team) : all;
     const callers = [...new Set(pool.map(d => d.callingBy).filter(Boolean))].sort();
-    const prev = AppState.filters.callingBy || '';
-    sel.innerHTML = '<option value="">All Callers</option>' +
-      callers.map(c => `<option value="${c.replace(/"/g,'&quot;')}"${c===prev?' selected':''}>${c}</option>`).join('');
-    // Hide entirely if there are no callers in the chosen team
-    const field = document.getElementById('mfb-by-field');
-    if (field) field.style.display = callers.length ? '' : 'none';
+    const current = AppState.filters.callingBy || '';
+    const items = [{ value: '', label: 'All Callers' }, ...callers.map(c => ({ value: c, label: c }))];
+    list.innerHTML = items.map(it => {
+      const safe = it.value.replace(/'/g, "\\'");
+      return `<div class="fr-dropdown-item${it.value === current ? ' active' : ''}"
+                   data-value="${it.value}"
+                   onclick="_frPickCallingBy('${safe}')">
+                <span class="fr-dropdown-item-label">${it.label}</span>
+              </div>`;
+    }).join('');
+    // Hide entire chip if there are no callers in the chosen team
+    if (wrap) wrap.style.display = callers.length ? '' : 'none';
     // If the current callingBy isn't in the new pool, clear it
-    if (prev && !callers.includes(prev)) {
+    if (current && !callers.includes(current)) {
       dispatchFilters({ callingBy: '' });
     }
   }).catch(() => {});
 }
 
-function _mfbOnSession(value) {
-  const sel = document.getElementById('mfb-session');
-  if (!sel) return;
-  const opt = sel.options[sel.selectedIndex];
-  const dateStr = opt?.dataset?.date || null;
-  const docId   = opt?.value || null;
-  dispatchFilters({ sessionId: dateStr, _sessionDocId: docId });
-}
-
-function _mfbOnTeam(value) {
-  dispatchFilters({ team: value || '' });
-  _mfbReloadCallingByOptions();
-}
-
-function _mfbOnCallingBy(value) {
-  dispatchFilters({ callingBy: value || '' });
-}
+// Legacy onchange shims — kept for any HTML still wired to them; no-ops now.
+function _mfbOnSession() {}
+function _mfbOnTeam(value)     { _frPickTeam(value); }
+function _mfbOnCallingBy(value) { _frPickCallingBy(value); }
 
 function _mfbUpdateCaption() {
   const cap = document.getElementById('mfb-caption');
@@ -1002,23 +1164,110 @@ function _mfbUpdateCaption() {
     parts.push(`for <strong>${lbl}</strong>`);
   }
   cap.innerHTML = 'Showing ' + parts.join(', ');
+  _frRefreshChips();
+}
+
+// ── FILTER RIBBON CHIPS ───────────────────────────────
+// Updates each chip's active/inactive style + visible value summary.
+// Active chip: brand-green background, shows the picked value next to label.
+// Inactive: grey outline, hides the ✕ button.
+function _frRefreshChips() {
+  const f = AppState.filters || {};
+  const isLocked = AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam;
+
+  // Session chip
+  const sChip = document.getElementById('fr-chip-session');
+  const sVal  = document.getElementById('fr-session-value');
+  if (sChip && sVal) {
+    if (f.sessionId) {
+      const lbl = new Date(f.sessionId + 'T00:00:00')
+        .toLocaleDateString('en-IN', { day:'numeric', month:'short' });
+      sVal.textContent = lbl;
+      sChip.dataset.active = 'true';
+    } else {
+      sVal.textContent = '';
+      sChip.dataset.active = 'false';
+    }
+  }
+
+  // Team chip
+  const tChip = document.getElementById('fr-chip-team');
+  const tVal  = document.getElementById('fr-team-value');
+  const tClr  = document.getElementById('fr-team-clear');
+  if (tChip && tVal) {
+    if (f.team) {
+      tVal.textContent = f.team;
+      tChip.dataset.active = 'true';
+      // Hide clear button if user can't change team (locked role)
+      if (tClr) tClr.style.display = isLocked ? 'none' : '';
+    } else {
+      tVal.textContent = '';
+      tChip.dataset.active = 'false';
+    }
+  }
+
+  // Calling By chip
+  const bChip = document.getElementById('fr-chip-by');
+  const bVal  = document.getElementById('fr-by-value');
+  if (bChip && bVal) {
+    if (f.callingBy) {
+      bVal.textContent = f.callingBy;
+      bChip.dataset.active = 'true';
+    } else {
+      bVal.textContent = '';
+      bChip.dataset.active = 'false';
+    }
+  }
+
+  // "Clear all" visible only when at least one non-locked filter is active
+  const clearAll = document.getElementById('fr-clear-all');
+  if (clearAll) {
+    const anyActive = !!f.sessionId || (!!f.team && !isLocked) || !!f.callingBy;
+    clearAll.style.display = anyActive ? '' : 'none';
+  }
+}
+
+function _frClearSession(e) {
+  e?.stopPropagation();
+  dispatchFilters({ sessionId: null, _sessionDocId: null });
+}
+function _frClearTeam(e) {
+  e?.stopPropagation();
+  if (AppState.userRole && AppState.userRole !== 'superAdmin') return;
+  dispatchFilters({ team: '' });
+  _mfbReloadCallingByOptions?.();
+}
+function _frClearBy(e) {
+  e?.stopPropagation();
+  dispatchFilters({ callingBy: '' });
+}
+function _frClearAll() {
+  const isLocked = AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam;
+  const patch = { callingBy: '' };
+  if (!isLocked) patch.team = '';
+  dispatchFilters(patch);
+  _mfbReloadCallingByOptions?.();
+}
+
+// Walk the items in each dropdown panel and toggle .active to match current filters.
+function _frRefreshActiveItems() {
+  const f = AppState.filters || {};
+  const apply = (sel, currentVal) => {
+    document.querySelectorAll(sel + ' .fr-dropdown-item').forEach(it => {
+      const v = it.getAttribute('data-value') || '';
+      it.classList.toggle('active', v === (currentVal || ''));
+    });
+  };
+  apply('#fr-dropdown-list-team',    f.team);
+  apply('#fr-dropdown-list-session', f.sessionId);
+  apply('#fr-dropdown-list-by',      f.callingBy);
 }
 
 // Sync between master bar + legacy widgets. Fires on every dispatchFilters call.
 function _mfbOnFiltersChanged(e) {
   const f = AppState.filters;
-  // Master bar widgets
-  const mfbTeam = document.getElementById('mfb-team');
-  if (mfbTeam && mfbTeam.value !== (f.team || '')) mfbTeam.value = f.team || '';
-  const mfbBy   = document.getElementById('mfb-by');
-  if (mfbBy && mfbBy.value !== (f.callingBy || '')) mfbBy.value = f.callingBy || '';
-  const mfbSes  = document.getElementById('mfb-session');
-  if (mfbSes && f.sessionId) {
-    // Match the option whose data-date equals the canonical sessionId
-    Array.from(mfbSes.options).forEach(o => {
-      if (o.dataset && o.dataset.date === f.sessionId) mfbSes.value = o.value;
-    });
-  }
+  // Re-highlight the active item in each custom dropdown panel
+  _frRefreshActiveItems();
   // Legacy widgets (mirrors so both stay in sync until later stages drop them)
   const pairs = [
     ['filter-team',           f.team],
@@ -1188,7 +1437,9 @@ function _setSessionDateDisplay(dateStr) {
 async function initSession() {
   try {
     const session = await DB.getTodaySession();
-    AppState.currentSessionId = session.id;
+    AppState.sessionsCache[session.id] = AppState.sessionsCache[session.id] || session;
+    // Use dispatchFilters so filters.sessionId gets the date string, not the doc ID.
+    dispatchFilters({ sessionId: session.session_date, _sessionDocId: session.id });
     _setSessionDateDisplay(session.session_date);
     await loadSessionSelector();
     loadAttendanceSession(session.id);
@@ -1211,10 +1462,10 @@ async function loadSessionByDate(dateStr) {
   const sunday = snapToSunday(dateStr);
   try {
     const session = await DB.getOrCreateSession(sunday);
-    AppState.currentSessionId = session.id;
     AppState.sessionsCache[session.id] = AppState.sessionsCache[session.id] || {
       id: session.id, session_date: sunday, topic: '', is_cancelled: false
     };
+    dispatchFilters({ sessionId: sunday, _sessionDocId: session.id });
     _setSessionDateDisplay(sunday);
     showSessionInfo(session.id);
     loadAttendanceSession(session.id);
@@ -1297,6 +1548,7 @@ function switchTab(tab, btn) {
   if (tab === 'care')       loadCareData();
   if (tab === 'events')     loadEvents();
   if (tab === 'calling-mgmt') loadCallingMgmtTab?.();
+  if (['books','service','registration','donation'].includes(tab)) loadActivityTab?.(tab);
   // Sync legacy widgets on the newly-shown tab to current filter values.
   if (typeof _mfbOnFiltersChanged === 'function') _mfbOnFiltersChanged();
 }

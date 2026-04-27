@@ -802,9 +802,11 @@ async function _populateReportWeeks() { return; }
 
 async function loadCallingReports() {
   // Always reads from the master Session — no duplicate Week dropdown.
-  const week = (typeof getFilterSessionId === 'function' && getFilterSessionId())
+  const sessionDate = (typeof getFilterSessionId === 'function' && getFilterSessionId())
             || (typeof getWeekDate === 'function' && getWeekDate())
             || '';
+  if (!sessionDate) return;
+  const week = (typeof resolveCallingDate === 'function') ? await resolveCallingDate(sessionDate) : sessionDate;
   if (!week) return;
 
   const el = document.getElementById('calling-reports-content');
@@ -1042,8 +1044,10 @@ async function openAbsentModal(week, callingBy, team) {
 }
 
 async function downloadCurrentReportExcel() {
-  const week = (typeof getFilterSessionId === 'function' && getFilterSessionId()) || '';
-  if (!week) { showToast('Select a session in the master filter first', 'error'); return; }
+  const sessionDate = (typeof getFilterSessionId === 'function' && getFilterSessionId()) || '';
+  if (!sessionDate) { showToast('Select a session in the master filter first', 'error'); return; }
+  const week = (typeof resolveCallingDate === 'function') ? await resolveCallingDate(sessionDate) : sessionDate;
+  if (!week) { showToast('Could not resolve calling date', 'error'); return; }
   if (_reportType === 'summary') return _downloadSummaryExcel([week], `Calling_Summary_${week}.xlsx`);
   return _downloadAccuracyExcel([week], `Accuracy_Report_${week}.xlsx`);
 }

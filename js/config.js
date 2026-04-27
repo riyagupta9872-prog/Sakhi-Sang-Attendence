@@ -60,12 +60,9 @@ const AppState = {
 Object.defineProperty(AppState, 'currentSessionId', {
   get() { return this._currentSessionId; },
   set(v) {
+    // Only stores the Firestore doc ID. filters.sessionId (the date string) is
+    // managed exclusively by dispatchFilters — never write the doc ID there.
     this._currentSessionId = v;
-    // Mirror into the master filter so UI bound to it stays in sync.
-    if (v && this.filters && this.filters.sessionId !== v) {
-      this.filters.sessionId = v;
-      if (!this.filters.periodAnchor) this.filters.periodAnchor = v;
-    }
   },
   configurable: true,
 });
@@ -73,10 +70,6 @@ Object.defineProperty(AppState, 'currentReportSessionId', {
   get() { return this._currentReportSessionId || this._currentSessionId; },
   set(v) {
     this._currentReportSessionId = v;
-    if (v && this.filters && this.filters.sessionId !== v) {
-      this.filters.sessionId = v;
-      if (!this.filters.periodAnchor) this.filters.periodAnchor = v;
-    }
   },
   configurable: true,
 });
@@ -141,7 +134,7 @@ function getFilterCallingBy() { return AppState.filters?.callingBy || ''; }
 function getFilterSessionId() { return AppState.filters?.sessionId || null; }
 
 // ── TEAMS LIST (single source of truth) ───────────────
-const TEAMS = ['Lalita','Vishakha','Tungavidya','Indulekha','Sudevi','Rangadevi','Chitralekha','Champaklata','Nilachal','New Devotees','Other'];
+const TEAMS = ['Champaklata','Chitralekha','Indulekha','Lalita','Nilachal','Other','Rangadevi','Sudevi','Tungavidya','Vishakha'];
 
 // ── ATTENDANCE TIME COLOUR ─────────────────────────────
 function attTimeStyle(markedAtISO) {

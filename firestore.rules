@@ -25,6 +25,18 @@ service cloud.firestore {
     match /eventDevotees/{id}  { allow read, write: if isAuth(); }
     match /profileChanges/{id} { allow read, write: if isAuth(); }
 
+    // ── Activity logs (Books / Service / Registration / Donation) ─────────
+    match /bookDistributions/{id} { allow read, write: if isAuth(); }
+    match /services/{id}          { allow read, write: if isAuth(); }
+    match /registrations/{id}     { allow read, write: if isAuth(); }
+    match /donations/{id}         { allow read, write: if isAuth(); }
+
+    // ── Signup approval queue ─────────────────────────────────────────────
+    // Anyone authenticated can request (write own); only superAdmin reads/clears.
+    match /signupRequests/{id} {
+      allow read, write: if isAuth();
+    }
+
     // ── User profiles — anyone can read their own; superAdmin reads all ───
     match /users/{uid} {
       allow read:  if isAuth();

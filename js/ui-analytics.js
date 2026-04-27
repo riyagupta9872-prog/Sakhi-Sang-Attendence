@@ -1,18 +1,18 @@
 /* ══ UI-ANALYTICS.JS – Reports, Care, Events tabs ══ */
 
 // ── DASHBOARD TAB ─────────────────────────────────────
-// Single home screen for everyone. Shows the "Overall Coordinators Reports"
-// table — Attendance section is wired live from Firestore; Service / Chanting /
-// Registration / Book Distribution / Donation are shown as "Coming Soon"
-// placeholders for now (UI only, no backing data yet).
+// Report-only dashboard: KPI tile strip + cross-team Coordinator grid.
+// Pulls live data from every collection (attendance, calling, books, services,
+// registrations, donations) for the selected Session in the filter ribbon.
+// All KPIs and grid cells respect the master Team chip — locking to one team
+// shows just that team's row + KPIs for that team's data.
 async function loadDashboard() {
   const el = document.getElementById('dashboard-content');
   if (!el) return;
   el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
 
   try {
-    // Anchor on the master Session — fall back to most recent past session
-    // if the master Session is in the future or unset.
+    // Anchor on the master Session — fall back to most recent past session.
     let sessionDate = (typeof getFilterSessionId === 'function') ? getFilterSessionId() : null;
     let sessionId   = null;
     const today = getToday();
@@ -29,29 +29,47 @@ async function loadDashboard() {
       }
     }
 
-    // Derive the calling week date for the chosen session — Saturday before
-    // Sunday by default; if settings/callingWeek matches the session, use
-    // the configured callingDate instead (handles teams that calendar shift).
+    // Calling date (Saturday) for callingStatus lookup.
     let callingDate = '';
     if (sessionDate) {
-      const cfg = await DB.getCallingWeekConfig().catch(() => null);
-      if (cfg?.sessionDate === sessionDate && cfg?.callingDate) {
-        callingDate = cfg.callingDate;
-      } else {
+      callingDate = (typeof resolveCallingDate === 'function')
+        ? await resolveCallingDate(sessionDate)
+        : null;
+      if (!callingDate) {
         const d = new Date(sessionDate + 'T00:00:00');
         d.setDate(d.getDate() - 1);
         callingDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
       }
     }
 
-    const [allDevotees, csSnap, atSnap] = await Promise.all([
-      DevoteeCache.all(),
+    // Activity collections (Books, Services, Registrations, Donations) are
+    // date-stamped per entry. Use a 30-day window ending today (not on the
+    // session date) so entries logged on any day reliably show up — narrower
+    // session-aligned windows accidentally hid logs that lived a few days off.
+    const activityEnd   = today;
+    const activityStart = (() => {
+      const d = new Date(today + 'T00:00:00'); d.setDate(d.getDate() - 30);
+      return d.toISOString().slice(0, 10);
+    })();
+
+    // Each fetch wrapped in its own .catch — if one query fails or stalls
+    // (e.g. missing security rule, missing index, network blip), the rest of
+    // the Dashboard still renders. Without this, one bad promise hangs the
+    // whole Promise.all and every KPI tile is stuck on "—".
+    const safeArr = () => [];
+    const safeSnap = () => ({ docs: [] });
+    const [allDevotees, csSnap, atSnap, books, services, regs, donations] = await Promise.all([
+      DevoteeCache.all().catch(safeArr),
       callingDate
-        ? fdb.collection('callingStatus').where('weekDate', '==', callingDate).get()
+        ? fdb.collection('callingStatus').where('weekDate', '==', callingDate).get().catch(safeSnap)
         : Promise.resolve({ docs: [] }),
       sessionId
-        ? fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get()
+        ? fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get().catch(safeSnap)
         : Promise.resolve({ docs: [] }),
+      DB.getBookDistributions({ startDate: activityStart, endDate: activityEnd }).catch(safeArr),
+      DB.getServices(         { startDate: activityStart, endDate: activityEnd }).catch(safeArr),
+      DB.getRegistrations(    { startDate: activityStart, endDate: activityEnd }).catch(safeArr),
+      DB.getDonations(        { startDate: activityStart, endDate: activityEnd }).catch(safeArr),
     ]);
 
     // Maps
@@ -59,13 +77,17 @@ async function loadDashboard() {
     csSnap.docs.forEach(d => { csByDevotee[d.data().devoteeId] = d.data(); });
     const presentSet = new Set(atSnap.docs.map(d => d.data().devoteeId));
 
-    // Master Team filter narrows the dashboard to one team if super admin
-    // wants a single-team view. Empty = all teams (one row per).
     const filterTeam = (typeof getFilterTeam === 'function') ? getFilterTeam() : '';
     const teamsToShow = filterTeam ? [filterTeam] : TEAMS;
 
+    // Per-team activity buckets
+    const bookByTeam     = {}; books.forEach(b => { bookByTeam[b.teamName] = (bookByTeam[b.teamName] || 0) + (parseInt(b.quantity) || 0); });
+    const serviceByTeam  = {}; services.forEach(s => { serviceByTeam[s.teamName] = (serviceByTeam[s.teamName] || 0) + 1; });
+    const regByTeam      = {}; regs.forEach(r => { regByTeam[r.teamName] = (regByTeam[r.teamName] || 0) + (parseInt(r.count) || 1); });
+    const donationByTeam = {}; donations.forEach(d => { donationByTeam[d.teamName] = (donationByTeam[d.teamName] || 0) + (parseFloat(d.amount) || 0); });
+
     // Per-team aggregation
-    const TARGET_PER_TEAM = 11;   // editable later from a settings doc
+    const TARGET_PER_TEAM = 11;
     const rows = teamsToShow.map(team => {
       const members = allDevotees.filter(d =>
         d.teamName === team
@@ -86,6 +108,10 @@ async function loadDashboard() {
         attended: attended.length,
         target,
         pct,
+        books:    bookByTeam[team]     || 0,
+        services: serviceByTeam[team]  || 0,
+        regs:     regByTeam[team]      || 0,
+        donation: donationByTeam[team] || 0,
         comingIds:   coming.map(d => d.id),
         attendedIds: attended.map(d => d.id),
         calledIds:   called.map(d => d.id),
@@ -98,37 +124,50 @@ async function loadDashboard() {
       coming:   acc.coming   + r.coming,
       attended: acc.attended + r.attended,
       target:   acc.target   + r.target,
-    }), { called: 0, coming: 0, attended: 0, target: 0 });
+      books:    acc.books    + r.books,
+      services: acc.services + r.services,
+      regs:     acc.regs     + r.regs,
+      donation: acc.donation + r.donation,
+    }), { called: 0, coming: 0, attended: 0, target: 0, books: 0, services: 0, regs: 0, donation: 0 });
     const totalPct = total.target > 0 ? Math.round((total.attended / total.target) * 100) : 0;
+    const callAccPct = total.coming > 0 ? Math.round((rows.reduce((a, r) => a + r.attended, 0) / total.coming) * 100) : 0;
 
-    function pctCls(p) { return p >= 80 ? 'dt-pct-good' : p >= 50 ? 'dt-pct-mid' : 'dt-pct-low'; }
+    // ── Update KPI tiles ──
+    _setText('kpi-attended', total.attended);
+    _setText('kpi-accuracy', callAccPct + '%');
+    _setText('kpi-books',    total.books);
+    _setText('kpi-service',  total.services);
+    _setText('kpi-reg',      total.regs);
+    _setText('kpi-donation', total.donation > 0 ? '₹' + total.donation.toLocaleString('en-IN') : '0');
+
+    // ── Update greeting subline + grid sub-caption ──
     const sessLabel = sessionDate
       ? new Date(sessionDate + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' })
       : '— no session —';
+    _setText('dash-greet-sub', `${sessLabel}${filterTeam ? ' · ' + filterTeam : ''}`);
+    _setText('dash-grid-sub', `${filterTeam ? filterTeam + ' only' : 'All teams'} · attendance for this session, activities for last 30 days`);
 
+    function pctCls(p) { return p >= 80 ? 'dt-pct-good' : p >= 50 ? 'dt-pct-mid' : 'dt-pct-low'; }
+
+    // ── Render the Coordinator grid ──
     el.innerHTML = `
-      <div style="margin-bottom:.6rem;font-size:.82rem;color:var(--text-muted)">
-        <i class="fas fa-calendar-check"></i> Reporting session: <strong style="color:var(--brand)">${sessLabel}</strong>
-        ${filterTeam ? `&nbsp;·&nbsp; team: <strong>${filterTeam}</strong>` : ''}
-      </div>
       <div class="dashboard-wrap">
         <table class="dashboard-table">
           <thead>
             <tr>
               <th rowspan="2">Team</th>
               <th colspan="5">Attendance</th>
-              <th rowspan="2">Service<br><span style="font-weight:400;font-size:.7rem">Number</span></th>
-              <th rowspan="2">Chanting<br><span style="font-weight:400;font-size:.7rem">Number</span></th>
-              <th rowspan="2">Registration<br><span style="font-weight:400;font-size:.7rem">Number</span></th>
-              <th rowspan="2">Book Distribution<br><span style="font-weight:400;font-size:.7rem">Number</span></th>
-              <th rowspan="2">Donation<br><span style="font-weight:400;font-size:.7rem">Amount</span></th>
+              <th rowspan="2">Books</th>
+              <th rowspan="2">Service</th>
+              <th rowspan="2">Reg.</th>
+              <th rowspan="2">Donation ₹</th>
             </tr>
             <tr class="dt-sub">
-              <th>Devotees Called</th>
-              <th>Coming</th>
-              <th>Attendance</th>
+              <th>Called</th>
+              <th>Yes</th>
+              <th>Came</th>
               <th>Target</th>
-              <th>Target Achieved</th>
+              <th>%</th>
             </tr>
           </thead>
           <tbody>
@@ -139,11 +178,10 @@ async function loadDashboard() {
               <td class="dt-num"><button onclick="openDashboardList('attended', '${r.team.replace(/'/g,"\\'")}')">${r.attended}</button></td>
               <td class="dt-num">${r.target}</td>
               <td class="dt-pct ${pctCls(r.pct)}">${r.pct}%</td>
-              <td class="dt-soon">Coming Soon</td>
-              <td class="dt-soon">Coming Soon</td>
-              <td class="dt-soon">Coming Soon</td>
-              <td class="dt-soon">Coming Soon</td>
-              <td class="dt-soon">Coming Soon</td>
+              <td class="dt-num">${r.books   || '—'}</td>
+              <td class="dt-num">${r.services|| '—'}</td>
+              <td class="dt-num">${r.regs    || '—'}</td>
+              <td class="dt-num">${r.donation > 0 ? r.donation.toLocaleString('en-IN') : '—'}</td>
             </tr>`).join('')}
             <tr>
               <td class="dt-team">Grand Total</td>
@@ -152,22 +190,26 @@ async function loadDashboard() {
               <td class="dt-num">${total.attended}</td>
               <td class="dt-num">${total.target}</td>
               <td class="dt-pct ${pctCls(totalPct)}" style="color:${totalPct>=80?'#86efac':totalPct>=50?'#fde68a':'#fca5a5'}">${totalPct}%</td>
-              <td class="dt-soon">—</td>
-              <td class="dt-soon">—</td>
-              <td class="dt-soon">—</td>
-              <td class="dt-soon">—</td>
-              <td class="dt-soon">—</td>
+              <td class="dt-num">${total.books    || '—'}</td>
+              <td class="dt-num">${total.services || '—'}</td>
+              <td class="dt-num">${total.regs     || '—'}</td>
+              <td class="dt-num">${total.donation > 0 ? total.donation.toLocaleString('en-IN') : '—'}</td>
             </tr>
           </tbody>
         </table>
       </div>`;
 
-    // Cache for click handlers
     AppState._dashboard = { rows, sessionId, sessionDate, callingDate, csByDevotee, presentSet, allDevotees };
   } catch (e) {
     console.error('loadDashboard', e);
     el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load dashboard</p></div>';
+    ['kpi-attended','kpi-accuracy','kpi-books','kpi-service','kpi-reg','kpi-donation'].forEach(id => _setText(id, '—'));
   }
+}
+
+function _setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
 }
 
 // Click handler for the dashboard's clickable numbers — opens the existing
@@ -460,7 +502,8 @@ async function loadSeriousAnalysis() {
   const c = document.getElementById('serious-analysis-content');
   c.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
   try {
-    const data = await DB.getSeriousReport(getWeekDate(), AppState.currentReportSessionId || AppState.currentSessionId);
+    const callingDate = await resolveCallingDate(getWeekDate());
+    const data = await DB.getSeriousReport(callingDate, AppState.currentReportSessionId || AppState.currentSessionId);
     const teams    = TEAMS;
     const statuses = ['Most Serious','Serious','Expected to be Serious','New Devotee','Inactive'];
     c.innerHTML = `<div style="overflow-x:auto"><table class="report-table">
@@ -485,7 +528,8 @@ async function loadTeamLeaderboard() {
   const c = document.getElementById('team-leaderboard-content');
   c.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
   try {
-    const data = (await DB.getTeamsReport(getWeekDate(), AppState.currentReportSessionId || AppState.currentSessionId)).sort((a, b) => b.percentage - a.percentage);
+    const callingDate = await resolveCallingDate(getWeekDate());
+    const data = (await DB.getTeamsReport(callingDate, AppState.currentReportSessionId || AppState.currentSessionId)).sort((a, b) => b.percentage - a.percentage);
     c.innerHTML = `<div style="overflow-x:auto"><table class="report-table">
       <thead><tr><th>Rank</th><th>Team</th><th>Total</th><th>Calling List</th><th>Target</th><th>Present</th><th>Achievement</th></tr></thead>
       <tbody>${data.map((row, i) => {
@@ -604,15 +648,17 @@ async function loadInactiveDevotees() {
 async function loadSaidComingDidntCome() {
   try {
     const today = getToday();
-    let weekDate = getFilterSessionId();
-    if (!weekDate || weekDate > today) {
+    let sessionDate = getFilterSessionId();
+    if (!sessionDate || sessionDate > today) {
       const sessSnap = await fdb.collection('sessions')
         .where('sessionDate', '<=', today)
         .orderBy('sessionDate', 'desc').limit(1).get();
       if (sessSnap.empty) { document.getElementById('said-coming-count').textContent = '0'; return; }
-      weekDate = sessSnap.docs[0].data().sessionDate;
+      sessionDate = sessSnap.docs[0].data().sessionDate;
     }
-    const { list } = await DB.getYesAbsentList(weekDate);
+    const callingDate = await resolveCallingDate(sessionDate);
+    const weekDate = sessionDate;
+    const { list } = await DB.getYesAbsentList(callingDate, sessionDate);
     // Enrich with extra fields from the devotee cache so the detail table has
     // reference / chanting_rounds etc.
     const all = await DevoteeCache.all();

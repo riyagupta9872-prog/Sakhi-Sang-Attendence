@@ -275,6 +275,17 @@ const DB = {
     await fdb.collection('sessions').doc(sessionId).update({ topic: topic || '', isCancelled: !!isCancelled, updatedAt: TS() });
   },
 
+  async getSessionsWithPresent() {
+    const sessions = await this.getSessions();
+    const counts = await Promise.all(
+      sessions.map(s =>
+        fdb.collection('attendanceRecords').where('sessionId', '==', s.id).get()
+          .then(snap => snap.size).catch(() => 0)
+      )
+    );
+    return sessions.map((s, i) => ({ ...s, present: counts[i] }));
+  },
+
   async getSheetData(yearStart, yearEnd) {
     const snap = await fdb.collection('sessions')
       .where('sessionDate', '>=', yearStart)
@@ -695,6 +706,12 @@ const DB = {
   },
 
   async getCallingReport(weekDate) {
+    // weekDate is the calling date (Saturday). Derive the session date (Sunday = +1 day).
+    const sessionDate = (() => {
+      const d = new Date(weekDate + 'T00:00:00');
+      d.setDate(d.getDate() + 1);
+      return d.toISOString().slice(0, 10);
+    })();
     const [raw, snap, usersSnap, submSnap] = await Promise.all([
       DevoteeCache.all(),
       fdb.collection('callingStatus').where('weekDate', '==', weekDate).get(),
@@ -713,7 +730,7 @@ const DB = {
     submSnap.docs.forEach(d => { const n = d.data().userName; if (n) submittedCallers.add(n); });
 
     const sessSnap = await fdb.collection('sessions')
-      .where('sessionDate', '==', weekDate).limit(1).get();
+      .where('sessionDate', '==', sessionDate).limit(1).get();
     let attSet = new Set(), hasSession = false;
     if (!sessSnap.empty && !sessSnap.docs[0].data().isCancelled) {
       hasSession = true;
@@ -759,11 +776,19 @@ const DB = {
     return result;
   },
 
-  async getYesAbsentList(weekDate) {
+  async getYesAbsentList(callingDate, sessionDate) {
+    // callingDate = Saturday (weekDate in callingStatus docs)
+    // sessionDate = Sunday (sessionDate in sessions docs)
+    // If sessionDate not provided, derive it as callingDate + 1 day
+    if (!sessionDate) {
+      const d = new Date(callingDate + 'T00:00:00');
+      d.setDate(d.getDate() + 1);
+      sessionDate = d.toISOString().slice(0, 10);
+    }
     const [all, csSnap, sessSnap] = await Promise.all([
       DevoteeCache.all(),
-      fdb.collection('callingStatus').where('weekDate','==',weekDate).where('comingStatus','==','Yes').get(),
-      fdb.collection('sessions').where('sessionDate','==',weekDate).limit(1).get()
+      fdb.collection('callingStatus').where('weekDate','==',callingDate).where('comingStatus','==','Yes').get(),
+      fdb.collection('sessions').where('sessionDate','==',sessionDate).limit(1).get()
     ]);
     const devMap = {};
     all.forEach(d => { devMap[d.id] = d; });
