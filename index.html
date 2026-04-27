@@ -391,29 +391,29 @@
     <!-- Quick-launch shortcuts (compact) -->
     <div class="dash-section-head"><i class="fas fa-bolt"></i> Quick Actions</div>
     <div class="dash-quick-grid">
-      <button class="dash-quick" onclick="switchTab('attendance', document.querySelector('[data-tab=attendance]'))">
+      <button class="dash-quick" onclick="navTabView('attendance','live')">
         <span class="dash-quick-icon att-icon"><i class="fas fa-check-circle"></i></span>
         <span class="dash-quick-label">Mark Attendance</span>
       </button>
-      <button class="dash-quick" onclick="switchTab('calling', document.querySelector('[data-tab=calling]'))">
+      <button class="dash-quick" onclick="navTabView('calling','calls')">
         <span class="dash-quick-icon call-icon"><i class="fas fa-phone-alt"></i></span>
         <span class="dash-quick-label">Log Calls</span>
       </button>
-      <button class="dash-quick" onclick="switchTab('service', document.querySelector('[data-tab=service]'))">
+      <button class="dash-quick" onclick="navTabView('service','log')">
         <span class="dash-quick-icon service-icon"><i class="fas fa-hands-helping"></i></span>
-        <span class="dash-quick-label">Service</span>
+        <span class="dash-quick-label">Add Service</span>
       </button>
-      <button class="dash-quick" onclick="switchTab('books', document.querySelector('[data-tab=books]'))">
+      <button class="dash-quick" onclick="navTabView('books','log')">
         <span class="dash-quick-icon book-icon"><i class="fas fa-book-open"></i></span>
-        <span class="dash-quick-label">Books</span>
+        <span class="dash-quick-label">Add Books</span>
       </button>
-      <button class="dash-quick" onclick="switchTab('registration', document.querySelector('[data-tab=registration]'))">
+      <button class="dash-quick" onclick="navTabView('registration','log')">
         <span class="dash-quick-icon reg-icon"><i class="fas fa-id-card-alt"></i></span>
-        <span class="dash-quick-label">Registration</span>
+        <span class="dash-quick-label">Add Registration</span>
       </button>
-      <button class="dash-quick" onclick="switchTab('donation', document.querySelector('[data-tab=donation]'))">
+      <button class="dash-quick" onclick="navTabView('donation','log')">
         <span class="dash-quick-icon donation-icon"><i class="fas fa-hand-holding-heart"></i></span>
-        <span class="dash-quick-label">Donation</span>
+        <span class="dash-quick-label">Add Donation</span>
       </button>
     </div>
 

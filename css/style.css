@@ -331,7 +331,8 @@ h3 { font-size: .93rem; }
 #tab-books > .att-sub-tabs,
 #tab-service > .att-sub-tabs,
 #tab-registration > .att-sub-tabs,
-#tab-donation > .att-sub-tabs {
+#tab-donation > .att-sub-tabs,
+#tab-calling-mgmt > .att-sub-tabs {
   display: none;
 }
 #tab-attendance .reports-cat-panel > .sub-tabs,

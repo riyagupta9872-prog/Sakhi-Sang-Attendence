@@ -298,8 +298,26 @@ const DB = {
     if (!sessions.length) return { sessions: [], devotees: [], attMap: {}, csMap: {} };
     const devotees = await DevoteeCache.all();
     const sessionIds = sessions.map(s => s.id);
-    const weekDates  = sessions.map(s => s.sessionDate);
+
+    // callingStatus.weekDate stores the SATURDAY calling date, not the Sunday
+    // session date. Build a session→calling map (Sunday - 1 day) so the
+    // calling-status query targets the right field, and a reverse map so we
+    // can store results keyed by session date for the table.
+    const callingDateForSession = {};
+    const sessionDateForCalling = {};
+    const callingDates = [];
+    sessions.forEach(s => {
+      const d = new Date(s.sessionDate + 'T00:00:00');
+      d.setDate(d.getDate() - 1);
+      const cd = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      callingDateForSession[s.sessionDate] = cd;
+      sessionDateForCalling[cd] = s.sessionDate;
+      callingDates.push(cd);
+    });
+
     const attMap = {}, csMap = {};
+
+    // Attendance: keyed by Firestore sessionId (doc ID), unchanged.
     for (let i = 0; i < sessionIds.length; i += 10) {
       const batch = sessionIds.slice(i, i + 10);
       const aSnap = await fdb.collection('attendanceRecords').where('sessionId', 'in', batch).get();
@@ -309,15 +327,21 @@ const DB = {
         attMap[sid].add(did);
       });
     }
-    for (let i = 0; i < weekDates.length; i += 10) {
-      const batch = weekDates.slice(i, i + 10);
+
+    // Calling status: query by calling dates (Saturdays), then store in csMap
+    // keyed by SESSION date (Sunday) so the sheet's `csMap[s.sessionDate]`
+    // lookup works as the table iterates over Sunday session columns.
+    for (let i = 0; i < callingDates.length; i += 10) {
+      const batch = callingDates.slice(i, i + 10);
       const cSnap = await fdb.collection('callingStatus').where('weekDate', 'in', batch).get();
       cSnap.docs.forEach(d => {
-        const { weekDate, devoteeId: did, comingStatus, callingReason, callingNotes, availableFrom } = d.data();
-        if (!csMap[weekDate]) csMap[weekDate] = {};
-        // Store the full submitted status so the sheet can display the
-        // complete reason + the caller's notes, not just a short abbreviation.
-        csMap[weekDate][did] = {
+        const { weekDate, devoteeId, comingStatus, callingReason, callingNotes, availableFrom } = d.data();
+        const sessionDate = sessionDateForCalling[weekDate];
+        if (!sessionDate) return; // unmatched calling date — skip
+        if (!csMap[sessionDate]) csMap[sessionDate] = {};
+        // Full status object so the sheet can display reason + caller's notes
+        // in a single cell (not just a short abbreviation).
+        csMap[sessionDate][devoteeId] = {
           comingStatus: comingStatus || '',
           callingReason: callingReason || '',
           callingNotes: callingNotes || '',

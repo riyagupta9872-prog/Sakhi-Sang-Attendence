@@ -944,6 +944,14 @@ async function initApp() {
   await initSession();
   await initMasterFilterBar();
   _buildTabMenus?.();
+  // Anchor the back stack on Dashboard. Without this, the very first nav push
+  // creates only one history entry — clicking back would exit the app instead
+  // of returning to Dashboard.
+  try {
+    if (history.state == null) {
+      history.replaceState({ nav: true, tab: 'dashboard', view: null }, '', location.href);
+    }
+  } catch (_) {}
   loadDevotees();
   loadCallingPersonsFilter();
   loadBirthdays();
@@ -1054,6 +1062,10 @@ function _frPickCallingBy(value) {
   _frCloseAll();
 }
 function _frPickSession(dateStr, docId) {
+  // User manually picked a session → discard any pending auto-snap-restore
+  // (the auto-snap memory was for restoring the original future session on
+  // Live views; user's explicit pick replaces that intent).
+  AppState._autoSnap = null;
   if (!dateStr) {
     dispatchFilters({ sessionId: null, _sessionDocId: null });
   } else {
@@ -1555,6 +1567,13 @@ function switchTab(tab, btn) {
   if (btn) btn.classList.add('active');
   else document.querySelector(`.tab-btn[data-tab="${tab}"]`)?.classList.add('active');
   AppState.currentTab = tab;
+  // Hide the Session chip on tabs where it isn't applicable (activity tabs use
+  // their own From/To pickers, not the session anchor). Keeps the ribbon honest.
+  const sessionChipWrap = document.getElementById('fr-chip-session')?.closest('.fr-chip-wrap');
+  if (sessionChipWrap) {
+    const tabsWithoutSession = ['books','service','registration','donation'];
+    sessionChipWrap.style.display = tabsWithoutSession.includes(tab) ? 'none' : '';
+  }
   renderBreadcrumb();
   document.getElementById('register-fab')?.classList.toggle('hidden', tab !== 'attendance');
   document.getElementById('add-devotee-fab')?.classList.toggle('hidden', tab !== 'devotees');
@@ -1574,6 +1593,9 @@ function switchTab(tab, btn) {
     const defaultView = TAB_VIEWS[tab].find(it => !it.divider)?.key;
     const view = lastView || defaultView;
     if (view) applyTabView(tab, view);
+    _pushNavState?.(tab, view);
+  } else {
+    _pushNavState?.(tab, null);
   }
   // Sync legacy widgets on the newly-shown tab to current filter values.
   if (typeof _mfbOnFiltersChanged === 'function') _mfbOnFiltersChanged();
@@ -1603,6 +1625,13 @@ const TAB_VIEWS = {
   service:      [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
   registration: [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
   donation:     [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
+  'calling-mgmt': [
+    { key: 'calling',       label: 'Calling List',     icon: 'fa-phone-alt' },
+    { key: 'newcomers',     label: 'New Comers',       icon: 'fa-user-plus' },
+    { key: 'online',        label: 'Online Class',     icon: 'fa-laptop' },
+    { key: 'notinterested', label: 'Not Interested',   icon: 'fa-times-circle' },
+    { key: 'festival',      label: 'Festival Calling', icon: 'fa-star' },
+  ],
 };
 
 // Friendly labels for breadcrumb — derived from TAB_VIEWS for views that have one.
@@ -1652,26 +1681,83 @@ function navTabView(tab, view) {
   // the default — avoids a double-dispatch (once with default, once with user pick).
   AppState._tabView = AppState._tabView || {};
   AppState._tabView[tab] = view;
-  if (AppState.currentTab !== tab) {
-    const tabBtn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
-    switchTab(tab, tabBtn);
-  } else {
-    applyTabView(tab, view);
+  // Suppress switchTab's own pushState; we record one nav step for the whole user action.
+  _suppressNavPush = true;
+  try {
+    if (AppState.currentTab !== tab) {
+      const tabBtn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
+      switchTab(tab, tabBtn);
+    } else {
+      applyTabView(tab, view);
+    }
+  } finally {
+    _suppressNavPush = false;
   }
+  _pushNavState(tab, view);
 }
+
+// ── Browser back-button navigation ──────────────────
+// Each tab-switch and view-switch pushes a history state so the device's
+// back button (or browser back arrow) walks the user one step back through
+// their navigation history before exiting the app.
+let _suppressNavPush = false;
+
+function _pushNavState(tab, view) {
+  if (_suppressNavPush) return;
+  try {
+    const state = { nav: true, tab, view: view || null };
+    // Skip if the topmost state already matches (avoids spurious dupes).
+    const cur = history.state;
+    if (cur && cur.nav && cur.tab === state.tab && cur.view === state.view) return;
+    history.pushState(state, '', location.href);
+  } catch (_) {}
+}
+
+// One popstate handler for navigation. The overlay/modal handler in config.js
+// runs separately for `{ overlay: true }` states; this one handles `{ nav: true }`.
+window.addEventListener('popstate', (e) => {
+  const state = e.state;
+  if (!state || !state.nav || !state.tab) return;
+  const sameTab  = state.tab === AppState.currentTab;
+  const sameView = state.view && state.view === AppState._tabView?.[state.tab];
+  if (sameTab && sameView) return; // already where back wants us
+  _suppressNavPush = true;
+  try {
+    if (!sameTab) {
+      const tabBtn = document.querySelector(`.tab-btn[data-tab="${state.tab}"]`);
+      if (tabBtn) switchTab(state.tab, tabBtn);
+    }
+    if (state.view && !sameView) applyTabView(state.tab, state.view);
+  } finally {
+    _suppressNavPush = false;
+  }
+});
 
 // Reports can't show data for a session that hasn't happened yet — if the
 // master Session is in the future, snap it to the most recent past session
-// so the report has something to display.
+// so the report has something to display. We remember the original future
+// session in _autoSnap so we can restore it when the user leaves Reports for
+// a Live view (so they don't get stuck on a past session for live work).
 async function _ensureReportSession() {
+  // Reports always reflect the most recent past completed session. If the
+  // master Session is currently in the future (whether from initSession's
+  // default or a user pick), snap it to the latest past session so the
+  // report always has data. The auto-snap memory lets us restore the future
+  // session when the user navigates to a Live view (Mark Attendance / Calls).
   const today   = getToday();
   const current = AppState.filters?.sessionId;
+  const currentDocId = AppState._currentSessionId;
   if (!current || current <= today) return false;
   try {
-    const sessions = await DB.getSessions();
+    // Race against a 6s timeout so a stuck getSessions() can't hang reports.
+    const sessions = await Promise.race([
+      DB.getSessions().catch(() => []),
+      new Promise(r => setTimeout(() => r([]), 6000)),
+    ]);
     const past = sessions.filter(s => s.session_date <= today);
     if (!past.length) return false;
     const latest = past[0]; // DB.getSessions returns newest-first
+    AppState._autoSnap = { from: current, fromDocId: currentDocId, to: latest.session_date };
     dispatchFilters({ sessionId: latest.session_date, _sessionDocId: latest.id });
     if (typeof showToast === 'function') {
       showToast('Showing last completed session for reports', 'info');
@@ -1683,10 +1769,37 @@ async function _ensureReportSession() {
   }
 }
 
-function _isReportsView(tab, view) {
+// When the user navigates to a Live view AND we previously auto-snapped from
+// a future session for a Reports view, restore that future session. Manual
+// session changes (where user picked something specific) clear the auto-snap
+// and never get restored.
+function _maybeRestoreLiveSession() {
+  const snap = AppState._autoSnap;
+  if (!snap) return;
+  // Only restore if the current session is still the one we snapped to —
+  // i.e. user hasn't manually changed it since.
+  if (AppState.filters?.sessionId !== snap.to) {
+    AppState._autoSnap = null;
+    return;
+  }
+  AppState._autoSnap = null;
+  dispatchFilters({ sessionId: snap.from, _sessionDocId: snap.fromDocId });
+}
+
+// "Session-anchored Reports" — only Attendance and Calling reports actually
+// query against the session/calling-week. Activity tabs use their own From/To
+// pickers, so auto-snapping the global Session for them does nothing useful
+// (and would mislead users with a "Showing last completed session" toast).
+function _isSessionAnchoredReportsView(tab, view) {
   return (tab === 'attendance' && view !== 'live')
-      || (tab === 'calling' && view !== 'calls')
-      || (['books','service','registration','donation'].includes(tab) && view === 'reports');
+      || (tab === 'calling' && view !== 'calls');
+}
+
+// Live views that work against the upcoming/current session — used by the
+// auto-restore logic when leaving Reports.
+function _isLiveSessionView(tab, view) {
+  return (tab === 'attendance' && view === 'live')
+      || (tab === 'calling' && view === 'calls');
 }
 
 // Maps a TAB_VIEWS key to the underlying sub-tab + sub-panel for that tab.
@@ -1702,9 +1815,12 @@ async function applyTabView(tab, view) {
     });
   }
 
-  // For Reports views, ensure the session is one that has data.
-  if (_isReportsView(tab, view)) {
+  // Session-anchored Reports auto-snap to the most recent past session.
+  if (_isSessionAnchoredReportsView(tab, view)) {
     await _ensureReportSession();
+  } else if (_isLiveSessionView(tab, view)) {
+    // Coming from Reports back to Live? Restore the user's original future session.
+    _maybeRestoreLiveSession();
   }
 
   if (tab === 'calling') {
@@ -1744,6 +1860,10 @@ async function applyTabView(tab, view) {
     const sub = (view === 'log') ? 'log' : 'reports';
     const btn = document.querySelector(`#tab-${tab} .att-sub-tab:nth-child(${sub === 'log' ? 1 : 2})`);
     if (typeof switchActivitySubTab === 'function') switchActivitySubTab(tab, sub, btn);
+  } else if (tab === 'calling-mgmt') {
+    // Map view key → existing calling-mgmt panel button
+    const cmBtn = document.querySelector(`#tab-calling-mgmt .att-sub-tab[onclick*="'${view}'"]`);
+    if (cmBtn && typeof switchCallingMgmtTab === 'function') switchCallingMgmtTab(view, cmBtn);
   }
 
   if (typeof renderBreadcrumb === 'function') renderBreadcrumb();

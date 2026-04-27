@@ -9,7 +9,30 @@
 async function loadDashboard() {
   const el = document.getElementById('dashboard-content');
   if (!el) return;
+
+  // Dashboard is a historical performance report — if the master Session is
+  // currently set to a future Sunday (initSession picks the upcoming class
+  // for the live-attendance workflow), snap to the most recent past session
+  // so the grid actually has data to show. _maybeRestoreLiveSession in the
+  // navigation flow will restore the future session when the user opens a
+  // Live view (Mark Attendance / Calls), so they don't get stuck on past.
+  if (typeof _ensureReportSession === 'function') {
+    const snapped = await _ensureReportSession();
+    // If we snapped, the resulting filtersChanged event will re-call us with
+    // the new past session — bail out of this run to avoid double-fetching.
+    if (snapped) return;
+  }
+
   el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+
+  // Hard timeout: if any single fetch can't resolve in 10s, don't leave the
+  // user staring at a spinner. Race the entire load against this timeout.
+  const TIMEOUT_MS = 10000;
+  let timedOut = false;
+  const timeoutPromise = new Promise(resolve => setTimeout(() => { timedOut = true; resolve('TIMEOUT'); }, TIMEOUT_MS));
+
+  // Wraps a query with timeout + catch so a single bad call can't hang loadDashboard.
+  const safeQuery = (p, fallback) => Promise.race([p.catch(() => fallback), timeoutPromise.then(() => fallback)]);
 
   try {
     // Anchor on the master Session — fall back to most recent past session.
@@ -17,23 +40,29 @@ async function loadDashboard() {
     let sessionId   = null;
     const today = getToday();
     if (sessionDate) {
-      const sn = await fdb.collection('sessions').where('sessionDate', '==', sessionDate).limit(1).get();
-      if (!sn.empty) sessionId = sn.docs[0].id;
+      const sn = await safeQuery(
+        fdb.collection('sessions').where('sessionDate', '==', sessionDate).limit(1).get(),
+        null
+      );
+      if (sn && !sn.empty) sessionId = sn.docs[0].id;
     }
     if (!sessionId) {
-      const sn = await fdb.collection('sessions')
-        .where('sessionDate', '<=', today).orderBy('sessionDate', 'desc').limit(1).get();
-      if (!sn.empty) {
+      const sn = await safeQuery(
+        fdb.collection('sessions').where('sessionDate', '<=', today).orderBy('sessionDate', 'desc').limit(1).get(),
+        null
+      );
+      if (sn && !sn.empty) {
         sessionDate = sn.docs[0].data().sessionDate;
         sessionId   = sn.docs[0].id;
       }
     }
+    if (timedOut) throw new Error('Connection too slow — try refreshing');
 
     // Calling date (Saturday) for callingStatus lookup.
     let callingDate = '';
     if (sessionDate) {
       callingDate = (typeof resolveCallingDate === 'function')
-        ? await resolveCallingDate(sessionDate)
+        ? await resolveCallingDate(sessionDate).catch(() => null)
         : null;
       if (!callingDate) {
         const d = new Date(sessionDate + 'T00:00:00');
@@ -52,25 +81,22 @@ async function loadDashboard() {
       return d.toISOString().slice(0, 10);
     })();
 
-    // Each fetch wrapped in its own .catch — if one query fails or stalls
-    // (e.g. missing security rule, missing index, network blip), the rest of
-    // the Dashboard still renders. Without this, one bad promise hangs the
-    // whole Promise.all and every KPI tile is stuck on "—".
-    const safeArr = () => [];
-    const safeSnap = () => ({ docs: [] });
+    // Every fetch wrapped via safeQuery (timeout + catch fallback), so one
+    // failing/hung query never blocks the rest of the Dashboard from rendering.
     const [allDevotees, csSnap, atSnap, books, services, regs, donations] = await Promise.all([
-      DevoteeCache.all().catch(safeArr),
+      safeQuery(DevoteeCache.all(), []),
       callingDate
-        ? fdb.collection('callingStatus').where('weekDate', '==', callingDate).get().catch(safeSnap)
+        ? safeQuery(fdb.collection('callingStatus').where('weekDate', '==', callingDate).get(), { docs: [] })
         : Promise.resolve({ docs: [] }),
       sessionId
-        ? fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get().catch(safeSnap)
+        ? safeQuery(fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get(), { docs: [] })
         : Promise.resolve({ docs: [] }),
-      DB.getBookDistributions({ startDate: activityStart, endDate: activityEnd }).catch(safeArr),
-      DB.getServices(         { startDate: activityStart, endDate: activityEnd }).catch(safeArr),
-      DB.getRegistrations(    { startDate: activityStart, endDate: activityEnd }).catch(safeArr),
-      DB.getDonations(        { startDate: activityStart, endDate: activityEnd }).catch(safeArr),
+      safeQuery(DB.getBookDistributions({ startDate: activityStart, endDate: activityEnd }), []),
+      safeQuery(DB.getServices(         { startDate: activityStart, endDate: activityEnd }), []),
+      safeQuery(DB.getRegistrations(    { startDate: activityStart, endDate: activityEnd }), []),
+      safeQuery(DB.getDonations(        { startDate: activityStart, endDate: activityEnd }), []),
     ]);
+    if (timedOut) throw new Error('Connection too slow — try refreshing');
 
     // Maps
     const csByDevotee = {};
@@ -141,11 +167,23 @@ async function loadDashboard() {
     _setText('kpi-donation', total.donation > 0 ? '₹' + total.donation.toLocaleString('en-IN') : '0');
 
     // ── Update greeting subline + grid sub-caption ──
+    // Make the past-vs-live distinction visible at a glance: the report
+    // session (past) is what the KPIs/grid below reflect; the live cycle
+    // (future) is the upcoming session being set up. _autoSnap.from holds
+    // the future session if we snapped from one for this view.
     const sessLabel = sessionDate
       ? new Date(sessionDate + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' })
       : '— no session —';
-    _setText('dash-greet-sub', `${sessLabel}${filterTeam ? ' · ' + filterTeam : ''}`);
-    _setText('dash-grid-sub', `${filterTeam ? filterTeam + ' only' : 'All teams'} · attendance for this session, activities for last 30 days`);
+    const liveSession = AppState._autoSnap?.from;
+    const liveLabel = liveSession
+      ? new Date(liveSession + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short' })
+      : null;
+    const subParts = [`<i class="fas fa-clipboard-list" style="font-size:.7rem"></i> Reports for <strong>${sessLabel}</strong>`];
+    if (liveLabel) subParts.push(`<i class="fas fa-circle" style="font-size:.45rem;color:#86efac;margin-right:.15rem"></i> Live cycle: <strong>${liveLabel}</strong>`);
+    if (filterTeam) subParts.push(`<i class="fas fa-users" style="font-size:.7rem"></i> ${filterTeam}`);
+    const greetSub = document.getElementById('dash-greet-sub');
+    if (greetSub) greetSub.innerHTML = subParts.join(' &nbsp;·&nbsp; ');
+    _setText('dash-grid-sub', `${filterTeam ? filterTeam + ' only' : 'All teams'} · last completed session for attendance, last 30 days for activities`);
 
     function pctCls(p) { return p >= 80 ? 'dt-pct-good' : p >= 50 ? 'dt-pct-mid' : 'dt-pct-low'; }
 
