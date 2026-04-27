@@ -1,5 +1,42 @@
 /* ══ UI-DEVOTEES.JS – Devotee list, form modal, profile modal ══ */
 
+// Fields that contribute to profile completion (both old and new).
+// Boolean attire fields (tilak/kanthi/gopi) have a meaningful 0 default, so excluded.
+function _calcProfileCompletion(d) {
+  const checks = [
+    d.name, d.mobile, d.dob, d.address, d.email,
+    d.education, d.profession, d.reading, d.hearing, d.hobbies,
+    d.reference_by, d.facilitator, d.calling_by,
+    d.family_favourable,
+    d.family_members != null && d.family_members !== '' ? 'ok' : '',
+    d.plays_instrument,   // 'Yes' or 'No' both count as filled
+    d.wants_kirtan_class, // 'Yes' or 'No' both count as filled
+  ];
+  const filled = checks.filter(v => v !== undefined && v !== null && v !== '').length;
+  return Math.round((filled / checks.length) * 100);
+}
+
+function _profileGaugeSVG(pct) {
+  const circ = 150.8; // 2π × 24
+  const arc  = ((pct / 100) * circ).toFixed(1);
+  const color = pct >= 80 ? 'var(--success)' : pct >= 50 ? 'var(--brand)' : 'var(--warning)';
+  return `<svg class="profile-completion-ring" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="30" cy="30" r="24" fill="none" stroke="var(--gray-200)" stroke-width="5.5"/>
+    <circle cx="30" cy="30" r="24" fill="none" stroke="${color}" stroke-width="5.5"
+      stroke-dasharray="${arc} ${circ}" stroke-linecap="round"
+      transform="rotate(-90 30 30)"/>
+    <text x="30" y="35" text-anchor="middle" font-size="12" fill="${color}"
+      font-weight="700" font-family="Nunito,sans-serif">${pct}%</text>
+  </svg>`;
+}
+
+function _toggleInstrumentField(val) {
+  const wrap = document.getElementById('f-instrument-wrap');
+  if (!wrap) return;
+  wrap.style.display = val === 'Yes' ? '' : 'none';
+  if (val !== 'Yes') document.getElementById('f-instrument-name').value = '';
+}
+
 async function loadDevotees() {
   // Team + Calling By are read from the master filter bar. Search + Status
   // stay as local content filters. Team-locked roles are honoured by
@@ -67,8 +104,9 @@ async function openProfileModal(id) {
     const yn = v => v ? '<span class="pf-yes">✓ Yes</span>' : '<span class="pf-no">✗ No</span>';
     const val = v => (v === 0 || v) ? v : '—';
 
-    // Hero
+    // Hero + completion gauge
     if (heroEl) {
+      const pct = _calcProfileCompletion(d);
       heroEl.innerHTML = `
         <div class="profile-hero">
           <div class="profile-avatar-lg">${initials(d.name)}</div>
@@ -76,6 +114,10 @@ async function openProfileModal(id) {
             <h2>${d.name}${isBirthdayWeek(d.dob) ? ' 🎂' : ''}</h2>
             <div class="profile-hero-meta">${d.team_name ? teamBadge(d.team_name) : ''} ${statusBadge(d.devotee_status)}${d.is_not_interested ? ' <span class="badge" style="background:#bf360c;color:#fff"><i class="fas fa-ban"></i> Not Interested</span>' : ''}</div>
             <div class="profile-hero-meta" style="margin-top:.4rem">${contactIcons(d.mobile, { altMobile: d.mobile_alt, devoteeId: d.id, name: d.name })}${d.mobile ? `<span style="font-size:.85rem;margin-left:.4rem">${d.mobile}</span>` : ''}${d.mobile_alt ? `<span style="font-size:.72rem;color:var(--text-muted);margin-left:.4rem">(Alt: ${d.mobile_alt})</span>` : ''}</div>
+          </div>
+          <div class="profile-completion-wrap" title="${pct}% of profile fields filled">
+            ${_profileGaugeSVG(pct)}
+            <div class="profile-completion-label">Complete</div>
           </div>
         </div>`;
     }
@@ -139,6 +181,20 @@ async function openProfileModal(id) {
           <div class="profile-field"><label>Tilak</label>${yn(d.tilak)}</div>
           <div class="profile-field"><label>Kanthi</label>${yn(d.kanthi)}</div>
           <div class="profile-field"><label>Gopi Dress</label>${yn(d.gopi_dress)}</div>
+          <div class="profile-field"><label>Plays Instrument</label><span>${
+            d.plays_instrument === 'Yes'
+              ? `<span class="pf-tag pf-kirtan"><i class="fas fa-music"></i> Yes${d.instrument_name ? ` — ${d.instrument_name}` : ''}</span>`
+              : d.plays_instrument === 'No'
+                ? '<span class="pf-no">✗ No</span>'
+                : '—'
+          }</span></div>
+          <div class="profile-field"><label>Kirtan Classes</label><span>${
+            d.wants_kirtan_class === 'Yes'
+              ? '<span class="pf-yes">✓ Yes</span>'
+              : d.wants_kirtan_class === 'No'
+                ? '<span class="pf-no">✗ No</span>'
+                : '—'
+          }</span></div>
         </div>
       </div>
 
@@ -249,6 +305,10 @@ function clearDevoteeForm() {
   document.getElementById('f-reading').value = '';
   document.getElementById('f-hearing').value = '';
   document.getElementById('f-tilak').value = '0';
+  document.getElementById('f-plays-instrument').value = '';
+  document.getElementById('f-instrument-name').value = '';
+  document.getElementById('f-wants-kirtan').value = '';
+  _toggleInstrumentField('');
   clearPicker('picker-facilitator', 'f-facilitator');
   clearPicker('picker-reference',   'f-reference');
   clearPicker('picker-calling-by',  'f-calling-by');
@@ -285,6 +345,10 @@ async function populateEditForm(id) {
     document.getElementById('f-hearing').value            = d.hearing || '';
     document.getElementById('f-hobbies').value            = d.hobbies || '';
     document.getElementById('f-tilak').value              = d.tilak || '0';
+    document.getElementById('f-plays-instrument').value  = d.plays_instrument || '';
+    document.getElementById('f-instrument-name').value   = d.instrument_name || '';
+    document.getElementById('f-wants-kirtan').value      = d.wants_kirtan_class || '';
+    _toggleInstrumentField(d.plays_instrument || '');
     const fm = document.getElementById('f-family-members');    if(fm) fm.value = d.family_members || '';
     const fp = document.getElementById('f-family-participants'); if(fp) fp.value = d.family_participants || '';
     clearFieldError('mobile');
@@ -317,6 +381,11 @@ function getFormPayload() {
     hearing:              document.getElementById('f-hearing').value,
     hobbies:              document.getElementById('f-hobbies').value.trim(),
     tilak:                parseInt(document.getElementById('f-tilak').value),
+    plays_instrument:     document.getElementById('f-plays-instrument').value,
+    instrument_name:      document.getElementById('f-plays-instrument').value === 'Yes'
+                            ? document.getElementById('f-instrument-name').value
+                            : '',
+    wants_kirtan_class:   document.getElementById('f-wants-kirtan').value,
   };
 }
 

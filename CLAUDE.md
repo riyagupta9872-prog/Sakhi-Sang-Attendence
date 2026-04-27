@@ -25,7 +25,7 @@ No build step — this is a pure static site. Any HTTP server works (VS Code Liv
 
 ## Architecture
 
-All application logic is split across 8 JS files in [js/](js/), loaded in order via `<script>` tags (no bundler — all global scope):
+All application logic is split across JS files in [js/](js/), loaded in order via `<script>` tags (no bundler — all global scope):
 
 | File | Contents |
 |---|---|
@@ -37,6 +37,7 @@ All application logic is split across 8 JS files in [js/](js/), loaded in order 
 | [js/ui-calling.js](js/ui-calling.js) | Calling list, reports, late-submission tracker |
 | [js/ui-attendance.js](js/ui-attendance.js) | Attendance sheet, Sunday config, live session marking |
 | [js/ui-analytics.js](js/ui-analytics.js) | Reports tab, Care tab, Events tab |
+| [js/ui-activities.js](js/ui-activities.js) | Activities tab — Book Distribution, Donations, Registrations, Service sub-tabs |
 
 - [css/style.css](css/style.css) — all styling
 - [index.html](index.html) — single HTML template with all tab panels
@@ -119,6 +120,38 @@ The Care tab anchors on the master Session date and computes four lists:
 - `DevoteeCache` — 90-second TTL in-memory cache of active devotees
 - `sessionsCache` on `AppState` — maps session IDs to session metadata
 - **Service worker strategies** (`sw.js`): (1) Firebase/Firestore endpoints — always bypass cache; (2) app JS files (`/js/*.js`) — network-first with cache fallback so new code loads without hard refresh; (3) static assets (CSS, fonts, CDN libraries) — cache-first. Bump `sakhi-sang-vXX` version string on every deploy to invalidate all caches. Firestore persistence is enabled with `synchronizeTabs: true`.
+
+### UI Utilities (global helpers in [js/ui-core.js](js/ui-core.js))
+
+- **Modals** — `openModal(id)` / `closeModal(id)` toggle `.hidden` on `.modal-overlay` elements. A `popstate` listener closes all open overlays; `history.pushState()` is called whenever any overlay opens to give back-button support. Modal IDs always end with `-modal`.
+- **Toasts** — `showToast(msg, type)` renders in `#toast`; `type` is `''` (neutral), `'success'`, or `'error'`. Auto-dismisses after 3 s; repeated calls reset the timer.
+- **Field errors** — `showFieldError(fieldId, msg)` adds `.error` class + message text; `clearFieldError(fieldId)` removes it. Used in form validation before any DB write.
+- **Number picker** — `openNumberPicker(devoteeId, name, mobile, altMobile)` lets a coordinator choose primary vs alternate mobile; `makePrimaryNumber()` swaps the two numbers in Firestore atomically.
+
+### Picker Control Pattern (autocomplete)
+
+Multi-select autocomplete fields (Facilitator, Reference By, Calling By) use a `.picker-wrap` → `.picker-input` + `.picker-menu` structure. Input `.value` holds the selected name; `.has-value` class controls styling. `clearPicker(wrapperId, inputId)` resets both. Don't hand-roll new pickers; reuse this pattern.
+
+### Function Naming Conventions
+
+| Prefix | Meaning |
+|---|---|
+| `load*()` / `load*Tab()` | Async, idempotent — refetch + re-render from current filters |
+| `open*Modal()` / `open*()` | Show an overlay; may populate fields first |
+| `close*()` / `hide*()` | Remove overlay or hide element |
+| `_mfbOn*()` | Master filter bar internal handlers |
+| `_frPick*()` | Filter-related picker handlers |
+
+### CSS Design System
+
+[css/style.css](css/style.css) uses CSS custom properties on `:root`:
+- **Colors**: `--color-primary` (#1a5c3a forest green), semantic tokens (`--color-success`, `--color-danger`, `--color-warning`)
+- **Layout**: `--header-h: 64px`, `--nav-h: 52px`
+- **Radius tokens**: `--radius-xs` (4px) → `--radius-lg` (16px)
+- **Shadow tokens**: `--shadow-xs` → `--shadow-lg`
+- **Typography**: Cinzel serif for headings, Nunito sans-serif for body
+
+Always use these tokens rather than hardcoding values.
 
 ## Firebase Setup
 

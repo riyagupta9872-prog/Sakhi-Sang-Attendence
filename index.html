@@ -957,6 +957,33 @@
               </div>
             </div>
           </div>
+          <div class="form-group">
+            <label>Plays an Instrument?</label>
+            <select id="f-plays-instrument" onchange="_toggleInstrumentField(this.value)">
+              <option value="">Not specified</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </div>
+          <div class="form-group" id="f-instrument-wrap" style="display:none">
+            <label>Which Instrument?</label>
+            <select id="f-instrument-name">
+              <option value="">Select instrument…</option>
+              <option value="Kartal">Kartal</option>
+              <option value="Whomper">Whomper</option>
+              <option value="Mridanga">Mridanga</option>
+              <option value="Harmonium">Harmonium</option>
+              <option value="Drum">Drum</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Wishes to Attend Kirtan Classes?</label>
+            <select id="f-wants-kirtan">
+              <option value="">Not specified</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -1980,6 +2007,42 @@
   </div>
 </div>
 
+<!-- ══════════ AI CHAT FAB ══════════ -->
+<button id="ai-fab" class="ai-fab" onclick="openAiChat()" title="Ask your data with AI" style="display:none">
+  <i class="fas fa-wand-magic-sparkles"></i>
+</button>
+
+<!-- ══════════ AI CHAT MODAL ══════════ -->
+<div id="ai-chat-modal" class="modal-overlay hidden">
+  <div class="modal-box ai-chat-box">
+    <div class="ai-chat-header">
+      <i class="fas fa-wand-magic-sparkles" style="color:var(--brand);font-size:1.1rem"></i>
+      <h2>Ask your data</h2>
+      <span class="ai-badge">Gemini AI</span>
+      <button class="btn-icon close" onclick="closeAiChat()"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="ai-examples" id="ai-examples">
+      <button class="ai-example-chip" onclick="aiAskExample(this.textContent.trim())">Who hasn't attended in 3 weeks?</button>
+      <button class="ai-example-chip" onclick="aiAskExample(this.textContent.trim())">Less than 8 chanting rounds</button>
+      <button class="ai-example-chip" onclick="aiAskExample(this.textContent.trim())">Who has any skill or plays an instrument?</button>
+      <button class="ai-example-chip" onclick="aiAskExample(this.textContent.trim())">Who received books this year?</button>
+      <button class="ai-example-chip" onclick="aiAskExample(this.textContent.trim())">Total donations this fiscal year</button>
+      <button class="ai-example-chip" onclick="aiAskExample(this.textContent.trim())">Inactive devotees</button>
+    </div>
+    <div class="ai-chat-messages" id="ai-chat-messages">
+      <div class="ai-welcome-msg" id="ai-chat-welcome">
+        <div class="ai-welcome-icon">✨</div>
+        Ask anything about your devotees in plain language.<br>
+        Click an example above or type your own question.
+      </div>
+    </div>
+    <div class="ai-chat-input-row">
+      <input type="text" id="ai-chat-input" placeholder="Ask anything about your devotees…" onkeydown="_aiInputKeydown(event)" autocomplete="off">
+      <button id="ai-send-btn" onclick="sendAiChatMessage()"><i class="fas fa-paper-plane"></i></button>
+    </div>
+  </div>
+</div>
+
 <!-- Firebase compat SDK -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
@@ -1999,5 +2062,6 @@
 <script src="js/ui-analytics.js"></script>
 <script src="js/ui-home.js"></script>
 <script src="js/ui-activities.js"></script>
+<script src="js/ui-ai-chat.js"></script>
 </body>
 </html>

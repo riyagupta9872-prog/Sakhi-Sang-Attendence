@@ -1549,7 +1549,10 @@ async function loadBirthdays() {
     document.getElementById('birthday-list').innerHTML = bdays.map(d => `
       <div class="birthday-item">
         <div class="devotee-avatar" style="width:38px;height:38px;font-size:.9rem">${initials(d.name)}</div>
-        <span class="birthday-name">${d.name}</span>
+        <div class="birthday-name-wrap">
+          <span class="birthday-name">${d.name}</span>
+          ${d.team_name ? `<span class="birthday-team">${d.team_name}</span>` : ''}
+        </div>
         <span class="birthday-date">${formatBirthday(d.dob)}</span>
         ${contactIcons(d.mobile)}
       </div>`).join('');
