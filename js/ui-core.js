@@ -752,7 +752,6 @@ function applyRoleUI() {
     service:      ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     registration: ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     donation:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    reports:      ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     care:         ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     events:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     'calling-mgmt': ['superAdmin'],
@@ -761,6 +760,10 @@ function applyRoleUI() {
     const tab = btn.dataset.tab;
     const allowed = tabs[tab]?.includes(role);
     btn.style.display = allowed ? '' : 'none';
+    // If the button is wrapped in a dropdown group, hide the group too so we
+    // don't leave a phantom empty container in the nav.
+    const group = btn.closest('.tab-btn-group');
+    if (group) group.style.display = allowed ? '' : 'none';
   });
 
   // If the currently-active panel is one the user can't access, switch to
@@ -940,6 +943,7 @@ async function clearAllData() {
 async function initApp() {
   await initSession();
   await initMasterFilterBar();
+  _buildTabMenus?.();
   loadDevotees();
   loadCallingPersonsFilter();
   loadBirthdays();
@@ -1297,11 +1301,24 @@ function _mfbOnFiltersChanged(e) {
   if (tab === 'devotees'     && typeof loadDevotees === 'function')        loadDevotees();
   const _sessionChanged = e?.detail?.before && e.detail.before.sessionId !== AppState.filters.sessionId;
   if (tab === 'calling') {
-    if (_sessionChanged) loadCallingStatus?.();
-    else if (typeof filterCallingList === 'function' && AppState.callingData?.length) filterCallingList();
+    // Reports sub-tab uses the legacy reports refresher; Calls list uses its own.
+    if (AppState._callingSubTab === 'reports') {
+      _reportsCategory = 'calling';
+      if (typeof _refreshAfterFilter === 'function') _refreshAfterFilter();
+    } else if (_sessionChanged) {
+      loadCallingStatus?.();
+    } else if (typeof filterCallingList === 'function' && AppState.callingData?.length) {
+      filterCallingList();
+    }
   }
-  if (tab === 'attendance') loadAttendanceTab?.();
-  if (tab === 'reports'      && typeof _refreshAfterFilter === 'function') _refreshAfterFilter();
+  if (tab === 'attendance') {
+    if (AppState._attSubTab === 'reports') {
+      _reportsCategory = 'attendance';
+      if (typeof _refreshAfterFilter === 'function') _refreshAfterFilter();
+    } else {
+      loadAttendanceTab?.();
+    }
+  }
   if (tab === 'care'         && typeof loadCareData === 'function')        loadCareData();
   if (tab === 'calling-mgmt' && typeof loadCallingMgmtTab === 'function')  loadCallingMgmtTab();
 }
@@ -1542,15 +1559,275 @@ function switchTab(tab, btn) {
   document.getElementById('register-fab')?.classList.toggle('hidden', tab !== 'attendance');
   document.getElementById('add-devotee-fab')?.classList.toggle('hidden', tab !== 'devotees');
   if (tab === 'dashboard')  { loadHome?.(); loadDashboard?.(); }
-  if (tab === 'calling')    loadCallingStatus();
-  if (tab === 'attendance') loadAttendanceTab();
-  if (tab === 'reports')    loadReports();
   if (tab === 'care')       loadCareData();
   if (tab === 'events')     loadEvents();
   if (tab === 'calling-mgmt') loadCallingMgmtTab?.();
-  if (['books','service','registration','donation'].includes(tab)) loadActivityTab?.(tab);
+
+  // For tabs with TAB_VIEWS, restore the last-picked view (or default to first
+  // non-divider entry). All the navigation through the tab now flows through
+  // applyTabView, so the in-panel sub-tab strips are not needed.
+  if (typeof TAB_VIEWS !== 'undefined' && TAB_VIEWS[tab]) {
+    if (['books','service','registration','donation'].includes(tab)) loadActivityTab?.(tab);
+    if (tab === 'calling')    loadCallingStatus?.();
+    if (tab === 'attendance') loadAttendanceTab?.();
+    const lastView = AppState._tabView?.[tab];
+    const defaultView = TAB_VIEWS[tab].find(it => !it.divider)?.key;
+    const view = lastView || defaultView;
+    if (view) applyTabView(tab, view);
+  }
   // Sync legacy widgets on the newly-shown tab to current filter values.
   if (typeof _mfbOnFiltersChanged === 'function') _mfbOnFiltersChanged();
+}
+
+// ── Tab dropdown navigation ──────────────────────────
+// Each tab that has multiple views shows a dropdown menu when clicked
+// (instead of stacked sub-tab strips inside the panel). Picking an item
+// opens that view as its own screen and updates the breadcrumb path.
+const TAB_VIEWS = {
+  calling: [
+    { key: 'calls',      label: 'Calls',              icon: 'fa-phone-alt' },
+    { divider: true, label: 'REPORTS' },
+    { key: 'weekly',     label: 'Weekly Report',      icon: 'fa-chart-bar' },
+    { key: 'submission', label: 'Submission Reports', icon: 'fa-chart-line' },
+  ],
+  attendance: [
+    { key: 'live',      label: 'Live Attendance',  icon: 'fa-check-circle' },
+    { divider: true, label: 'REPORTS' },
+    { key: 'sheet',     label: 'Attendance Sheet', icon: 'fa-table' },
+    { key: 'newcomers', label: 'New Comers',       icon: 'fa-user-plus' },
+    { key: 'serious',   label: 'Serious Analysis', icon: 'fa-star' },
+    { key: 'teams',     label: 'Team Leaderboard', icon: 'fa-trophy' },
+    { key: 'trends',    label: 'Trends',           icon: 'fa-chart-line' },
+  ],
+  books:        [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
+  service:      [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
+  registration: [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
+  donation:     [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
+};
+
+// Friendly labels for breadcrumb — derived from TAB_VIEWS for views that have one.
+function _viewLabel(tab, view) {
+  const items = TAB_VIEWS[tab] || [];
+  const found = items.find(it => it.key === view);
+  return found?.label || '';
+}
+
+function _closeAllTabMenus() {
+  document.querySelectorAll('.tab-menu').forEach(m => m.classList.add('hidden'));
+}
+
+function onTabBtnClick(tab, btn, event) {
+  event?.stopPropagation();
+  if (TAB_VIEWS[tab]) {
+    // Has sub-views — toggle the dropdown menu instead of switching directly.
+    const menu = document.getElementById('tab-menu-' + tab);
+    if (!menu) return;
+    const wasHidden = menu.classList.contains('hidden');
+    _closeAllTabMenus();
+    if (wasHidden) {
+      menu.classList.remove('hidden');
+      _positionTabMenu(menu, btn);
+    }
+  } else {
+    _closeAllTabMenus();
+    switchTab(tab, btn);
+  }
+}
+
+// Position a fixed-position dropdown directly under its trigger button,
+// keeping it inside the viewport on the right edge.
+function _positionTabMenu(menu, btn) {
+  const r = btn.getBoundingClientRect();
+  menu.style.top = (r.bottom + 6) + 'px';
+  // Measure the menu's actual rendered width to clamp inside viewport.
+  const menuW = menu.offsetWidth || 240;
+  const maxLeft = window.innerWidth - menuW - 8;
+  const left = Math.max(8, Math.min(r.left, maxLeft));
+  menu.style.left = left + 'px';
+}
+
+function navTabView(tab, view) {
+  _closeAllTabMenus();
+  // Pre-store the view so switchTab picks it up instead of falling back to
+  // the default — avoids a double-dispatch (once with default, once with user pick).
+  AppState._tabView = AppState._tabView || {};
+  AppState._tabView[tab] = view;
+  if (AppState.currentTab !== tab) {
+    const tabBtn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
+    switchTab(tab, tabBtn);
+  } else {
+    applyTabView(tab, view);
+  }
+}
+
+// Reports can't show data for a session that hasn't happened yet — if the
+// master Session is in the future, snap it to the most recent past session
+// so the report has something to display.
+async function _ensureReportSession() {
+  const today   = getToday();
+  const current = AppState.filters?.sessionId;
+  if (!current || current <= today) return false;
+  try {
+    const sessions = await DB.getSessions();
+    const past = sessions.filter(s => s.session_date <= today);
+    if (!past.length) return false;
+    const latest = past[0]; // DB.getSessions returns newest-first
+    dispatchFilters({ sessionId: latest.session_date, _sessionDocId: latest.id });
+    if (typeof showToast === 'function') {
+      showToast('Showing last completed session for reports', 'info');
+    }
+    return true;
+  } catch (e) {
+    console.error('_ensureReportSession', e);
+    return false;
+  }
+}
+
+function _isReportsView(tab, view) {
+  return (tab === 'attendance' && view !== 'live')
+      || (tab === 'calling' && view !== 'calls')
+      || (['books','service','registration','donation'].includes(tab) && view === 'reports');
+}
+
+// Maps a TAB_VIEWS key to the underlying sub-tab + sub-panel for that tab.
+async function applyTabView(tab, view) {
+  AppState._tabView = AppState._tabView || {};
+  AppState._tabView[tab] = view;
+
+  // Reflect the active view in the dropdown so users see which one is current.
+  const menu = document.getElementById('tab-menu-' + tab);
+  if (menu) {
+    menu.querySelectorAll('.tab-menu-item').forEach(it => {
+      it.classList.toggle('active', it.dataset.view === view);
+    });
+  }
+
+  // For Reports views, ensure the session is one that has data.
+  if (_isReportsView(tab, view)) {
+    await _ensureReportSession();
+  }
+
+  if (tab === 'calling') {
+    if (view === 'calls') {
+      const callsBtn = document.querySelector('#tab-calling .att-sub-tab:nth-child(1)');
+      if (callsBtn) switchCallingSubTab(callsBtn, 'calls');
+    } else {
+      const reportsBtn = document.querySelector('#tab-calling .att-sub-tab:nth-child(2)');
+      if (reportsBtn) switchCallingSubTab(reportsBtn, 'reports');
+      const innerSel = view === 'weekly' ? '#calling-panel-reports .sub-tab:nth-child(1)'
+                                          : '#calling-panel-reports .sub-tab:nth-child(2)';
+      const innerBtn = document.querySelector(innerSel);
+      const innerKey = view === 'weekly' ? 'weekly' : 'submission';
+      if (innerBtn && typeof switchCallingRptSub === 'function') switchCallingRptSub(innerBtn, innerKey);
+    }
+  } else if (tab === 'attendance') {
+    if (view === 'live') {
+      const liveBtn = document.querySelector('#tab-attendance .att-sub-tab:nth-child(1)');
+      if (liveBtn) switchAttSubTab(liveBtn, 'live');
+    } else {
+      const reportsBtn = document.querySelector('#tab-attendance .att-sub-tab:nth-child(2)');
+      if (reportsBtn) switchAttSubTab(reportsBtn, 'reports');
+      const subId = ({
+        sheet:     'attendance-detail',
+        newcomers: 'newcomers-report',
+        serious:   'serious-analysis',
+        teams:     'team-leaderboard',
+        trends:    'trends',
+      })[view];
+      if (subId) {
+        const innerBtn = document.querySelector(`#att-panel-reports .sub-tab[onclick*="'${subId}'"]`);
+        if (innerBtn) switchSubTab(innerBtn, subId);
+        if (subId === 'attendance-detail' && typeof loadYearlySheet === 'function') loadYearlySheet();
+      }
+    }
+  } else if (['books','service','registration','donation'].includes(tab)) {
+    const sub = (view === 'log') ? 'log' : 'reports';
+    const btn = document.querySelector(`#tab-${tab} .att-sub-tab:nth-child(${sub === 'log' ? 1 : 2})`);
+    if (typeof switchActivitySubTab === 'function') switchActivitySubTab(tab, sub, btn);
+  }
+
+  if (typeof renderBreadcrumb === 'function') renderBreadcrumb();
+}
+
+// Dynamically wraps each tab button that has TAB_VIEWS in a .tab-btn-group +
+// dropdown menu, and overrides its inline onclick. Called once at app init.
+function _buildTabMenus() {
+  Object.entries(TAB_VIEWS).forEach(([tab, items]) => {
+    const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
+    if (!btn || btn.closest('.tab-btn-group')) return;
+
+    // Wrap the button in a positioning container
+    const group = document.createElement('div');
+    group.className = 'tab-btn-group';
+    btn.parentElement.insertBefore(group, btn);
+    group.appendChild(btn);
+
+    // Add chevron caret to the button
+    const caret = document.createElement('i');
+    caret.className = 'fas fa-chevron-down tab-btn-caret';
+    btn.appendChild(caret);
+
+    // Build dropdown menu
+    const menu = document.createElement('div');
+    menu.className = 'tab-menu hidden';
+    menu.id = 'tab-menu-' + tab;
+    menu.innerHTML = items.map(it => {
+      if (it.divider) {
+        return `<div class="tab-menu-divider">${it.label || ''}</div>`;
+      }
+      return `<button class="tab-menu-item" data-view="${it.key}" onclick="navTabView('${tab}','${it.key}')">
+        <i class="fas ${it.icon}"></i><span>${it.label}</span>
+      </button>`;
+    }).join('');
+    group.appendChild(menu);
+
+    // Replace inline onclick with our toggle handler
+    btn.removeAttribute('onclick');
+    btn.addEventListener('click', (e) => onTabBtnClick(tab, btn, e));
+  });
+
+  // Click outside any tab group closes all menus
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.tab-btn-group')) _closeAllTabMenus();
+  });
+  // Close menus on window resize/scroll so the fixed-position popover doesn't
+  // drift away from its trigger button.
+  window.addEventListener('resize', _closeAllTabMenus);
+  window.addEventListener('scroll', _closeAllTabMenus, { passive: true });
+}
+
+// ── Sub-tab switchers for the collapsed Reports — Attendance / Calling ──
+// Both tabs now host their own [Live | Reports] (or [Calls | Reports]) toggle.
+function switchAttSubTab(btn, sub) {
+  const tabs = btn?.parentElement;
+  if (tabs) tabs.querySelectorAll('.att-sub-tab').forEach(b => b.classList.remove('active'));
+  btn?.classList.add('active');
+  document.getElementById('att-panel-live').classList.toggle('active',    sub === 'live');
+  document.getElementById('att-panel-reports').classList.toggle('active', sub === 'reports');
+  AppState._attSubTab = sub;
+  if (sub === 'live') {
+    loadAttendanceTab?.();
+  } else {
+    _reportsCategory = 'attendance';
+    if (typeof initReportsSessionFilter === 'function') initReportsSessionFilter();
+    loadReports?.();
+  }
+}
+
+function switchCallingSubTab(btn, sub) {
+  const tabs = btn?.parentElement;
+  if (tabs) tabs.querySelectorAll('.att-sub-tab').forEach(b => b.classList.remove('active'));
+  btn?.classList.add('active');
+  document.getElementById('calling-panel-list').classList.toggle('active',    sub === 'calls');
+  document.getElementById('calling-panel-reports').classList.toggle('active', sub === 'reports');
+  AppState._callingSubTab = sub;
+  if (sub === 'calls') {
+    loadCallingStatus?.();
+  } else {
+    _reportsCategory = 'calling';
+    if (typeof _populateReportWeeks === 'function') _populateReportWeeks().then(() => loadCallingReports?.());
+    else loadCallingReports?.();
+  }
 }
 
 function switchSubTab(btn, id) {
@@ -1589,7 +1866,10 @@ function renderBreadcrumb() {
     devotees:       'Devotees',
     calling:        'Calling',
     attendance:     'Attendance',
-    reports:        'Reports',
+    books:          'Books',
+    service:        'Service',
+    registration:   'Registration',
+    donation:       'Donation',
     care:           'Care',
     events:         'Events',
     'calling-mgmt': 'Calling Mgmt',
@@ -1600,25 +1880,12 @@ function renderBreadcrumb() {
   ];
   if (tab !== 'dashboard') segments.push({ label: tabLabels[tab] || tab, onClick: `switchTab('${tab}', null)` });
 
-  // Reports: two-level nesting (category → sub-tab)
-  if (tab === 'reports') {
-    const cat = document.querySelector('.reports-cat-panel.active')?.id || '';
-    if (cat === 'reports-cat-attendance') {
-      segments.push({ label: 'Attendance Reports', onClick: `switchReportsCategory('attendance', document.querySelector('#tab-reports .att-sub-tab'))` });
-    } else if (cat === 'reports-cat-calling') {
-      segments.push({ label: 'Calling Reports', onClick: `switchReportsCategory('calling', document.querySelectorAll('#tab-reports .att-sub-tab')[1])` });
-    }
-    const subId = document.querySelector('.reports-cat-panel.active .sub-panel.active')?.id || '';
-    const subLabels = {
-      'subtab-attendance-detail':  'Attendance Sheet',
-      'subtab-newcomers-report':   'New Comers',
-      'subtab-serious-analysis':   'Serious',
-      'subtab-team-leaderboard':   'Teams',
-      'subtab-trends':             'Trends',
-      'subtab-calling-weekly':     'Weekly Report',
-      'subtab-calling-submission': 'Submission Reports',
-    };
-    if (subLabels[subId]) segments.push({ label: subLabels[subId], current: true });
+  // Tabs that use the dropdown nav: append the active view as a final crumb,
+  // pulled from AppState._tabView (set by navTabView).
+  const view = AppState._tabView?.[tab];
+  if (view && TAB_VIEWS[tab]) {
+    const label = _viewLabel(tab, view);
+    if (label) segments.push({ label, current: true });
   }
 
   // Calling Mgmt: 5-way sub-tabs

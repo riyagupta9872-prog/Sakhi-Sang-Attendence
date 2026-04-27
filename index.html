@@ -234,9 +234,6 @@
   <button class="tab-btn" data-tab="donation" onclick="switchTab('donation', this)">
     <i class="fas fa-hand-holding-heart"></i><span>Donation</span>
   </button>
-  <button class="tab-btn" data-tab="reports" onclick="switchTab('reports', this)">
-    <i class="fas fa-chart-bar"></i><span>Reports</span>
-  </button>
   <button class="tab-btn" data-tab="care" onclick="switchTab('care', this)">
     <i class="fas fa-heart"></i><span>Care</span>
   </button>
@@ -453,17 +450,24 @@
   <!-- ──────── TAB 2: CALLING ──────── -->
   <section id="tab-calling" class="tab-panel">
     <input type="hidden" id="calling-week">
-    <div class="panel-header">
-      <h2><i class="fas fa-phone-alt"></i> Calling Status</h2>
-      <div class="panel-actions">
-        <span id="calling-dates-display" class="calling-dates-display"></span>
-      </div>
-    </div>
 
-    <!-- (Sub-tabs removed — Not Interested lives in Calling Mgmt, Reports live under Reports tab) -->
+    <div class="att-sub-tabs">
+      <button class="att-sub-tab active" onclick="switchCallingSubTab(this,'calls')">
+        <i class="fas fa-phone-alt"></i> Calls
+      </button>
+      <button class="att-sub-tab" onclick="switchCallingSubTab(this,'reports')">
+        <i class="fas fa-chart-bar"></i> Reports
+      </button>
+    </div>
 
     <!-- ── CALLING LIST PANEL ── -->
     <div id="calling-panel-list" class="att-sub-panel active">
+      <div class="panel-header">
+        <h2><i class="fas fa-phone-alt"></i> Calling Status</h2>
+        <div class="panel-actions">
+          <span id="calling-dates-display" class="calling-dates-display"></span>
+        </div>
+      </div>
       <!-- Search + Status are local; Team + Calling By come from master filter bar -->
       <div class="search-filter-bar" style="flex-wrap:wrap;gap:.5rem">
         <div class="search-box" style="flex:1;min-width:160px">
@@ -491,10 +495,52 @@
       <div id="calling-submit-bar" class="calling-submit-bar"></div>
     </div>
 
+    <!-- ── REPORTS SUB-PANEL (was the standalone Reports tab → calling category) ── -->
+    <div id="calling-panel-reports" class="att-sub-panel">
+      <div id="reports-cat-calling" class="reports-cat-panel active">
+        <div class="sub-tabs">
+          <button class="sub-tab active" onclick="switchCallingRptSub(this,'weekly')"><i class="fas fa-chart-bar"></i> Weekly Report</button>
+          <button class="sub-tab" onclick="switchCallingRptSub(this,'submission')"><i class="fas fa-chart-line"></i> Submission Reports</button>
+        </div>
+        <div id="subtab-calling-weekly" class="sub-panel active">
+          <div class="rpt-controls-row">
+            <div class="rpt-week-group">
+              <button class="btn btn-secondary" onclick="downloadCurrentReportExcel()" title="Download current period's Excel">
+                <i class="fas fa-file-excel"></i> Export
+              </button>
+              <button class="btn btn-secondary" onclick="downloadCompleteReportExcel()" title="Download complete FY history">
+                <i class="fas fa-download"></i> Export FY
+              </button>
+            </div>
+            <div class="rpt-type-btns">
+              <button id="rpt-tab-accuracy" class="btn btn-secondary rpt-type-btn" onclick="switchReportType('accuracy',this)"><i class="fas fa-bullseye"></i> Attendance Accuracy</button>
+            </div>
+          </div>
+          <div id="calling-reports-content"></div>
+        </div>
+        <div id="subtab-calling-submission" class="sub-panel">
+          <div class="late-rpt-header">
+            <span class="late-rpt-info"><i class="fas fa-clock"></i> Calling submission times — current week + last 3 weeks</span>
+            <button class="btn btn-secondary" style="padding:.3rem .8rem;font-size:.8rem" onclick="loadLateReports()"><i class="fas fa-sync-alt"></i> Refresh</button>
+          </div>
+          <div id="calling-late-content"></div>
+        </div>
+      </div>
+    </div>
+
   </section>
 
   <!-- ──────── TAB 3: ATTENDANCE ──────── -->
   <section id="tab-attendance" class="tab-panel">
+    <div class="att-sub-tabs">
+      <button class="att-sub-tab active" onclick="switchAttSubTab(this,'live')">
+        <i class="fas fa-check-circle"></i> Live
+      </button>
+      <button class="att-sub-tab" onclick="switchAttSubTab(this,'reports')">
+        <i class="fas fa-chart-bar"></i> Reports
+      </button>
+    </div>
+
     <!-- ── LIVE SESSION PANEL ── -->
     <div id="att-panel-live" class="att-sub-panel active">
       <div class="panel-header">
@@ -543,22 +589,10 @@
       <div id="attendance-list" class="attendance-grid"></div>
     </div>
 
-  </section>
-
-  <!-- ──────── TABS 4-7: ACTIVITY TABS (Books / Service / Registration / Donation) ────────
-       Each panel is built dynamically by ui-activities.js when first opened.
-       Structure inside each: [Log Entry sub-tab] | [Reports sub-tab]. -->
-  <section id="tab-books"        class="tab-panel"></section>
-  <section id="tab-service"      class="tab-panel"></section>
-  <section id="tab-registration" class="tab-panel"></section>
-  <section id="tab-donation"     class="tab-panel"></section>
-
-  <!-- ──────── TAB 8: REPORTS ──────── -->
-  <section id="tab-reports" class="tab-panel">
-    <div class="panel-header">
-      <h2><i class="fas fa-chart-bar"></i> Reports &amp; Analytics</h2>
-      <!-- Period segment — Reports-only. Single Session uses the master Session
-           date; Month / Quarter / FY aggregate around that anchor. -->
+    <!-- ── REPORTS SUB-PANEL (was the standalone Reports tab) ── -->
+    <div id="att-panel-reports" class="att-sub-panel">
+      <!-- Period segment — Single Session uses the master Session date;
+           Month / Quarter / FY aggregate around that anchor. -->
       <div class="rpt-period-row">
         <span class="rpt-period-label">Period:</span>
         <div class="rpt-period-seg" role="tablist">
@@ -569,74 +603,43 @@
         </div>
         <span id="rpt-period-summary" class="rpt-period-summary"></span>
       </div>
-    </div>
 
-    <!-- Top-level category tabs -->
-    <div class="att-sub-tabs">
-      <button class="att-sub-tab active" onclick="switchReportsCategory('attendance', this)"><i class="fas fa-check-circle"></i> Attendance Reports</button>
-      <button class="att-sub-tab" onclick="switchReportsCategory('calling', this)"><i class="fas fa-phone-alt"></i> Calling Reports</button>
-    </div>
-
-    <!-- ═══ ATTENDANCE REPORTS CATEGORY ═══ -->
-    <div id="reports-cat-attendance" class="reports-cat-panel active">
-      <div class="sub-tabs">
-        <button class="sub-tab active" onclick="switchSubTab(this,'attendance-detail'); loadYearlySheet()"><i class="fas fa-table"></i> Attendance Sheet</button>
-        <button class="sub-tab" onclick="switchSubTab(this,'newcomers-report')"><i class="fas fa-user-plus"></i> New Comers</button>
-        <button class="sub-tab" onclick="switchSubTab(this,'serious-analysis')"><i class="fas fa-star"></i> Serious</button>
-        <button class="sub-tab" onclick="switchSubTab(this,'team-leaderboard')"><i class="fas fa-trophy"></i> Teams</button>
-        <button class="sub-tab" onclick="switchSubTab(this,'trends')"><i class="fas fa-chart-line"></i> Trends</button>
-      </div>
-      <div id="subtab-attendance-detail" class="sub-panel active">
-        <div class="sheet-controls">
-          <button class="btn btn-secondary" onclick="exportYearlySheetExcel()">
-            <i class="fas fa-file-excel"></i> Export Excel
-          </button>
+      <div id="reports-cat-attendance" class="reports-cat-panel active">
+        <div class="sub-tabs">
+          <button class="sub-tab active" onclick="switchSubTab(this,'attendance-detail'); loadYearlySheet()"><i class="fas fa-table"></i> Attendance Sheet</button>
+          <button class="sub-tab" onclick="switchSubTab(this,'newcomers-report')"><i class="fas fa-user-plus"></i> New Comers</button>
+          <button class="sub-tab" onclick="switchSubTab(this,'serious-analysis')"><i class="fas fa-star"></i> Serious</button>
+          <button class="sub-tab" onclick="switchSubTab(this,'team-leaderboard')"><i class="fas fa-trophy"></i> Teams</button>
+          <button class="sub-tab" onclick="switchSubTab(this,'trends')"><i class="fas fa-chart-line"></i> Trends</button>
         </div>
-        <div id="yearly-sheet-wrap" class="attendance-sheet-wrap">
-          <div class="empty-state"><i class="fas fa-table"></i><p>Loading…</p></div>
-        </div>
-      </div>
-      <div id="subtab-newcomers-report" class="sub-panel"><div id="newcomers-report-content"></div></div>
-      <div id="subtab-serious-analysis" class="sub-panel"><div id="serious-analysis-content"></div></div>
-      <div id="subtab-team-leaderboard" class="sub-panel"><div id="team-leaderboard-content"></div></div>
-      <div id="subtab-trends" class="sub-panel">
-        <div class="chart-container"><canvas id="trends-chart"></canvas></div>
-      </div>
-    </div>
-
-    <!-- ═══ CALLING REPORTS CATEGORY ═══ -->
-    <div id="reports-cat-calling" class="reports-cat-panel">
-      <div class="sub-tabs">
-        <button class="sub-tab active" onclick="switchCallingRptSub(this,'weekly')"><i class="fas fa-chart-bar"></i> Weekly Report</button>
-        <button class="sub-tab" onclick="switchCallingRptSub(this,'submission')"><i class="fas fa-chart-line"></i> Submission Reports</button>
-      </div>
-      <div id="subtab-calling-weekly" class="sub-panel active">
-        <!-- Period + Session come from the master filter bar above. Just two
-             actions here: download current period's Excel + toggle accuracy view. -->
-        <div class="rpt-controls-row">
-          <div class="rpt-week-group">
-            <button class="btn btn-secondary" onclick="downloadCurrentReportExcel()" title="Download current period's Excel">
-              <i class="fas fa-file-excel"></i> Export
-            </button>
-            <button class="btn btn-secondary" onclick="downloadCompleteReportExcel()" title="Download complete FY history">
-              <i class="fas fa-download"></i> Export FY
+        <div id="subtab-attendance-detail" class="sub-panel active">
+          <div class="sheet-controls">
+            <button class="btn btn-secondary" onclick="exportYearlySheetExcel()">
+              <i class="fas fa-file-excel"></i> Export Excel
             </button>
           </div>
-          <div class="rpt-type-btns">
-            <button id="rpt-tab-accuracy" class="btn btn-secondary rpt-type-btn" onclick="switchReportType('accuracy',this)"><i class="fas fa-bullseye"></i> Attendance Accuracy</button>
+          <div id="yearly-sheet-wrap" class="attendance-sheet-wrap">
+            <div class="empty-state"><i class="fas fa-table"></i><p>Loading…</p></div>
           </div>
         </div>
-        <div id="calling-reports-content"></div>
-      </div>
-      <div id="subtab-calling-submission" class="sub-panel">
-        <div class="late-rpt-header">
-          <span class="late-rpt-info"><i class="fas fa-clock"></i> Calling submission times — current week + last 3 weeks</span>
-          <button class="btn btn-secondary" style="padding:.3rem .8rem;font-size:.8rem" onclick="loadLateReports()"><i class="fas fa-sync-alt"></i> Refresh</button>
+        <div id="subtab-newcomers-report" class="sub-panel"><div id="newcomers-report-content"></div></div>
+        <div id="subtab-serious-analysis" class="sub-panel"><div id="serious-analysis-content"></div></div>
+        <div id="subtab-team-leaderboard" class="sub-panel"><div id="team-leaderboard-content"></div></div>
+        <div id="subtab-trends" class="sub-panel">
+          <div class="chart-container"><canvas id="trends-chart"></canvas></div>
         </div>
-        <div id="calling-late-content"></div>
       </div>
     </div>
+
   </section>
+
+  <!-- ──────── TABS 4-7: ACTIVITY TABS (Books / Service / Registration / Donation) ────────
+       Each panel is built dynamically by ui-activities.js when first opened.
+       Structure inside each: [Log Entry sub-tab] | [Reports sub-tab]. -->
+  <section id="tab-books"        class="tab-panel"></section>
+  <section id="tab-service"      class="tab-panel"></section>
+  <section id="tab-registration" class="tab-panel"></section>
+  <section id="tab-donation"     class="tab-panel"></section>
 
   <!-- ──────── TAB 5: CARE ──────── -->
   <section id="tab-care" class="tab-panel">

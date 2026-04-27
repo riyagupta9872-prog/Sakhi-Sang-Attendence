@@ -172,13 +172,13 @@ async function loadAttendanceReport() {
   }
 }
 
-// ── CALLING REPORT → existing Reports tab ────────────
+// ── CALLING REPORT → Calling tab → Reports sub-tab ────
 function openCallingReport() {
-  switchTab('reports', document.querySelector('[data-tab="reports"]'));
+  switchTab('calling', document.querySelector('[data-tab="calling"]'));
   setTimeout(() => {
-    const callingBtn = document.querySelectorAll('#tab-reports .att-sub-tab')[1];
-    if (callingBtn && typeof switchReportsCategory === 'function') switchReportsCategory('calling', callingBtn);
-  }, 150);
+    const reportsBtn = document.querySelector('#tab-calling .att-sub-tab:nth-child(2)');
+    if (reportsBtn && typeof switchCallingSubTab === 'function') switchCallingSubTab(reportsBtn, 'reports');
+  }, 100);
 }
 
 // ── BOOK DISTRIBUTION ─────────────────────────────────
