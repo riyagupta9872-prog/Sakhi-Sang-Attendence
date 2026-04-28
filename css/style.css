@@ -1606,6 +1606,8 @@ thead .sh-freeze { z-index: 7; }
 }
 .report-table tr:last-child td { border-bottom: none; }
 .report-table tr:hover td { background: var(--gray-50); }
+/* Late-comers table: rows are pre-colored by lateness — keep that color on hover */
+.report-table.late-comers-table tr:hover td { background: inherit; filter: brightness(0.96); }
 
 .report-actions { margin-bottom: 1rem; }
 .section-subtitle {

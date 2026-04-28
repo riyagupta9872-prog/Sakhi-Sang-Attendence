@@ -48,6 +48,10 @@
       <div style="text-align:right;margin-top:-.4rem">
         <button type="button" class="forgot-link" onclick="doForgotPassword()">Forgot password?</button>
       </div>
+      <label style="display:flex;align-items:center;gap:.5rem;font-size:.83rem;color:var(--text-muted);margin-top:.5rem;cursor:pointer">
+        <input type="checkbox" id="login-as-service" style="cursor:pointer">
+        <span>Login as Attendance Service Devotee <small style="opacity:.75">(only Attendance tab)</small></span>
+      </label>
       <button type="submit" class="auth-btn"><i class="fas fa-sign-in-alt"></i> Login — Hare Krishna!</button>
     </form>
 
@@ -645,6 +649,7 @@
       <div id="reports-cat-attendance" class="reports-cat-panel active">
         <div class="sub-tabs">
           <button class="sub-tab active" onclick="switchSubTab(this,'attendance-detail'); loadYearlySheet()"><i class="fas fa-table"></i> Attendance Sheet</button>
+          <button class="sub-tab" onclick="switchSubTab(this,'late-comers'); loadLateComersReport()"><i class="fas fa-clock"></i> Late Comers</button>
           <button class="sub-tab" onclick="switchSubTab(this,'newcomers-report')"><i class="fas fa-user-plus"></i> New Comers</button>
           <button class="sub-tab" onclick="switchSubTab(this,'serious-analysis')"><i class="fas fa-star"></i> Serious</button>
           <button class="sub-tab" onclick="switchSubTab(this,'team-leaderboard')"><i class="fas fa-trophy"></i> Teams</button>
@@ -659,6 +664,9 @@
           <div id="yearly-sheet-wrap" class="attendance-sheet-wrap">
             <div class="empty-state"><i class="fas fa-table"></i><p>Loading…</p></div>
           </div>
+        </div>
+        <div id="subtab-late-comers" class="sub-panel">
+          <div id="late-comers-content"><div class="empty-state"><i class="fas fa-clock"></i><p>Loading…</p></div></div>
         </div>
         <div id="subtab-newcomers-report" class="sub-panel"><div id="newcomers-report-content"></div></div>
         <div id="subtab-serious-analysis" class="sub-panel"><div id="serious-analysis-content"></div></div>

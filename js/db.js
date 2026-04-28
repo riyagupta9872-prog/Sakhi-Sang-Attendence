@@ -295,7 +295,7 @@ const DB = {
       id: d.id, sessionDate: d.data().sessionDate,
       topic: d.data().topic || '', isCancelled: d.data().isCancelled || false,
     }));
-    if (!sessions.length) return { sessions: [], devotees: [], attMap: {}, csMap: {} };
+    if (!sessions.length) return { sessions: [], devotees: [], attMap: {}, attTimeMap: {}, csMap: {} };
     const devotees = await DevoteeCache.all();
     const sessionIds = sessions.map(s => s.id);
 
@@ -315,16 +315,21 @@ const DB = {
       callingDates.push(cd);
     });
 
-    const attMap = {}, csMap = {};
+    const attMap = {}, attTimeMap = {}, csMap = {};
 
-    // Attendance: keyed by Firestore sessionId (doc ID), unchanged.
+    // Attendance: keyed by Firestore sessionId (doc ID).
+    // attMap[sid] = Set of devoteeIds (existing behaviour, used for "did they attend")
+    // attTimeMap[sid][did] = ISO timestamp string (used for the new Time column)
     for (let i = 0; i < sessionIds.length; i += 10) {
       const batch = sessionIds.slice(i, i + 10);
       const aSnap = await fdb.collection('attendanceRecords').where('sessionId', 'in', batch).get();
       aSnap.docs.forEach(d => {
-        const { sessionId: sid, devoteeId: did } = d.data();
+        const data = d.data();
+        const sid = data.sessionId, did = data.devoteeId;
         if (!attMap[sid]) attMap[sid] = new Set();
         attMap[sid].add(did);
+        if (!attTimeMap[sid]) attTimeMap[sid] = {};
+        attTimeMap[sid][did] = tsToISO(data.markedAt);
       });
     }
 
@@ -349,7 +354,7 @@ const DB = {
         };
       });
     }
-    return { sessions, devotees, attMap, csMap };
+    return { sessions, devotees, attMap, attTimeMap, csMap };
   },
 
   async getSessionStats(sessionId) {
@@ -442,7 +447,7 @@ const DB = {
     const snap = await fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get();
     return snap.docs.map(d => {
       const dt = d.data();
-      return { id: d.id, name: dt.devoteeName, mobile: dt.mobile, chanting_rounds: dt.chantingRounds, team_name: dt.teamName, calling_by: dt.callingBy, is_new_devotee: dt.isNewDevotee ? 1 : 0, marked_at: tsToISO(dt.markedAt) };
+      return { id: d.id, devotee_id: dt.devoteeId, name: dt.devoteeName, mobile: dt.mobile, chanting_rounds: dt.chantingRounds, team_name: dt.teamName, calling_by: dt.callingBy, is_new_devotee: dt.isNewDevotee ? 1 : 0, marked_at: tsToISO(dt.markedAt) };
     }).sort((a, b) => (b.marked_at || '').localeCompare(a.marked_at || ''));
   },
 

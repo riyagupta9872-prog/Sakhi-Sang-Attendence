@@ -41,8 +41,12 @@ async function loadDashboard() {
     let sessionId   = AppState._currentSessionId || null;
     const today = getToday();
 
-    if (sessionDate && sessionDate > today) {
-      // Future session selected — snap to latest past session for the report.
+    if (sessionDate && sessionDate > today && !AppState._sessionExplicit) {
+      // Future session is the *default* (initSession defaults to upcoming Sunday).
+      // For the dashboard, snap to the latest past session so the user lands on
+      // a meaningful "last session report" by default. If the user explicitly
+      // picked a future session via the master filter, _sessionExplicit is set
+      // and we skip the snap so they see real-time data for the picked session.
       if (!AppState._autoSnap) {
         AppState._autoSnap = { from: sessionDate, fromDocId: sessionId, to: null };
       }
@@ -344,6 +348,7 @@ function loadReports() {
   if (!active) return;
   const id = active.id.replace('subtab-', '');
   if (id === 'attendance-detail') loadYearlySheet();
+  if (id === 'late-comers')       loadLateComersReport();
   if (id === 'serious-analysis')  loadSeriousAnalysis();
   if (id === 'team-leaderboard')  loadTeamLeaderboard();
   if (id === 'trends')            loadTrends();
@@ -1295,24 +1300,19 @@ function _fyRangeFor(dateStr) {
 async function loadYearlySheet() {
   const wrap = document.getElementById('yearly-sheet-wrap');
   if (!wrap) return;
-  // Period segment drives the date range. For Period=session a one-day range
-  // is meaningless on a yearly sheet, so fall back to the FY containing it.
+  // Period segment drives the date range. Single Session = just that one session;
+  // Month/Quarter/FY = the full range for aggregation.
   const r = _reportRange();
-  let start, end;
-  if (r.period === 'session') {
-    ({ start, end } = _fyRangeFor(r.start));
-  } else {
-    start = r.start; end = r.end;
-  }
+  const start = r.start, end = r.end;
   const teamFilter = getFilterTeam();
   wrap.innerHTML = '<div class="loading" style="padding:2rem"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
-    const { sessions, devotees, attMap, csMap } = await DB.getSheetData(start, end);
+    const { sessions, devotees, attMap, attTimeMap, csMap } = await DB.getSheetData(start, end);
     if (!sessions.length) {
-      wrap.innerHTML = `<div class="empty-state"><i class="fas fa-table"></i><p>No sessions in this ${r.period === 'session' ? 'FY' : r.period} for ${teamFilter || 'any team'}</p></div>`;
+      wrap.innerHTML = `<div class="empty-state"><i class="fas fa-table"></i><p>No sessions in this ${r.period} for ${teamFilter || 'any team'}</p></div>`;
       return;
     }
-    wrap.innerHTML = buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter);
+    wrap.innerHTML = buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter, attTimeMap);
   } catch (e) {
     console.error('loadYearlySheet', e);
     wrap.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
@@ -2269,6 +2269,139 @@ async function saveTargetMgmt() {
   } catch (e) {
     showToast('Failed to save: ' + (e.message || 'Error'), 'error');
   }
+}
+
+// ══ LATE COMERS REPORT ════════════════════════════════════════
+// Lists devotees who arrived AFTER 12:45 PM for the selected session.
+// Yellow rows = 12:45–13:00, Red rows = after 13:00.
+// Filter chips: All Present / On Time / Late / Very Late.
+
+let _lateFilter = 'all';      // 'all' | 'ontime' | 'late' | 'verylate'
+let _lateDataCache = null;    // last fetched present devotees with timestamps
+
+async function loadLateComersReport() {
+  const wrap = document.getElementById('late-comers-content');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+
+  try {
+    const sessionDate = (typeof getFilterSessionId === 'function') ? getFilterSessionId() : null;
+    let sessionId = AppState._currentSessionId || null;
+
+    if (!sessionId && sessionDate) {
+      const snap = await fdb.collection('sessions').where('sessionDate', '==', sessionDate).limit(1).get();
+      if (!snap.empty) sessionId = snap.docs[0].id;
+    }
+    if (!sessionId) {
+      wrap.innerHTML = '<div class="empty-state"><i class="fas fa-info-circle"></i><p>No session selected. Pick a session from the Session filter at the top.</p></div>';
+      return;
+    }
+
+    // Reuse the existing "session attendance with timestamps" DB call
+    const records = await DB.getSessionAttendance(sessionId);
+
+    const teamFilter = (typeof getFilterTeam === 'function') ? getFilterTeam() : '';
+    const filtered = teamFilter ? records.filter(r => r.team_name === teamFilter) : records;
+
+    _lateDataCache = filtered;
+    _renderLateComers();
+  } catch (e) {
+    console.error('loadLateComersReport', e);
+    wrap.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load: ' + (e.message || 'Error') + '</p></div>';
+  }
+}
+
+function _bucketByLateness(records) {
+  // Returns indexes by bucket.
+  const out = { ontime: [], late: [], verylate: [] };
+  records.forEach(r => {
+    if (!r.marked_at) { out.ontime.push(r); return; }
+    const d = new Date(r.marked_at);
+    const mins = d.getHours() * 60 + d.getMinutes();
+    if (mins >= 13 * 60) out.verylate.push(r);
+    else if (mins >= 12 * 60 + 45) out.late.push(r);
+    else out.ontime.push(r);
+  });
+  return out;
+}
+
+function setLateFilter(key) {
+  _lateFilter = key;
+  _renderLateComers();
+}
+
+function _renderLateComers() {
+  const wrap = document.getElementById('late-comers-content');
+  if (!wrap || !_lateDataCache) return;
+  const all = _lateDataCache;
+  const buckets = _bucketByLateness(all);
+
+  const chips = [
+    { key: 'all',      label: 'All Present', count: all.length, color: '#1A5C3A' },
+    { key: 'ontime',   label: 'On Time',     count: buckets.ontime.length,   color: '#16a34a' },
+    { key: 'late',     label: 'Late (12:45–1:00)', count: buckets.late.length, color: '#ea580c' },
+    { key: 'verylate', label: 'Very Late (after 1:00)', count: buckets.verylate.length, color: '#dc2626' },
+  ];
+  const chipsHtml = chips.map(c => {
+    const active = c.key === _lateFilter;
+    return `<button onclick="setLateFilter('${c.key}')"
+      style="border:1px solid ${active ? c.color : 'var(--color-border)'};
+             background:${active ? c.color : '#fff'};
+             color:${active ? '#fff' : c.color};
+             padding:.25rem .7rem;border-radius:9999px;font-size:.78rem;font-weight:600;cursor:pointer">
+      ${c.label} <span style="opacity:.85;font-weight:700">${c.count}</span>
+    </button>`;
+  }).join(' ');
+
+  let rows = _lateFilter === 'all' ? all
+           : _lateFilter === 'ontime' ? buckets.ontime
+           : _lateFilter === 'late' ? buckets.late
+           : buckets.verylate;
+  // Sort by marked_at ascending (earliest first)
+  rows = [...rows].sort((a, b) => (a.marked_at || '').localeCompare(b.marked_at || ''));
+
+  const fmtTime = (iso) => {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  };
+
+  const tableHtml = !rows.length
+    ? '<div class="empty-state"><i class="fas fa-check-circle" style="color:#16a34a"></i><p>No devotees in this category</p></div>'
+    : `<div style="overflow-x:auto"><table class="report-table late-comers-table" style="width:100%;font-size:.85rem">
+        <thead><tr style="background:var(--color-primary,#1A5C3A);color:#fff">
+          <th style="padding:.5rem .6rem;text-align:left">#</th>
+          <th style="padding:.5rem .6rem;text-align:left">Name</th>
+          <th style="padding:.5rem .6rem;text-align:left">Mobile</th>
+          <th style="padding:.5rem .6rem;text-align:left">Team</th>
+          <th style="padding:.5rem .6rem;text-align:left">Calling By</th>
+          <th style="padding:.5rem .6rem;text-align:center">CR</th>
+          <th style="padding:.5rem .6rem;text-align:center">Time</th>
+        </tr></thead>
+        <tbody>
+        ${rows.map((r, i) => {
+          const ts = (typeof attTimeStyle === 'function') ? attTimeStyle(r.marked_at) : { card: '' };
+          return `<tr style="${ts.card};border-bottom:1px solid var(--color-border)">
+            <td style="padding:.4rem .6rem">${i + 1}</td>
+            <td style="padding:.4rem .6rem;font-weight:600;cursor:pointer;color:${ts.card.includes('color:#fff') ? '#fff' : 'var(--color-primary)'}" onclick="openProfileModal('${r.devotee_id || ''}')">${r.name || '—'}</td>
+            <td style="padding:.4rem .6rem">${r.mobile || '—'}</td>
+            <td style="padding:.4rem .6rem">${r.team_name || ''}</td>
+            <td style="padding:.4rem .6rem">${r.calling_by || ''}</td>
+            <td style="padding:.4rem .6rem;text-align:center">${r.chanting_rounds || 0}</td>
+            <td style="padding:.4rem .6rem;text-align:center;font-weight:700">${fmtTime(r.marked_at)}</td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table></div>`;
+
+  wrap.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.8rem;align-items:center">
+      ${chipsHtml}
+      <span style="margin-left:auto;font-size:.78rem;color:var(--text-muted)">
+        Yellow = late · Red = very late
+      </span>
+    </div>
+    ${tableHtml}
+  `;
 }
 
 // ══ PERSONAL MEETINGS ══════════════════════════════════════════

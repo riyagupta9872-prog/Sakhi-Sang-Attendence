@@ -98,12 +98,15 @@ function buildSimpleRoster(devotees, teamFilter) {
 }
 
 // Full CS+AT grid (Reports → Yearly Sheet tab)
-function buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
+function buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter, attTimeMap) {
   let rows = [...devotees];
   if (teamFilter) rows = rows.filter(d => d.teamName === teamFilter);
-  // Sort strictly A → Z by name (team filter narrows the set, but the list
-  // itself is alphabetical so it's easy to scan).
   rows.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  // Per-session columns: CS | AT | Time (3 cols). When attTimeMap is missing
+  // (legacy callers), fall back to 2 cols (CS | AT) so older code paths still work.
+  const showTime = !!attTimeMap;
+  const sessSpan = showTime ? 3 : 2;
 
   let h1 = `<th rowspan="2" class="sh-header sh-sno sh-freeze sh-f0">Sno</th>
     <th rowspan="2" class="sh-header sh-name sh-freeze sh-f1">Name</th>
@@ -118,7 +121,7 @@ function buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
     const dateLabel = sheetFmtDate(s.sessionDate);
     const topicLine = s.topic ? `<small>${s.topic.length > 18 ? s.topic.slice(0, 18) + '…' : s.topic}</small>` : '';
     const cancelLine = s.isCancelled ? `<small>CANCELLED</small>` : '';
-    h1 += `<th colspan="2" class="${cls}">${dateLabel}${topicLine}${cancelLine}</th>`;
+    h1 += `<th colspan="${sessSpan}" class="${cls}">${dateLabel}${topicLine}${cancelLine}</th>`;
   });
   h1 += `<th rowspan="2" class="sh-header sh-total">TOTAL</th>`;
 
@@ -127,7 +130,13 @@ function buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
     const sat = sheetFmtShort(shiftDateDay(s.sessionDate, -1));
     const sun = sheetFmtShort(s.sessionDate);
     h2 += `<th class="sh-sub-header">CS<small>${sat}</small></th><th class="sh-sub-header">AT<small>${sun}</small></th>`;
+    if (showTime) h2 += `<th class="sh-sub-header">Time</th>`;
   });
+
+  const fmtTime = iso => {
+    if (!iso) return '';
+    return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  };
 
   const bodyRows = rows.map((d, i) => {
     const isActive = d.isActive !== false;
@@ -141,16 +150,21 @@ function buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
       <td class="sh-cell">${d.callingBy || ''}</td>`;
     sessions.forEach(s => {
       if (s.isCancelled) {
-        cells += `<td colspan="2" class="sh-cell sh-cancelled-cell sh-center">—</td>`;
+        cells += `<td colspan="${sessSpan}" class="sh-cell sh-cancelled-cell sh-center">—</td>`;
       } else {
         const cs = csMap[s.sessionDate]?.[d.id] || null;
         const at = attMap[s.id]?.has(d.id) || false;
+        const markedAtISO = showTime ? (attTimeMap[s.id]?.[d.id] || null) : null;
         const label = csLabel(cs);
         const safeTitle = label.replace(/"/g, '&quot;');
-        // Keep newlines from csLabel so notes appear on a second visual line
         const html = label.replace(/\n/g, '<br>');
         cells += `<td class="sh-cell sh-cs-cell" style="${csColor(cs)}" title="${safeTitle}">${html}</td>`;
         cells += `<td class="sh-cell sh-center" style="${at ? 'background:#a5d6a7;font-weight:700' : ''}">${at ? 'P' : ''}</td>`;
+        if (showTime) {
+          // Style the Time cell using the existing late-arrival color scale
+          const tStyle = (typeof attTimeStyle === 'function' && markedAtISO) ? attTimeStyle(markedAtISO).card : '';
+          cells += `<td class="sh-cell sh-center" style="${tStyle};font-size:.7rem;white-space:nowrap">${fmtTime(markedAtISO)}</td>`;
+        }
       }
     });
     const total = d.lifetimeAttendance || 0;

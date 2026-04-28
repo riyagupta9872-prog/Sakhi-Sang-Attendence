@@ -100,8 +100,11 @@ function dispatchFilters(patch) {
     }
   }
   if (patch.team !== undefined) {
-    // Team-locked roles cannot change away from their assigned team.
-    if (AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam) {
+    // Team-locked roles cannot change away from their assigned team — EXCEPT on
+    // the Devotees tab, where every admin browses all teams' data. Reports and
+    // logging tabs stay team-scoped for teamAdmin.
+    const onDevoteesTab = AppState.currentTab === 'devotees';
+    if (AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam && !onDevoteesTab) {
       f.team = AppState.userTeam;
     } else {
       f.team = patch.team || '';

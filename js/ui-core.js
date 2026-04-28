@@ -43,6 +43,20 @@ auth.onAuthStateChanged(async (user) => {
     AppState.userPosition = ud.position   || null;
     AppState.userName     = ud.name       || user.email;
     AppState.profilePic   = ud.profilePic || null;
+    // "Login as Attendance Service Devotee" — when checked at login, override
+    // role to serviceDevotee for THIS session only (the user's actual role in
+    // Firestore is unchanged). They'll only see the Attendance tab. Stored in
+    // sessionStorage so refresh keeps the mode until they log out.
+    const loginAsService =
+      sessionStorage.getItem('loginAsService') === 'true' ||
+      document.getElementById('login-as-service')?.checked;
+    if (loginAsService) {
+      sessionStorage.setItem('loginAsService', 'true');
+      AppState._actualRole = AppState.userRole;
+      AppState.userRole = 'serviceDevotee';
+    } else {
+      sessionStorage.removeItem('loginAsService');
+    }
     hideAuthScreen();
     hidePendingApprovalScreen();
     applyRoleUI();
@@ -173,6 +187,9 @@ async function doForgotPassword() {
 
 async function doLogout() {
   if (!confirm('Log out?')) return;
+  // Clear the "Login as Attendance Service Devotee" mode so a normal next
+  // login goes back to the user's actual role.
+  sessionStorage.removeItem('loginAsService');
   await auth.signOut();
 }
 
@@ -751,17 +768,20 @@ function applyRoleUI() {
     el.style.display = role === 'superAdmin' ? '' : 'none';
   });
 
+  // serviceDevotee = "Attendance Service Devotee" — only sees the Attendance tab
+  // so they can mark their own attendance. All admins (super + team) see Devotees
+  // tab with unrestricted team access; everything else is team-scoped for teamAdmin.
   const tabs = {
-    dashboard:    ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    devotees:     ['superAdmin'],
-    calling:      ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    dashboard:    ['superAdmin', 'teamAdmin'],
+    devotees:     ['superAdmin', 'teamAdmin'],
+    calling:      ['superAdmin', 'teamAdmin'],
     attendance:   ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    books:        ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    service:      ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    registration: ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    donation:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    care:         ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    events:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    books:        ['superAdmin', 'teamAdmin'],
+    service:      ['superAdmin', 'teamAdmin'],
+    registration: ['superAdmin', 'teamAdmin'],
+    donation:     ['superAdmin', 'teamAdmin'],
+    care:         ['superAdmin', 'teamAdmin'],
+    events:       ['superAdmin', 'teamAdmin'],
     'calling-mgmt': ['superAdmin'],
   };
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -1035,7 +1055,8 @@ function _frToggle(event, chip) {
   if (event?.target?.closest('.fr-chip-clear')) return;
   // Locked team chip (non-superAdmin) is non-interactive
   if (chip === 'team') {
-    const isLocked = AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam;
+    // teamAdmin is locked everywhere EXCEPT the Devotees tab (where they can browse all teams).
+  const isLocked = AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam && AppState.currentTab !== 'devotees';
     if (isLocked) return;
   }
   const dd = document.getElementById('fr-dropdown-' + chip);
@@ -1074,6 +1095,9 @@ function _frPickSession(dateStr, docId) {
   // (the auto-snap memory was for restoring the original future session on
   // Live views; user's explicit pick replaces that intent).
   AppState._autoSnap = null;
+  // Mark this as an explicit user pick so the Dashboard does NOT auto-snap
+  // to the latest past session even if this session is in the future.
+  AppState._sessionExplicit = true;
   if (!dateStr) {
     dispatchFilters({ sessionId: null, _sessionDocId: null });
   } else {
@@ -1197,7 +1221,8 @@ function _mfbUpdateCaption() {
 // Inactive: grey outline, hides the ✕ button.
 function _frRefreshChips() {
   const f = AppState.filters || {};
-  const isLocked = AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam;
+  // teamAdmin is locked everywhere EXCEPT the Devotees tab (where they can browse all teams).
+  const isLocked = AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam && AppState.currentTab !== 'devotees';
 
   // Session chip
   const sChip = document.getElementById('fr-chip-session');
@@ -1266,7 +1291,8 @@ function _frClearBy(e) {
   dispatchFilters({ callingBy: '' });
 }
 function _frClearAll() {
-  const isLocked = AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam;
+  // teamAdmin is locked everywhere EXCEPT the Devotees tab (where they can browse all teams).
+  const isLocked = AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam && AppState.currentTab !== 'devotees';
   const patch = { callingBy: '' };
   if (!isLocked) patch.team = '';
   dispatchFilters(patch);
@@ -1578,6 +1604,14 @@ function switchTab(tab, btn) {
   if (btn) btn.classList.add('active');
   else document.querySelector(`.tab-btn[data-tab="${tab}"]`)?.classList.add('active');
   AppState.currentTab = tab;
+  // When teamAdmin leaves Devotees tab onto a team-scoped tab, snap the master
+  // Team filter back to their own team (Devotees is the only place they roam).
+  if (AppState.userRole === 'teamAdmin' && AppState.userTeam && tab !== 'devotees'
+      && AppState.filters && AppState.filters.team !== AppState.userTeam) {
+    AppState.filters.team = AppState.userTeam;
+  }
+  // Refresh the team-chip lock UI now that currentTab changed (lock toggles on Devotees tab).
+  if (typeof _frRefreshChips === 'function') _frRefreshChips();
   // Hide the Session chip on tabs where it isn't applicable (activity tabs use
   // their own From/To pickers, not the session anchor). Keeps the ribbon honest.
   const sessionChipWrap = document.getElementById('fr-chip-session')?.closest('.fr-chip-wrap');
@@ -1627,6 +1661,7 @@ const TAB_VIEWS = {
     { key: 'live',      label: 'Live Attendance',  icon: 'fa-check-circle' },
     { divider: true, label: 'REPORTS' },
     { key: 'sheet',     label: 'Attendance Sheet', icon: 'fa-table' },
+    { key: 'late',      label: 'Late Comers',      icon: 'fa-clock' },
     { key: 'newcomers', label: 'New Comers',       icon: 'fa-user-plus' },
     { key: 'serious',   label: 'Serious Analysis', icon: 'fa-star' },
     { key: 'teams',     label: 'Team Leaderboard', icon: 'fa-trophy' },
@@ -1856,6 +1891,7 @@ async function applyTabView(tab, view) {
       if (reportsBtn) switchAttSubTab(reportsBtn, 'reports');
       const subId = ({
         sheet:     'attendance-detail',
+        late:      'late-comers',
         newcomers: 'newcomers-report',
         serious:   'serious-analysis',
         teams:     'team-leaderboard',
@@ -1865,6 +1901,7 @@ async function applyTabView(tab, view) {
         const innerBtn = document.querySelector(`#att-panel-reports .sub-tab[onclick*="'${subId}'"]`);
         if (innerBtn) switchSubTab(innerBtn, subId);
         if (subId === 'attendance-detail' && typeof loadYearlySheet === 'function') loadYearlySheet();
+        if (subId === 'late-comers'      && typeof loadLateComersReport === 'function') loadLateComersReport();
       }
     }
   } else if (['books','service','registration','donation'].includes(tab)) {
