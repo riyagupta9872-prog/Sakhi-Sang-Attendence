@@ -475,6 +475,17 @@ const DB = {
     }
   },
 
+  /* ATTENDANCE TARGETS */
+  async getAttendanceTargets() {
+    const doc = await fdb.collection('settings').doc('attendanceTargets').get();
+    return doc.exists ? doc.data() : { type: 'class', teams: {} };
+  },
+  async setAttendanceTargets(type, teams, global = 0) {
+    await fdb.collection('settings').doc('attendanceTargets').set({
+      type, teams, global, updatedAt: TS(), updatedBy: AppState.userName
+    });
+  },
+
   /* CALLING */
   async getCallingStatus(weekDate) {
     const [raw, csSnap, cfgSnap] = await Promise.all([

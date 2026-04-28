@@ -6,47 +6,66 @@
 // registrations, donations) for the selected Session in the filter ribbon.
 // All KPIs and grid cells respect the master Team chip — locking to one team
 // shows just that team's row + KPIs for that team's data.
+// Generation counter: each call gets a unique ID. Before writing to DOM,
+// a call checks if it's still the latest — if not, a newer call superseded it.
+let _dashGen = 0;
+
 async function loadDashboard() {
+  const gen = ++_dashGen;
   const el = document.getElementById('dashboard-content');
   if (!el) return;
 
-  // Dashboard is a historical performance report — if the master Session is
-  // currently set to a future Sunday (initSession picks the upcoming class
-  // for the live-attendance workflow), snap to the most recent past session
-  // so the grid actually has data to show. _maybeRestoreLiveSession in the
-  // navigation flow will restore the future session when the user opens a
-  // Live view (Mark Attendance / Calls), so they don't get stuck on past.
-  if (typeof _ensureReportSession === 'function') {
-    const snapped = await _ensureReportSession();
-    // If we snapped, the resulting filtersChanged event will re-call us with
-    // the new past session — bail out of this run to avoid double-fetching.
-    if (snapped) return;
-  }
-
   el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
 
-  // Hard timeout: if any single fetch can't resolve in 10s, don't leave the
-  // user staring at a spinner. Race the entire load against this timeout.
-  const TIMEOUT_MS = 10000;
-  let timedOut = false;
-  const timeoutPromise = new Promise(resolve => setTimeout(() => { timedOut = true; resolve('TIMEOUT'); }, TIMEOUT_MS));
+  // Per-query timeout of 8s so a hung Firestore call doesn't block forever.
+  // safeQuery returns the fallback value on timeout/error — the dashboard
+  // renders with whatever data arrived. The timedOut throw is intentionally
+  // removed: it reset KPIs to "—" even when safeQuery had already recovered.
+  const TIMEOUT_MS = 8000;
+  const timeoutPromise = new Promise(resolve => setTimeout(() => resolve('TIMEOUT'), TIMEOUT_MS));
 
   // Wraps a query with timeout + catch so a single bad call can't hang loadDashboard.
   const safeQuery = (p, fallback) => Promise.race([p.catch(() => fallback), timeoutPromise.then(() => fallback)]);
 
   try {
-    // Anchor on the master Session — fall back to most recent past session.
+    // Resolve which session to show.
+    // - If the filter points to a PAST session → use it directly.
+    // - If the filter points to a FUTURE session (initSession's live default) →
+    //   snap to the most recent past session inline, WITHOUT firing dispatchFilters.
+    //   This avoids a recursive second call and the race condition that caused
+    //   the KPI tiles to show "—" until the user manually clicked Refresh.
+    //   We still record _autoSnap so _maybeRestoreLiveSession can restore the
+    //   future session when the user navigates to a live view.
+    // - If nothing is selected at all → fall back to most recent past session.
     let sessionDate = (typeof getFilterSessionId === 'function') ? getFilterSessionId() : null;
-    let sessionId   = null;
+    let sessionId   = AppState._currentSessionId || null;
     const today = getToday();
-    if (sessionDate) {
+
+    if (sessionDate && sessionDate > today) {
+      // Future session selected — snap to latest past session for the report.
+      if (!AppState._autoSnap) {
+        AppState._autoSnap = { from: sessionDate, fromDocId: sessionId, to: null };
+      }
+      const sn = await safeQuery(
+        fdb.collection('sessions').where('sessionDate', '<=', today).orderBy('sessionDate', 'desc').limit(1).get(),
+        null
+      );
+      if (sn && !sn.empty) {
+        sessionDate = sn.docs[0].data().sessionDate;
+        sessionId   = sn.docs[0].id;
+        AppState._autoSnap.to = sessionDate;
+      } else {
+        sessionDate = null; sessionId = null;
+      }
+    } else if (!sessionId && sessionDate) {
+      // Have a date but no doc ID yet — look it up once.
       const sn = await safeQuery(
         fdb.collection('sessions').where('sessionDate', '==', sessionDate).limit(1).get(),
         null
       );
       if (sn && !sn.empty) sessionId = sn.docs[0].id;
-    }
-    if (!sessionId) {
+    } else if (!sessionId && !sessionDate) {
+      // Nothing selected — default to most recent past session.
       const sn = await safeQuery(
         fdb.collection('sessions').where('sessionDate', '<=', today).orderBy('sessionDate', 'desc').limit(1).get(),
         null
@@ -56,7 +75,6 @@ async function loadDashboard() {
         sessionId   = sn.docs[0].id;
       }
     }
-    if (timedOut) throw new Error('Connection too slow — try refreshing');
 
     // Calling date (Saturday) for callingStatus lookup.
     let callingDate = '';
@@ -83,7 +101,7 @@ async function loadDashboard() {
 
     // Every fetch wrapped via safeQuery (timeout + catch fallback), so one
     // failing/hung query never blocks the rest of the Dashboard from rendering.
-    const [allDevotees, csSnap, atSnap, books, services, regs, donations] = await Promise.all([
+    const [allDevotees, csSnap, atSnap, books, services, regs, donations, targetCfg] = await Promise.all([
       safeQuery(DevoteeCache.all(), []),
       callingDate
         ? safeQuery(fdb.collection('callingStatus').where('weekDate', '==', callingDate).get(), { docs: [] })
@@ -95,8 +113,11 @@ async function loadDashboard() {
       safeQuery(DB.getServices(         { startDate: activityStart, endDate: activityEnd }), []),
       safeQuery(DB.getRegistrations(    { startDate: activityStart, endDate: activityEnd }), []),
       safeQuery(DB.getDonations(        { startDate: activityStart, endDate: activityEnd }), []),
+      safeQuery(DB.getAttendanceTargets(), { type: 'class', teams: {} }),
     ]);
-    if (timedOut) throw new Error('Connection too slow — try refreshing');
+
+    // Bail if a newer loadDashboard() call has already started.
+    if (gen !== _dashGen) return;
 
     // Maps
     const csByDevotee = {};
@@ -113,7 +134,6 @@ async function loadDashboard() {
     const donationByTeam = {}; donations.forEach(d => { donationByTeam[d.teamName] = (donationByTeam[d.teamName] || 0) + (parseFloat(d.amount) || 0); });
 
     // Per-team aggregation
-    const TARGET_PER_TEAM = 11;
     const rows = teamsToShow.map(team => {
       const members = allDevotees.filter(d =>
         d.teamName === team
@@ -122,10 +142,15 @@ async function loadDashboard() {
         && d.callingMode !== 'not_interested'
         && d.callingMode !== 'online'
       );
-      const called   = members.filter(d => d.callingBy && d.callingBy.trim());
-      const coming   = called.filter(d => csByDevotee[d.id]?.comingStatus === 'Yes');
+      // "called" = devotees who have a callingStatus record for this week (actually called)
+      // NOT devotees.callingBy which is a static profile assignment, not a weekly action.
+      const called   = members.filter(d => csByDevotee[d.id]);
+      const coming   = members.filter(d => csByDevotee[d.id]?.comingStatus === 'Yes');
       const attended = members.filter(d => presentSet.has(d.id));
-      const target   = TARGET_PER_TEAM;
+      // Per-team target → global default → member count
+      const target   = (targetCfg.teams && targetCfg.teams[team] > 0)
+        ? targetCfg.teams[team]
+        : (targetCfg.global > 0 ? targetCfg.global : members.length);
       const pct      = target > 0 ? Math.round((attended.length / target) * 100) : 0;
       return {
         team,
@@ -183,7 +208,7 @@ async function loadDashboard() {
     if (filterTeam) subParts.push(`<i class="fas fa-users" style="font-size:.7rem"></i> ${filterTeam}`);
     const greetSub = document.getElementById('dash-greet-sub');
     if (greetSub) greetSub.innerHTML = subParts.join(' &nbsp;·&nbsp; ');
-    _setText('dash-grid-sub', `${filterTeam ? filterTeam + ' only' : 'All teams'} · last completed session for attendance, last 30 days for activities`);
+    _setText('dash-grid-sub', '');
 
     function pctCls(p) { return p >= 80 ? 'dt-pct-good' : p >= 50 ? 'dt-pct-mid' : 'dt-pct-low'; }
 
@@ -239,9 +264,9 @@ async function loadDashboard() {
 
     AppState._dashboard = { rows, sessionId, sessionDate, callingDate, csByDevotee, presentSet, allDevotees };
   } catch (e) {
+    if (gen !== _dashGen) return;
     console.error('loadDashboard', e);
-    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load dashboard</p></div>';
-    ['kpi-attended','kpi-accuracy','kpi-books','kpi-service','kpi-reg','kpi-donation'].forEach(id => _setText(id, '—'));
+    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load dashboard — <button onclick="loadDashboard()" style="text-decoration:underline;background:none;border:none;cursor:pointer;color:inherit">Retry</button></p></div>';
   }
 }
 
@@ -2100,5 +2125,148 @@ async function doBulkApply() {
   } catch (e) {
     console.error(e);
     showToast('Bulk action failed: ' + (e.message || 'Error'), 'error');
+  }
+}
+
+// ══ TARGET MANAGEMENT ═══════════════════════════════════
+
+async function openTargetMgmt() {
+  openModal('target-mgmt-modal');
+  await _loadTargetMgmtBody();
+}
+
+async function _loadTargetMgmtBody() {
+  const body = document.getElementById('target-mgmt-body');
+  body.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  try {
+    const [cfg, devotees] = await Promise.all([
+      DB.getAttendanceTargets(),
+      DevoteeCache.all(),
+    ]);
+    const type = cfg.type || 'class';
+    const saved = cfg.teams || {};
+
+    // Count active callable members per team for placeholder hints
+    const memberCount = {};
+    TEAMS.forEach(t => {
+      memberCount[t] = devotees.filter(d =>
+        d.teamName === t && d.isActive !== false && !d.isNotInterested
+        && d.callingMode !== 'not_interested' && d.callingMode !== 'online'
+      ).length;
+    });
+
+    const globalVal = cfg.global > 0 ? cfg.global : '';
+    body.innerHTML = `
+      <div style="margin-bottom:1rem">
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:.75rem">
+          Set the attendance target for each team. The dashboard uses this as the denominator for the <strong>%</strong> column.
+        </p>
+        <div style="display:flex;gap:1rem;margin-bottom:1.25rem;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;font-size:.88rem">
+            <input type="radio" name="target-type" value="class" ${type === 'class' ? 'checked' : ''}> Class Target
+            <span style="font-size:.75rem;color:var(--text-muted)">(per session)</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;font-size:.88rem">
+            <input type="radio" name="target-type" value="monthly" ${type === 'monthly' ? 'checked' : ''}> Monthly Target
+          </label>
+        </div>
+        <div style="display:flex;align-items:center;gap:.6rem;padding:.6rem .75rem;background:var(--color-bg-subtle,#f5f7f5);border-radius:var(--radius-sm);margin-bottom:.75rem">
+          <label style="font-size:.85rem;font-weight:600;white-space:nowrap">Default for all teams:</label>
+          <input type="number" id="tgt-global" value="${globalVal}" placeholder="e.g. 11" min="0" max="9999"
+            style="width:80px;text-align:center;padding:.3rem .5rem;border:1px solid var(--color-border);border-radius:var(--radius-xs);font-size:.88rem">
+          <button type="button" onclick="_applyGlobalTarget()"
+            style="padding:.3rem .75rem;font-size:.82rem;background:var(--color-primary);color:#fff;border:none;border-radius:var(--radius-xs);cursor:pointer">
+            Apply to all
+          </button>
+          <span style="font-size:.75rem;color:var(--text-muted)">Used when a team has no specific target</span>
+        </div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:.88rem">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:.4rem .5rem;border-bottom:1px solid var(--color-border);color:var(--text-muted);font-weight:600">Team</th>
+            <th style="text-align:center;padding:.4rem .5rem;border-bottom:1px solid var(--color-border);color:var(--text-muted);font-weight:600">Members</th>
+            <th style="text-align:center;padding:.4rem .5rem;border-bottom:1px solid var(--color-border);color:var(--text-muted);font-weight:600">Target</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${TEAMS.map(team => `
+            <tr>
+              <td style="padding:.45rem .5rem;font-weight:500">${team}</td>
+              <td style="text-align:center;padding:.45rem .5rem;color:var(--text-muted)">${memberCount[team] || 0}</td>
+              <td style="text-align:center;padding:.45rem .5rem">
+                <input type="number" id="tgt-${team.replace(/\s+/g,'_')}"
+                  value="${saved[team] ?? ''}"
+                  placeholder="${memberCount[team] || ''}"
+                  min="0" max="999"
+                  style="width:70px;text-align:center;padding:.3rem .4rem;border:1px solid var(--color-border);border-radius:var(--radius-xs);font-size:.88rem">
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      <p style="font-size:.75rem;color:var(--text-muted);margin-top:.75rem">
+        Leave blank to use the default target (or member count if no default).
+      </p>`;
+  } catch (e) {
+    document.getElementById('target-mgmt-body').innerHTML =
+      '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load targets</p></div>';
+  }
+}
+
+function _applyGlobalTarget() {
+  const g = parseInt(document.getElementById('tgt-global')?.value, 10);
+  if (!g || g <= 0) return;
+  TEAMS.forEach(team => {
+    const input = document.getElementById('tgt-' + team.replace(/\s+/g, '_'));
+    if (input) input.value = g;
+  });
+}
+
+// ══ MONTHLY REPORTS ══════════════════════════════════
+
+function openMonthlyReports() {
+  const el = document.getElementById('monthly-report-month');
+  if (el && !el.value) {
+    const now = new Date();
+    el.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  }
+  openModal('monthly-reports-modal');
+}
+
+function openFYReports() {
+  const sel = document.getElementById('fy-report-year');
+  if (sel && !sel.options.length) {
+    const now = new Date();
+    const currentFY = (now.getMonth() + 1) >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+    for (let y = currentFY; y >= currentFY - 4; y--) {
+      const opt = document.createElement('option');
+      opt.value = y;
+      opt.textContent = `FY ${y}–${String(y + 1).slice(-2)}  (Apr ${y} – Mar ${y + 1})`;
+      sel.appendChild(opt);
+    }
+  }
+  openModal('fy-reports-modal');
+}
+
+async function saveTargetMgmt() {
+  const typeEl = document.querySelector('input[name="target-type"]:checked');
+  if (!typeEl) return;
+  const type = typeEl.value;
+  const globalVal = parseInt(document.getElementById('tgt-global')?.value, 10);
+  const global = (!isNaN(globalVal) && globalVal > 0) ? globalVal : 0;
+  const teams = {};
+  TEAMS.forEach(team => {
+    const input = document.getElementById('tgt-' + team.replace(/\s+/g, '_'));
+    const val = input ? parseInt(input.value, 10) : NaN;
+    if (!isNaN(val) && val > 0) teams[team] = val;
+  });
+  try {
+    await DB.setAttendanceTargets(type, teams, global);
+    showToast('Targets saved!', 'success');
+    closeModal('target-mgmt-modal');
+    loadDashboard();
+  } catch (e) {
+    showToast('Failed to save: ' + (e.message || 'Error'), 'error');
   }
 }

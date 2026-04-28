@@ -69,9 +69,9 @@ function buildSimpleRoster(devotees, teamFilter) {
       teamRow = `<tr style="background:#e8f5e9"><td colspan="9" style="font-weight:700;color:var(--primary);padding:.3rem .6rem;font-size:.82rem">${currentTeam || '—'}</td></tr>`;
     }
     return teamRow + `<tr style="${isActive ? 'background:#fffde7' : 'background:#ffebee'}">
-      <td class="sh-cell sh-center sh-sno">${i + 1}</td>
-      <td class="sh-cell sh-name">${d.name}</td>
-      <td class="sh-cell sh-center">${d.mobile || '—'}</td>
+      <td class="sh-cell sh-center sh-sno sh-freeze sh-f0">${i + 1}</td>
+      <td class="sh-cell sh-name sh-freeze sh-f1">${d.name}</td>
+      <td class="sh-cell sh-center sh-freeze sh-f2">${d.mobile || '—'}</td>
       <td class="sh-cell">${d.referenceBy || ''}</td>
       <td class="sh-cell sh-center">${d.chantingRounds || 0}</td>
       <td class="sh-cell sh-center">${isActive ? '<span class="sh-active">Active</span>' : ''}</td>
@@ -83,9 +83,9 @@ function buildSimpleRoster(devotees, teamFilter) {
 
   return `<table class="attendance-sheet-table">
     <thead><tr>
-      <th class="sh-header sh-sno">Sno</th>
-      <th class="sh-header" style="min-width:130px">Name</th>
-      <th class="sh-header">Mobile</th>
+      <th class="sh-header sh-sno sh-freeze sh-f0">Sno</th>
+      <th class="sh-header sh-name sh-freeze sh-f1">Name</th>
+      <th class="sh-header sh-freeze sh-f2">Mobile</th>
       <th class="sh-header">Reference</th>
       <th class="sh-header">CR</th>
       <th class="sh-header">Active</th>
@@ -105,9 +105,9 @@ function buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
   // itself is alphabetical so it's easy to scan).
   rows.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
-  let h1 = `<th rowspan="2" class="sh-header sh-sno">Sno</th>
-    <th rowspan="2" class="sh-header" style="min-width:120px">Name</th>
-    <th rowspan="2" class="sh-header">Mobile</th>
+  let h1 = `<th rowspan="2" class="sh-header sh-sno sh-freeze sh-f0">Sno</th>
+    <th rowspan="2" class="sh-header sh-name sh-freeze sh-f1">Name</th>
+    <th rowspan="2" class="sh-header sh-freeze sh-f2">Mobile</th>
     <th rowspan="2" class="sh-header">Reference</th>
     <th rowspan="2" class="sh-header">CR</th>
     <th rowspan="2" class="sh-header">Active</th>
@@ -131,9 +131,9 @@ function buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter) {
 
   const bodyRows = rows.map((d, i) => {
     const isActive = d.isActive !== false;
-    let cells = `<td class="sh-cell sh-center sh-sno">${i + 1}</td>
-      <td class="sh-cell sh-name">${d.name}</td>
-      <td class="sh-cell sh-center">${d.mobile || '—'}</td>
+    let cells = `<td class="sh-cell sh-center sh-sno sh-freeze sh-f0">${i + 1}</td>
+      <td class="sh-cell sh-name sh-freeze sh-f1">${d.name}</td>
+      <td class="sh-cell sh-center sh-freeze sh-f2">${d.mobile || '—'}</td>
       <td class="sh-cell">${d.referenceBy || ''}</td>
       <td class="sh-cell sh-center">${d.chantingRounds || 0}</td>
       <td class="sh-cell sh-center">${isActive ? '<span class="sh-active">Active</span>' : ''}</td>

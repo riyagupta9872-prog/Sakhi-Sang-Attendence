@@ -198,6 +198,15 @@
     <button class="sidebar-item" onclick="openChangePassword()">
       <i class="fas fa-key"></i> <span>Change Password</span>
     </button>
+    <button class="sidebar-item super-admin-only" onclick="openTargetMgmt(); closeSidebar();">
+      <i class="fas fa-bullseye"></i> <span>Target Management</span>
+    </button>
+    <button class="sidebar-item super-admin-only" onclick="openMonthlyReports(); closeSidebar();">
+      <i class="fas fa-calendar-alt"></i> <span>Monthly Reports</span>
+    </button>
+    <button class="sidebar-item super-admin-only" onclick="openFYReports(); closeSidebar();">
+      <i class="fas fa-calendar-check"></i> <span>FY Reports</span>
+    </button>
     <button class="sidebar-item super-admin-only" onclick="openClearDataModal(); closeSidebar();">
       <i class="fas fa-trash-alt"></i> <span>Clear Data</span>
     </button>
@@ -381,7 +390,6 @@
     <div class="dash-section-head">
       <div>
         <i class="fas fa-clipboard-list"></i> Coordinator Performance
-        <span class="dash-section-sub" id="dash-grid-sub">All teams · this session</span>
       </div>
     </div>
     <div id="dashboard-content" class="dashboard-wrap">
@@ -1293,6 +1301,97 @@
     </div>
     <div id="admin-users-list" style="max-height:65vh;overflow-y:auto">
       <div class="loading"><i class="fas fa-spinner"></i> Loading users…</div>
+    </div>
+  </div>
+</div>
+
+<!-- Target Management Modal -->
+<div id="target-mgmt-modal" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:480px">
+    <div class="modal-header">
+      <h2><i class="fas fa-bullseye"></i> Target Management</h2>
+      <button class="btn-icon close" onclick="closeModal('target-mgmt-modal')"><i class="fas fa-times"></i></button>
+    </div>
+    <div id="target-mgmt-body" style="padding:1.25rem;max-height:70vh;overflow-y:auto">
+      <div class="loading"><i class="fas fa-spinner"></i> Loading…</div>
+    </div>
+    <div class="modal-footer" style="padding:.75rem 1.25rem;display:flex;justify-content:flex-end;gap:.5rem;border-top:1px solid var(--color-border)">
+      <button class="btn btn-ghost" onclick="closeModal('target-mgmt-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveTargetMgmt()"><i class="fas fa-save"></i> Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- FY Reports Modal -->
+<div id="fy-reports-modal" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:500px">
+    <div class="modal-header">
+      <h2><i class="fas fa-calendar-check"></i> Financial Year Reports</h2>
+      <button class="btn-icon close" onclick="closeModal('fy-reports-modal')"><i class="fas fa-times"></i></button>
+    </div>
+    <div style="padding:1.25rem">
+      <div style="margin-bottom:1.25rem;display:flex;align-items:center;gap:.75rem">
+        <label style="font-size:.88rem;font-weight:600;white-space:nowrap">Financial Year:</label>
+        <select id="fy-report-year" style="padding:.38rem .6rem;border:1px solid var(--color-border);border-radius:var(--radius-xs);font-size:.9rem;flex:1"></select>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:.85rem">
+        <div style="border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:1rem">
+          <div style="font-weight:700;font-size:.92rem;margin-bottom:.25rem"><i class="fas fa-file-excel" style="color:#217346"></i> FY Attendance Sheet</div>
+          <div style="font-size:.79rem;color:var(--text-muted);margin-bottom:.7rem">
+            All sessions in the financial year (Apr–Mar) — Calling Status + Attendance for every devotee.<br>
+            All teams A–Z, color-coded by team & coordinator. New devotees highlighted yellow.
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="exportFYAttSheet()"><i class="fas fa-download"></i> Download Excel</button>
+        </div>
+        <div style="border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:1rem">
+          <div style="font-weight:700;font-size:.92rem;margin-bottom:.25rem"><i class="fas fa-chart-bar" style="color:var(--color-primary)"></i> FY Overall Coordinator Report</div>
+          <div style="font-size:.79rem;color:var(--text-muted);margin-bottom:.7rem">
+            Session-wise attendance + Books, Registrations, Donations, Services totals for the full year.<br>
+            Care section: devotees regular in previous FY but absent this FY.
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="downloadFYOverallReport()"><i class="fas fa-download"></i> Download Excel</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" style="padding:.75rem 1.25rem;display:flex;justify-content:flex-end;border-top:1px solid var(--color-border)">
+      <button class="btn btn-ghost" onclick="closeModal('fy-reports-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Monthly Reports Modal -->
+<div id="monthly-reports-modal" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:500px">
+    <div class="modal-header">
+      <h2><i class="fas fa-calendar-alt"></i> Monthly Reports</h2>
+      <button class="btn-icon close" onclick="closeModal('monthly-reports-modal')"><i class="fas fa-times"></i></button>
+    </div>
+    <div style="padding:1.25rem">
+      <div style="margin-bottom:1.25rem;display:flex;align-items:center;gap:.75rem">
+        <label style="font-size:.88rem;font-weight:600;white-space:nowrap">Select Month:</label>
+        <input type="month" id="monthly-report-month" style="padding:.38rem .6rem;border:1px solid var(--color-border);border-radius:var(--radius-xs);font-size:.9rem;flex:1">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:.85rem">
+        <div style="border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:1rem">
+          <div style="font-weight:700;font-size:.92rem;margin-bottom:.25rem"><i class="fas fa-file-excel" style="color:#217346"></i> Attendance Sheet</div>
+          <div style="font-size:.79rem;color:var(--text-muted);margin-bottom:.7rem">
+            All sessions this month — Calling Status + Attendance for every devotee.<br>
+            All teams A–Z in one sheet. Each team has a distinct color; each coordinator gets a different shade. New devotees highlighted yellow.
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="exportMonthlyAttSheet()"><i class="fas fa-download"></i> Download Excel</button>
+        </div>
+        <div style="border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:1rem">
+          <div style="font-weight:700;font-size:.92rem;margin-bottom:.25rem"><i class="fas fa-chart-bar" style="color:var(--color-primary)"></i> Overall Coordinator Report</div>
+          <div style="font-size:.79rem;color:var(--text-muted);margin-bottom:.7rem">
+            Session-wise attendance + Books, Registrations, Donations, Services totals.<br>
+            Care section: devotees who were regular last month but absent this month.
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="downloadOverallMonthlyReport()"><i class="fas fa-download"></i> Download Excel</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" style="padding:.75rem 1.25rem;display:flex;justify-content:flex-end;border-top:1px solid var(--color-border)">
+      <button class="btn btn-ghost" onclick="closeModal('monthly-reports-modal')">Close</button>
     </div>
   </div>
 </div>

@@ -1154,3 +1154,388 @@ function downloadSkipReport() {
   XLSX.utils.book_append_sheet(wb, ws, 'Skipped Rows');
   XLSX.writeFile(wb, `import_skip_report_${getToday()}.xlsx`);
 }
+
+// ══ MONTHLY ATTENDANCE SHEET ══════════════════════════════════
+// One sheet, all teams A–Z. Each team gets a distinct base color;
+// within a team each calling coordinator gets a lighter/darker shade.
+// New devotees (created this month) get a yellow highlight on their name cell.
+// Columns: Sno | Name | Mobile | Calling By | [CS | AT per session] | Total AT
+const _MONTHLY_TEAM_PALETTES = {
+  'Champaklata': ['C8E6C9','A5D6A7','81C784','66BB6A','4CAF50','388E3C'],
+  'Chitralekha': ['BBDEFB','90CAF9','64B5F6','42A5F5','1E88E5','1565C0'],
+  'Indulekha':   ['E1BEE7','CE93D8','BA68C8','AB47BC','8E24AA','6A1B9A'],
+  'Lalita':      ['FFE0B2','FFCC80','FFB74D','FFA726','FB8C00','E65100'],
+  'Nilachal':    ['B2EBF2','80DEEA','4DD0E1','26C6DA','00ACC1','00838F'],
+  'Other':       ['F5F5F5','EEEEEE','E0E0E0','BDBDBD','9E9E9E','757575'],
+  'Rangadevi':   ['F8BBD0','F48FB1','F06292','EC407A','D81B60','AD1457'],
+  'Sudevi':      ['FFF9C4','FFF59D','FFF176','FFEE58','FDD835','F9A825'],
+  'Tungavidya':  ['FFCDD2','EF9A9A','E57373','EF5350','E53935','B71C1C'],
+  'Vishakha':    ['C5CAE9','9FA8DA','7986CB','5C6BC0','3949AB','283593'],
+};
+
+function _monthBounds(yearMonth) {
+  const [y, m] = yearMonth.split('-').map(Number);
+  const start = `${y}-${String(m).padStart(2,'0')}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const end   = `${y}-${String(m).padStart(2,'0')}-${lastDay}`;
+  const prevM = m === 1 ? 12 : m - 1;
+  const prevY = m === 1 ? y - 1 : y;
+  const prevLastDay = new Date(prevY, prevM, 0).getDate();
+  const prevStart = `${prevY}-${String(prevM).padStart(2,'0')}-01`;
+  const prevEnd   = `${prevY}-${String(prevM).padStart(2,'0')}-${prevLastDay}`;
+  const label = new Date(y, m - 1, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
+  return { start, end, prevStart, prevEnd, label, y, m };
+}
+
+function _shiftDay(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + days);
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+}
+
+function _fmtShort(dateStr) {
+  if (!dateStr) return '';
+  const [,m,d] = dateStr.split('-');
+  return `${d}.${m}`;
+}
+
+// ── FY bounds helper ─────────────────────────────────
+function _fyBounds(fyStartYear) {
+  const y = parseInt(fyStartYear);
+  return {
+    start:     `${y}-04-01`,
+    end:       `${y+1}-03-31`,
+    prevStart: `${y-1}-04-01`,
+    prevEnd:   `${y}-03-31`,
+    label:     `FY ${y}-${String(y+1).slice(-2)}`,
+  };
+}
+
+// ── Shared attendance-sheet builder ──────────────────
+// bounds: { start, end, label }
+// newSince: cutoff date string — devotees created on/after this are highlighted yellow
+async function _doExportAttSheet(bounds, newSince, filename) {
+  const XS = _xls();
+
+  const sessSnap = await fdb.collection('sessions')
+    .where('sessionDate', '>=', bounds.start)
+    .where('sessionDate', '<=', bounds.end)
+    .orderBy('sessionDate', 'asc').get();
+  const sessions = sessSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  if (!sessions.length) { showToast('No sessions found for that period', 'error'); return; }
+
+  const [atSnaps, csSnaps] = await Promise.all([
+    Promise.all(sessions.map(s => fdb.collection('attendanceRecords').where('sessionId', '==', s.id).get())),
+    Promise.all(sessions.map(s => fdb.collection('callingStatus').where('weekDate', '==', _shiftDay(s.sessionDate, -1)).get())),
+  ]);
+
+  const attMap = {};
+  sessions.forEach((s, i) => { attMap[s.id] = new Set(atSnaps[i].docs.map(d => d.data().devoteeId)); });
+  const csMap = {};
+  sessions.forEach((s, i) => {
+    const wd = _shiftDay(s.sessionDate, -1);
+    csMap[wd] = {};
+    csSnaps[i].docs.forEach(d => { csMap[wd][d.data().devoteeId] = d.data(); });
+  });
+
+  const allDevotees = await DevoteeCache.all();
+  const devotees = allDevotees
+    .filter(d => d.isActive !== false && !d.isNotInterested && d.callingMode !== 'not_interested')
+    .sort((a, b) => (a.teamName || '').localeCompare(b.teamName || '') || (a.name || '').localeCompare(b.name || ''));
+
+  const newSinceDate = new Date(newSince);
+  const newInPeriod = new Set(devotees
+    .filter(d => d.createdAt && (d.createdAt.toDate ? d.createdAt.toDate() : new Date(d.createdAt)) >= newSinceDate)
+    .map(d => d.id));
+
+  const coordShadeIdx = {};
+  TEAMS.forEach(team => {
+    const coords = [...new Set(devotees.filter(d => d.teamName === team).map(d => d.callingBy || ''))];
+    coordShadeIdx[team] = {};
+    coords.forEach((c, i) => { coordShadeIdx[team][c] = i; });
+  });
+
+  const hdrStyle  = XS.hdr();
+  const hdrStyle2 = XS.hdr('166534');
+  const FIXED_COLS = 6;
+  const colWidths = [{ wch: 4 }, { wch: 24 }, { wch: 13 }, { wch: 4 }, { wch: 20 }, { wch: 20 }];
+  sessions.forEach(() => { colWidths.push({ wch: 9 }, { wch: 4 }); });
+  colWidths.push({ wch: 7 });
+
+  const hdr1 = ['Sno', 'Name', 'Mobile', 'CR', 'Reference', 'Calling By'];
+  const hdr2 = ['', '', '', '', '', ''];
+  const hdr3 = ['', '', '', '', '', ''];
+  sessions.forEach(s => {
+    hdr1.push(_fmtShort(s.sessionDate), '');
+    hdr2.push(s.topic ? s.topic.slice(0, 18) : '', '');
+    hdr3.push('CS', 'AT');
+  });
+  hdr1.push('Total'); hdr2.push('AT'); hdr3.push('');
+
+  const dataRows = [];
+  const styleMatrix = [
+    hdr1.map(() => hdrStyle),
+    hdr2.map(() => hdrStyle2),
+    hdr3.map((v, i) => i < FIXED_COLS ? hdrStyle : XS.hdr('0D4728')),
+  ];
+
+  let sno = 1;
+  let currentTeam = null;
+
+  devotees.forEach(d => {
+    const team = d.teamName || 'Other';
+    const palette = _MONTHLY_TEAM_PALETTES[team] || _MONTHLY_TEAM_PALETTES['Other'];
+    const shadeIdx = Math.min((coordShadeIdx[team]?.[d.callingBy || ''] || 0), palette.length - 1);
+    const teamColor = palette[shadeIdx];
+    const isNew = newInPeriod.has(d.id);
+
+    if (team !== currentTeam) {
+      currentTeam = team;
+      const sepRow = [{ v: team, s: XS.hdr('2E7D32') }];
+      for (let c = 1; c < hdr1.length; c++) sepRow.push({ v: '', s: XS.hdr('2E7D32') });
+      dataRows.push(sepRow);
+      styleMatrix.push(sepRow.map(c => c.s));
+    }
+
+    const baseStyle = XS.cell({ bg: teamColor });
+    const nameStyle = isNew ? XS.cell({ bg: 'FFF176', bold: true }) : XS.cell({ bg: teamColor, bold: true });
+
+    const row = [
+      { v: sno++, s: baseStyle },
+      { v: d.name || '', s: nameStyle },
+      { v: d.mobile || '', s: baseStyle },
+      { v: d.chantingRounds || 0, s: baseStyle },
+      { v: d.referenceBy || '', s: baseStyle },
+      { v: d.callingBy || '', s: baseStyle },
+    ];
+    const rowStyles = [baseStyle, nameStyle, baseStyle, baseStyle, baseStyle, baseStyle];
+
+    let totalAT = 0;
+    sessions.forEach(s => {
+      const wd = _shiftDay(s.sessionDate, -1);
+      const cs = csMap[wd]?.[d.id];
+      const attended = attMap[s.id]?.has(d.id);
+      if (attended) totalAT++;
+      const csText = cs ? (cs.comingStatus || '') : '';
+      const csStyle = XS.cell({ bg: cs ? (cs.comingStatus === 'Yes' ? 'C8E6C9' : cs.comingStatus === 'No' ? 'FFCDD2' : teamColor) : 'F5F5F5' });
+      const atStyle = XS.cell({ bg: attended ? 'A5D6A7' : 'F5F5F5', bold: attended });
+      row.push({ v: csText, s: csStyle }, { v: attended ? 'P' : '', s: atStyle });
+      rowStyles.push(csStyle, atStyle);
+    });
+
+    const totalStyle = XS.cell({ bg: totalAT >= 3 ? 'B2EBF2' : totalAT >= 1 ? 'C8E6C9' : 'F5F5F5', bold: totalAT > 0 });
+    row.push({ v: totalAT, s: totalStyle });
+    rowStyles.push(totalStyle);
+    dataRows.push(row);
+    styleMatrix.push(rowStyles);
+  });
+
+  const allRows = [hdr1, hdr2, hdr3, ...dataRows];
+  const ws = {};
+  let maxC = 0;
+  allRows.forEach((row, r) => {
+    row.forEach((val, c) => {
+      maxC = Math.max(maxC, c);
+      const addr = XLSX.utils.encode_cell({ r, c });
+      if (val && typeof val === 'object' && 'v' in val) {
+        ws[addr] = { v: val.v, t: typeof val.v === 'number' ? 'n' : 's' };
+        if (val.s) ws[addr].s = val.s;
+      } else {
+        ws[addr] = { v: val ?? '', t: typeof val === 'number' ? 'n' : 's' };
+      }
+    });
+  });
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: allRows.length - 1, c: maxC } });
+  ws['!cols'] = colWidths;
+  ws['!merges'] = [];
+  let mc = FIXED_COLS;
+  sessions.forEach(() => {
+    ws['!merges'].push({ s: { r: 0, c: mc }, e: { r: 0, c: mc + 1 } });
+    ws['!merges'].push({ s: { r: 1, c: mc }, e: { r: 1, c: mc + 1 } });
+    mc += 2;
+  });
+  for (let c = 0; c < FIXED_COLS; c++) ws['!merges'].push({ s: { r: 0, c }, e: { r: 2, c } });
+  ws['!merges'].push({ s: { r: 0, c: mc }, e: { r: 1, c: mc } });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, bounds.label.replace(/[:\\/?*[\]]/g, '').slice(0, 31));
+  XLSX.writeFile(wb, filename);
+  showToast('Downloaded!', 'success');
+}
+
+// ── Shared overall-report builder ────────────────────
+async function _doExportOverallReport(bounds, prevBounds, prevLabel, filename) {
+  const XS = _xls();
+
+  const [sessSnap, prevSessSnap, allDevotees, books, services, regs, donations] = await Promise.all([
+    fdb.collection('sessions').where('sessionDate', '>=', bounds.start).where('sessionDate', '<=', bounds.end).orderBy('sessionDate', 'asc').get(),
+    fdb.collection('sessions').where('sessionDate', '>=', prevBounds.start).where('sessionDate', '<=', prevBounds.end).orderBy('sessionDate', 'asc').get(),
+    DevoteeCache.all(),
+    DB.getBookDistributions({ startDate: bounds.start, endDate: bounds.end }),
+    DB.getServices(         { startDate: bounds.start, endDate: bounds.end }),
+    DB.getRegistrations(    { startDate: bounds.start, endDate: bounds.end }),
+    DB.getDonations(        { startDate: bounds.start, endDate: bounds.end }),
+  ]);
+
+  const sessions = sessSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const prevSessions = prevSessSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => !s.isCancelled);
+  if (!sessions.length) { showToast('No sessions found for that period', 'error'); return; }
+
+  const [atSnaps, prevAtSnaps] = await Promise.all([
+    Promise.all(sessions.map(s => fdb.collection('attendanceRecords').where('sessionId', '==', s.id).get())),
+    Promise.all(prevSessions.map(s => fdb.collection('attendanceRecords').where('sessionId', '==', s.id).get())),
+  ]);
+
+  const attMap = {};
+  sessions.forEach((s, i) => { attMap[s.id] = new Set(atSnaps[i].docs.map(d => d.data().devoteeId)); });
+  const prevAttMap = {};
+  prevSessions.forEach((s, i) => { prevAttMap[s.id] = new Set(prevAtSnaps[i].docs.map(d => d.data().devoteeId)); });
+
+  const thisCount = {};
+  const prevCount = {};
+  sessions.forEach(s => attMap[s.id].forEach(id => { thisCount[id] = (thisCount[id] || 0) + 1; }));
+  prevSessions.forEach(s => prevAttMap[s.id].forEach(id => { prevCount[id] = (prevCount[id] || 0) + 1; }));
+
+  const activeDevotees = allDevotees.filter(d => d.isActive !== false && !d.isNotInterested && d.callingMode !== 'not_interested');
+  const careList = activeDevotees
+    .filter(d => (prevCount[d.id] || 0) >= 1 && (thisCount[d.id] || 0) === 0)
+    .sort((a, b) => (a.teamName || '').localeCompare(b.teamName || '') || (a.name || '').localeCompare(b.name || ''));
+
+  const teamAgg = {};
+  TEAMS.forEach(t => { teamAgg[t] = { books: 0, services: 0, regs: 0, donation: 0, attended: 0 }; });
+  books.forEach(b => { if (teamAgg[b.teamName]) teamAgg[b.teamName].books += parseInt(b.quantity) || 0; });
+  services.forEach(s => { if (teamAgg[s.teamName]) teamAgg[s.teamName].services += 1; });
+  regs.forEach(r => { if (teamAgg[r.teamName]) teamAgg[r.teamName].regs += parseInt(r.count) || 1; });
+  donations.forEach(d => { if (teamAgg[d.teamName]) teamAgg[d.teamName].donation += parseFloat(d.amount) || 0; });
+  activeDevotees.forEach(d => { if (thisCount[d.id] && teamAgg[d.teamName]) teamAgg[d.teamName].attended += thisCount[d.id]; });
+
+  const hdrS = XS.hdr();
+  const hdrSub = XS.hdr('166534');
+  const numCell = (v, bg) => ({ v, s: XS.cell({ bg, bold: !!bg }) });
+  const txtCell = (v, bg) => ({ v, s: XS.cell({ bg, left: true }) });
+
+  const sumRows = [
+    [{ v: `Report – ${bounds.label}`, s: hdrS }],
+    [],
+    [{ v: 'SESSION ATTENDANCE', s: hdrSub }, '', '', ''],
+    [{ v: 'Date', s: hdrS }, { v: 'Topic', s: hdrS }, { v: 'Cancelled?', s: hdrS }, { v: 'Attendance', s: hdrS }],
+  ];
+  let totalAtt = 0;
+  sessions.forEach(s => {
+    const count = attMap[s.id]?.size || 0;
+    if (!s.isCancelled) totalAtt += count;
+    sumRows.push([
+      txtCell(_fmtShort(s.sessionDate)),
+      txtCell(s.topic || ''),
+      txtCell(s.isCancelled ? 'Yes' : ''),
+      numCell(s.isCancelled ? '' : count, s.isCancelled ? 'FFCDD2' : count > 0 ? 'C8E6C9' : ''),
+    ]);
+  });
+  sumRows.push([{ v: 'Total', s: hdrS }, '', '', numCell(totalAtt, 'B2EBF2')]);
+
+  sumRows.push([], [{ v: 'ACTIVITIES BY TEAM', s: hdrSub }, '', '', '', '', '']);
+  sumRows.push([
+    { v: 'Team', s: hdrS }, { v: 'Attendance', s: hdrS }, { v: 'Books', s: hdrS },
+    { v: 'Registrations', s: hdrS }, { v: 'Services', s: hdrS }, { v: 'Donations (₹)', s: hdrS },
+  ]);
+  TEAMS.forEach(t => {
+    const a = teamAgg[t];
+    sumRows.push([
+      txtCell(t), numCell(a.attended || ''), numCell(a.books || ''),
+      numCell(a.regs || ''), numCell(a.services || ''), numCell(a.donation || ''),
+    ]);
+  });
+  const totals = TEAMS.reduce((acc, t) => {
+    const a = teamAgg[t];
+    return { att: acc.att + a.attended, books: acc.books + a.books, regs: acc.regs + a.regs, svc: acc.svc + a.services, don: acc.don + a.donation };
+  }, { att: 0, books: 0, regs: 0, svc: 0, don: 0 });
+  sumRows.push([
+    { v: 'Grand Total', s: hdrS },
+    numCell(totals.att, 'B2EBF2'), numCell(totals.books, 'B2EBF2'),
+    numCell(totals.regs, 'B2EBF2'), numCell(totals.svc, 'B2EBF2'), numCell(totals.don, 'B2EBF2'),
+  ]);
+
+  const careHdr    = [{ v: `Care List – ${bounds.label}`, s: hdrS }];
+  const careSubHdr = [
+    { v: 'Sno', s: hdrS }, { v: 'Name', s: hdrS }, { v: 'Mobile', s: hdrS },
+    { v: 'Team', s: hdrS }, { v: 'Calling By', s: hdrS },
+    { v: `${prevLabel} AT`, s: hdrS }, { v: 'Note', s: hdrS },
+  ];
+  const careDataRows = careList.map((d, i) => [
+    numCell(i + 1), txtCell(d.name), txtCell(d.mobile || ''),
+    txtCell(d.teamName || ''), txtCell(d.callingBy || ''),
+    numCell(prevCount[d.id] || 0, 'C8E6C9'),
+    txtCell(`Regular in ${prevLabel}, absent this period`, 'FFF9C4'),
+  ]);
+
+  const wsSummary = _xlsSheet(
+    sumRows.map(r => r.map(c => c && typeof c === 'object' && 'v' in c ? c : { v: c ?? '', s: null })),
+    [{ wch: 10 }, { wch: 28 }, { wch: 11 }, { wch: 12 }, { wch: 12 }, { wch: 14 }]
+  );
+  sumRows.forEach((row, r) => row.forEach((cell, c) => {
+    if (cell && typeof cell === 'object' && cell.s) {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      if (wsSummary[addr]) wsSummary[addr].s = cell.s;
+    }
+  }));
+
+  const careRows = [careHdr, careSubHdr, ...careDataRows];
+  const wsCare = _xlsSheet(
+    careRows.map(r => r.map(c => (c && 'v' in c) ? c : { v: c ?? '' })),
+    [{ wch: 4 }, { wch: 26 }, { wch: 13 }, { wch: 14 }, { wch: 20 }, { wch: 13 }, { wch: 38 }]
+  );
+  careRows.forEach((row, r) => row.forEach((cell, c) => {
+    if (cell?.s) { const addr = XLSX.utils.encode_cell({ r, c }); if (wsCare[addr]) wsCare[addr].s = cell.s; }
+  }));
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+  XLSX.utils.book_append_sheet(wb, wsCare, 'Care List');
+  XLSX.writeFile(wb, filename);
+  showToast('Downloaded!', 'success');
+}
+
+// ── Public Monthly wrappers ───────────────────────────
+async function exportMonthlyAttSheet() {
+  const monthEl = document.getElementById('monthly-report-month');
+  if (!monthEl?.value) { showToast('Please select a month', 'error'); return; }
+  showToast('Preparing monthly attendance sheet…');
+  try {
+    const b = _monthBounds(monthEl.value);
+    await _doExportAttSheet(b, b.start, `Monthly_Attendance_${monthEl.value}.xlsx`);
+  } catch (e) { showToast('Failed: ' + (e.message || 'Error'), 'error'); }
+}
+
+async function downloadOverallMonthlyReport() {
+  const monthEl = document.getElementById('monthly-report-month');
+  if (!monthEl?.value) { showToast('Please select a month', 'error'); return; }
+  showToast('Preparing overall monthly report…');
+  try {
+    const b = _monthBounds(monthEl.value);
+    const prevLabel = new Date(b.prevStart + 'T00:00:00').toLocaleString('default', { month: 'long', year: 'numeric' });
+    await _doExportOverallReport(b, { start: b.prevStart, end: b.prevEnd }, prevLabel, `Overall_Monthly_Report_${monthEl.value}.xlsx`);
+  } catch (e) { showToast('Failed: ' + (e.message || 'Error'), 'error'); }
+}
+
+// ── Public FY wrappers ────────────────────────────────
+async function exportFYAttSheet() {
+  const fyEl = document.getElementById('fy-report-year');
+  if (!fyEl?.value) { showToast('Please select a financial year', 'error'); return; }
+  showToast('Preparing FY attendance sheet — this may take a moment…');
+  try {
+    const b = _fyBounds(fyEl.value);
+    await _doExportAttSheet(b, b.start, `FY_Attendance_${b.label.replace(/\s/g,'_')}.xlsx`);
+  } catch (e) { showToast('Failed: ' + (e.message || 'Error'), 'error'); }
+}
+
+async function downloadFYOverallReport() {
+  const fyEl = document.getElementById('fy-report-year');
+  if (!fyEl?.value) { showToast('Please select a financial year', 'error'); return; }
+  showToast('Preparing FY overall report…');
+  try {
+    const b = _fyBounds(fyEl.value);
+    const prevB = _fyBounds(parseInt(fyEl.value) - 1);
+    await _doExportOverallReport(b, prevB, prevB.label, `FY_Overall_Report_${b.label.replace(/\s/g,'_')}.xlsx`);
+  } catch (e) { showToast('Failed: ' + (e.message || 'Error'), 'error'); }
+}
+
