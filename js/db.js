@@ -486,6 +486,39 @@ const DB = {
     });
   },
 
+  /* PERSONAL MEETINGS */
+  async getPersonalMeetings() {
+    const snap = await fdb.collection('personalMeetings').get();
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.scheduledDate || '').localeCompare(a.scheduledDate || ''));
+  },
+  async addPersonalMeeting(data) {
+    return fdb.collection('personalMeetings').add({
+      devoteeId: data.devoteeId || '',
+      devoteeName: data.devoteeName || '',
+      teamName: data.teamName || '',
+      devoteeStatus: data.devoteeStatus || '',
+      scheduledDate: data.scheduledDate || '',
+      metBy: data.metBy || '',
+      status: data.status || 'scheduled',
+      completedDate: data.completedDate || '',
+      notes: data.notes || '',
+      createdAt: TS(),
+      updatedAt: TS(),
+      createdBy: AppState.userName || '',
+    });
+  },
+  async updatePersonalMeeting(id, data) {
+    await fdb.collection('personalMeetings').doc(id).update({
+      ...data,
+      updatedAt: TS(),
+    });
+  },
+  async deletePersonalMeeting(id) {
+    await fdb.collection('personalMeetings').doc(id).delete();
+  },
+
   /* CALLING */
   async getCallingStatus(weekDate) {
     const [raw, csSnap, cfgSnap] = await Promise.all([

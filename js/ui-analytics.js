@@ -2270,3 +2270,691 @@ async function saveTargetMgmt() {
     showToast('Failed to save: ' + (e.message || 'Error'), 'error');
   }
 }
+
+// ══ PERSONAL MEETINGS ══════════════════════════════════════════
+// Track meetings between devotees and senior Prabhujis. 30-day threshold:
+// any active devotee not met in 30+ days appears in Overdue.
+
+let _meetingsCache = null;       // last fetched meetings
+let _meetingsDevoteesCache = null;
+let _editingMeetingDevotee = null; // selected devotee object during form
+let _overdueListCache = null;     // computed overdue list (with last-met info)
+let _overdueFilter = 'all';       // 'all' | 'Most Serious' | 'Serious' | 'Expected to be Serious' | 'New Devotee' | 'Inactive'
+
+async function openPersonalMeetings() {
+  openModal('personal-meetings-modal');
+  await _loadPersonalMeetings();
+}
+
+async function _loadPersonalMeetings() {
+  const body = document.getElementById('personal-meetings-body');
+  body.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  try {
+    const [meetings, devotees] = await Promise.all([
+      DB.getPersonalMeetings(),
+      DevoteeCache.all(),
+    ]);
+    _meetingsCache = meetings;
+    _meetingsDevoteesCache = devotees;
+
+    const today = getToday();
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
+    const cutoffStr = `${cutoff.getFullYear()}-${String(cutoff.getMonth()+1).padStart(2,'0')}-${String(cutoff.getDate()).padStart(2,'0')}`;
+    const recentCutoff = new Date(); recentCutoff.setDate(recentCutoff.getDate() - 30);
+    const recentCutoffStr = `${recentCutoff.getFullYear()}-${String(recentCutoff.getMonth()+1).padStart(2,'0')}-${String(recentCutoff.getDate()).padStart(2,'0')}`;
+
+    // Build per-devotee last-completed map
+    const lastCompletedByDev = {};
+    meetings.forEach(m => {
+      if (m.status !== 'completed') return;
+      const d = m.completedDate || m.scheduledDate;
+      if (!d) return;
+      if (!lastCompletedByDev[m.devoteeId] || lastCompletedByDev[m.devoteeId].date < d) {
+        lastCompletedByDev[m.devoteeId] = { date: d, metBy: m.metBy };
+      }
+    });
+
+    // Upcoming: scheduled, scheduledDate >= today
+    const upcoming = meetings
+      .filter(m => m.status === 'scheduled' && (m.scheduledDate || '') >= today)
+      .sort((a, b) => (a.scheduledDate || '').localeCompare(b.scheduledDate || ''));
+
+    // Recently met: completed in last 30 days
+    const recent = meetings
+      .filter(m => m.status === 'completed' && (m.completedDate || m.scheduledDate || '') >= recentCutoffStr)
+      .sort((a, b) => (b.completedDate || b.scheduledDate || '').localeCompare(a.completedDate || a.scheduledDate || ''));
+
+    // Overdue: ALL devotees (incl. Inactive status) with last meeting > 30 days ago OR never met,
+    // excluding those already in upcoming, those marked not-interested, and online-mode callers.
+    const upcomingDevIds = new Set(upcoming.map(m => m.devoteeId));
+    const eligibleDevotees = devotees.filter(d =>
+      !d.isNotInterested && d.callingMode !== 'not_interested'
+      // intentionally NOT filtering on isActive — 'Inactive' is a category we surface
+    );
+    const overdue = eligibleDevotees
+      .filter(d => !upcomingDevIds.has(d.id))
+      .map(d => {
+        const last = lastCompletedByDev[d.id];
+        const lastDate = last ? last.date : '';
+        const days = lastDate ? Math.floor((new Date(today) - new Date(lastDate)) / 86400000) : Infinity;
+        return { devotee: d, lastDate, lastMetBy: last?.metBy || '', days };
+      })
+      .filter(x => x.days > 30)
+      .sort((a, b) => {
+        const seriousness = s => s === 'Most Serious' ? 0 : s === 'Serious' ? 1 : s === 'Expected to be Serious' || !s ? 2 : s === 'New Devotee' ? 3 : 4;
+        const sa = seriousness(a.devotee.devoteeStatus);
+        const sb = seriousness(b.devotee.devoteeStatus);
+        if (sa !== sb) return sa - sb;
+        return b.days - a.days;
+      });
+
+    _overdueListCache = overdue;
+    _overdueFilter = 'all';
+
+    body.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1rem;margin-bottom:1rem">
+        ${_renderMeetingSection('Upcoming', upcoming.length, '#1A5C3A', _renderUpcomingCards(upcoming))}
+        ${_renderMeetingSection('Recently Met', recent.length, '#2563eb', _renderRecentCards(recent))}
+      </div>
+      <div id="pm-overdue-section">${_renderOverdueSectionInner()}</div>
+    `;
+  } catch (e) {
+    console.error('loadPersonalMeetings', e);
+    body.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load meetings</p></div>';
+  }
+}
+
+function _renderMeetingSection(title, count, color, content) {
+  return `
+    <div style="border:1px solid var(--color-border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-card,#fff)">
+      <div style="background:${color};color:#fff;padding:.55rem .85rem;font-weight:700;font-size:.85rem;display:flex;justify-content:space-between;align-items:center">
+        <span>${title}</span>
+        <span style="background:rgba(255,255,255,.22);padding:.1rem .55rem;border-radius:9999px;font-size:.75rem">${count}</span>
+      </div>
+      <div style="padding:.5rem;max-height:60vh;overflow-y:auto">${content || '<div style="text-align:center;color:var(--text-muted);font-size:.82rem;padding:2rem 0">No items</div>'}</div>
+    </div>`;
+}
+
+function _meetingDateLabel(d) {
+  if (!d) return '';
+  const [y, m, day] = d.split('-');
+  return `${day} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m-1]} ${y.slice(-2)}`;
+}
+
+function _renderUpcomingCards(list) {
+  if (!list.length) return '';
+  const today = getToday();
+  return list.map(m => {
+    const isToday = m.scheduledDate === today;
+    const dateBg = isToday ? '#fef3c7' : '#f0f9ff';
+    return `
+    <div style="border:1px solid var(--color-border);border-radius:var(--radius-xs);padding:.55rem .7rem;margin-bottom:.45rem;background:#fff">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:.5rem">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:.92rem;cursor:pointer;color:var(--color-primary)" onclick="openProfileModal('${m.devoteeId}')">${m.devoteeName || '—'}</div>
+          <div style="font-size:.74rem;color:var(--text-muted);margin-top:.15rem">${m.teamName || ''} ${m.devoteeStatus ? '· ' + m.devoteeStatus : ''}</div>
+        </div>
+        <div style="background:${dateBg};padding:.2rem .5rem;border-radius:var(--radius-xs);font-size:.75rem;font-weight:700;white-space:nowrap">
+          ${isToday ? 'Today' : _meetingDateLabel(m.scheduledDate)}
+        </div>
+      </div>
+      <div style="font-size:.76rem;color:var(--text-muted);margin-top:.3rem">With: <strong>${m.metBy || '—'}</strong></div>
+      ${m.notes ? `<div style="font-size:.74rem;color:#555;margin-top:.25rem;font-style:italic">${m.notes}</div>` : ''}
+      <div style="display:flex;gap:.35rem;margin-top:.45rem">
+        <button class="btn btn-primary btn-sm" style="flex:1;font-size:.72rem" onclick="markMeetingComplete('${m.id}')"><i class="fas fa-check"></i> Mark Done</button>
+        <button class="btn btn-ghost btn-sm" style="font-size:.72rem" onclick="openScheduleMeetingForm('${m.id}')"><i class="fas fa-edit"></i></button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Renders the entire Overdue card column: header + filter chips + filtered list.
+// Reads _overdueListCache and _overdueFilter from outer scope.
+function _renderOverdueSectionInner() {
+  const list = _overdueListCache || [];
+  const total = list.length;
+
+  // Bucket by category (ETS = Expected to be Serious, also covers blank devoteeStatus)
+  const buckets = {
+    'all':                     list,
+    'Most Serious':            list.filter(x => x.devotee.devoteeStatus === 'Most Serious'),
+    'Serious':                 list.filter(x => x.devotee.devoteeStatus === 'Serious'),
+    'Expected to be Serious':  list.filter(x => !x.devotee.devoteeStatus || x.devotee.devoteeStatus === 'Expected to be Serious'),
+    'New Devotee':             list.filter(x => x.devotee.devoteeStatus === 'New Devotee'),
+    'Inactive':                list.filter(x => x.devotee.devoteeStatus === 'Inactive' || x.devotee.isActive === false),
+  };
+
+  const chipDef = [
+    { key: 'all',                     label: 'All',          color: '#1f2937' },
+    { key: 'Most Serious',            label: 'Most Serious', color: '#7f1d1d' },
+    { key: 'Serious',                 label: 'Serious',      color: '#9a3412' },
+    { key: 'Expected to be Serious',  label: 'ETS',          color: '#92400e' },
+    { key: 'New Devotee',             label: 'New',          color: '#1e40af' },
+    { key: 'Inactive',                label: 'Inactive',     color: '#374151' },
+  ];
+
+  const chips = chipDef.map(c => {
+    const active = c.key === _overdueFilter;
+    const count = buckets[c.key]?.length || 0;
+    return `<button onclick="setOverdueFilter('${c.key.replace(/'/g, "\\'")}')"
+      style="border:1px solid ${active ? c.color : 'var(--color-border)'};
+             background:${active ? c.color : '#fff'};
+             color:${active ? '#fff' : c.color};
+             padding:.18rem .55rem;border-radius:9999px;font-size:.72rem;font-weight:600;cursor:pointer">
+      ${c.label} <span style="opacity:.85;font-weight:700">${count}</span>
+    </button>`;
+  }).join(' ');
+
+  const filtered = buckets[_overdueFilter] || [];
+  const bodyHtml = !filtered.length
+    ? '<div style="text-align:center;color:#16a34a;font-size:.85rem;padding:1.5rem 0">No devotees in this category 🎉</div>'
+    : _overdueTableHtml(filtered.slice(0, 200)) +
+      (filtered.length > 200 ? `<div style="text-align:center;color:var(--text-muted);font-size:.78rem;padding:.5rem">+ ${filtered.length - 200} more…</div>` : '');
+
+  return `
+    <div style="border:1px solid var(--color-border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg-card,#fff)">
+      <div style="background:#dc2626;color:#fff;padding:.55rem .85rem;font-weight:700;font-size:.85rem;display:flex;justify-content:space-between;align-items:center">
+        <span>Overdue (30+ days)</span>
+        <span style="background:rgba(255,255,255,.22);padding:.1rem .55rem;border-radius:9999px;font-size:.75rem">${total}</span>
+      </div>
+      <div style="padding:.55rem .55rem .35rem;display:flex;flex-wrap:wrap;gap:.32rem;background:#fafafa;border-bottom:1px solid var(--color-border)">${chips}</div>
+      <div style="max-height:60vh;overflow:auto">${bodyHtml}</div>
+    </div>`;
+}
+
+function _overdueTableHtml(list) {
+  const rows = list.map((x, i) => {
+    const d = x.devotee;
+    const gap = x.days === Infinity ? 'Never met' : `${x.days}d`;
+    const gapColor = x.days === Infinity || x.days > 90 ? '#dc2626' : x.days > 60 ? '#ea580c' : '#ca8a04';
+    const icons = (typeof contactIcons === 'function')
+      ? contactIcons(d.mobile, { altMobile: d.altMobile, devoteeId: d.id, name: d.name || '' })
+      : '';
+    const status = d.devoteeStatus || (d.isActive === false ? 'Inactive' : '—');
+    const lastMet = x.lastDate ? _meetingDateLabel(x.lastDate) : '—';
+    return `
+      <tr style="border-bottom:1px solid var(--color-border)">
+        <td style="padding:.4rem .5rem;color:var(--text-muted);font-size:.75rem">${i + 1}</td>
+        <td style="padding:.4rem .5rem">
+          <div style="font-weight:700;color:var(--color-primary);cursor:pointer;font-size:.85rem" onclick="openProfileModal('${d.id}')">${d.name || '—'}</div>
+          <div style="font-size:.7rem;color:var(--text-muted);margin-top:.1rem">${status}</div>
+        </td>
+        <td style="padding:.4rem .5rem;white-space:nowrap">
+          ${d.mobile ? `<span style="font-size:.78rem;font-weight:600;color:#374151">${d.mobile}</span>` : ''}
+          ${icons}
+        </td>
+        <td style="padding:.4rem .5rem;font-size:.78rem">${d.teamName || '—'}</td>
+        <td style="padding:.4rem .5rem;font-size:.78rem">${d.callingBy || '—'}</td>
+        <td style="padding:.4rem .5rem;font-size:.78rem;text-align:center">${d.chantingRounds || 0}</td>
+        <td style="padding:.4rem .5rem;font-size:.74rem;white-space:nowrap">
+          <div style="color:${gapColor};font-weight:700">${gap}</div>
+          <div style="color:var(--text-muted);font-size:.7rem">${lastMet}</div>
+        </td>
+        <td style="padding:.4rem .5rem">
+          <button class="btn btn-primary btn-sm" style="font-size:.72rem;white-space:nowrap;padding:.3rem .6rem" onclick="openScheduleMeetingForm(null, '${d.id}')">
+            <i class="fas fa-calendar-plus"></i> Schedule
+          </button>
+        </td>
+      </tr>`;
+  }).join('');
+
+  return `
+    <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+      <thead style="position:sticky;top:0;z-index:1;background:#1A5C3A;color:#fff">
+        <tr>
+          <th style="padding:.45rem .5rem;text-align:left;font-size:.72rem">#</th>
+          <th style="padding:.45rem .5rem;text-align:left;font-size:.72rem">Name</th>
+          <th style="padding:.45rem .5rem;text-align:left;font-size:.72rem">Mobile</th>
+          <th style="padding:.45rem .5rem;text-align:left;font-size:.72rem">Team</th>
+          <th style="padding:.45rem .5rem;text-align:left;font-size:.72rem">Calling By</th>
+          <th style="padding:.45rem .5rem;text-align:center;font-size:.72rem">CR</th>
+          <th style="padding:.45rem .5rem;text-align:left;font-size:.72rem">Last Met</th>
+          <th style="padding:.45rem .5rem;text-align:left;font-size:.72rem">Action</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function setOverdueFilter(key) {
+  _overdueFilter = key;
+  const wrap = document.getElementById('pm-overdue-section');
+  if (wrap) wrap.innerHTML = _renderOverdueSectionInner();
+}
+
+function _overdueCardHtml(x) {
+  const d = x.devotee;
+  const gap = x.days === Infinity ? 'Never met' : `${x.days} days ago`;
+  const gapBg = x.days === Infinity ? '#fee2e2' : x.days > 90 ? '#fee2e2' : x.days > 60 ? '#fed7aa' : '#fef3c7';
+  const icons = (typeof contactIcons === 'function')
+    ? contactIcons(d.mobile, { altMobile: d.altMobile, devoteeId: d.id, name: d.name || '' })
+    : '';
+  const status = d.devoteeStatus || (d.isActive === false ? 'Inactive' : '');
+  return `
+  <div style="border:1px solid var(--color-border);border-radius:var(--radius-xs);padding:.55rem .7rem;margin-bottom:.45rem;background:#fff">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:.5rem">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700;font-size:.92rem;cursor:pointer;color:var(--color-primary)" onclick="openProfileModal('${d.id}')">${d.name || '—'}</div>
+        <div style="font-size:.74rem;color:var(--text-muted);margin-top:.15rem">${d.teamName || ''}${status ? ' · ' + status : ''}</div>
+      </div>
+      <div style="background:${gapBg};padding:.2rem .5rem;border-radius:var(--radius-xs);font-size:.72rem;font-weight:700;white-space:nowrap">${gap}</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:.5rem;margin-top:.35rem;flex-wrap:wrap">
+      ${d.mobile ? `<span style="font-size:.78rem;color:#374151;font-weight:600">${d.mobile}</span>` : ''}
+      ${icons}
+    </div>
+    <div style="font-size:.72rem;color:var(--text-muted);margin-top:.3rem;line-height:1.45">
+      ${d.callingBy ? `<span><i class="fas fa-phone-volume" style="opacity:.6"></i> ${d.callingBy}</span>` : ''}
+      ${d.chantingRounds ? `<span style="margin-left:.6rem"><i class="fas fa-om" style="opacity:.6"></i> ${d.chantingRounds} rounds</span>` : ''}
+    </div>
+    ${x.lastDate ? `<div style="font-size:.72rem;color:var(--text-muted);margin-top:.25rem">Last met: ${_meetingDateLabel(x.lastDate)}${x.lastMetBy ? ' · ' + x.lastMetBy : ''}</div>` : ''}
+    <button class="btn btn-primary btn-sm" style="font-size:.72rem;margin-top:.4rem;width:100%" onclick="openScheduleMeetingForm(null, '${d.id}')"><i class="fas fa-calendar-plus"></i> Schedule</button>
+  </div>`;
+}
+
+function _renderRecentCards(list) {
+  if (!list.length) return '';
+  return list.map(m => `
+    <div style="border:1px solid var(--color-border);border-radius:var(--radius-xs);padding:.55rem .7rem;margin-bottom:.45rem;background:#fff">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:.5rem">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:.92rem;cursor:pointer;color:var(--color-primary)" onclick="openProfileModal('${m.devoteeId}')">${m.devoteeName || '—'}</div>
+          <div style="font-size:.74rem;color:var(--text-muted);margin-top:.15rem">${m.teamName || ''} ${m.devoteeStatus ? '· ' + m.devoteeStatus : ''}</div>
+        </div>
+        <div style="background:#dcfce7;padding:.2rem .5rem;border-radius:var(--radius-xs);font-size:.75rem;font-weight:700;white-space:nowrap">${_meetingDateLabel(m.completedDate || m.scheduledDate)}</div>
+      </div>
+      <div style="font-size:.76rem;color:var(--text-muted);margin-top:.3rem">With: <strong>${m.metBy || '—'}</strong></div>
+      ${m.notes ? `<div style="font-size:.74rem;color:#555;margin-top:.25rem;font-style:italic">${m.notes}</div>` : ''}
+      <button class="btn btn-ghost btn-sm" style="font-size:.72rem;margin-top:.4rem" onclick="openScheduleMeetingForm('${m.id}')"><i class="fas fa-edit"></i> Edit</button>
+    </div>
+  `).join('');
+}
+
+function openScheduleMeetingForm(meetingId = null, devoteeId = null) {
+  document.getElementById('meeting-id').value = meetingId || '';
+  document.getElementById('schedule-meeting-title').innerHTML = meetingId
+    ? '<i class="fas fa-edit"></i> Edit Meeting'
+    : '<i class="fas fa-calendar-plus"></i> Schedule Meeting';
+  document.getElementById('meeting-delete-btn').classList.toggle('hidden', !meetingId);
+
+  if (meetingId && _meetingsCache) {
+    const m = _meetingsCache.find(x => x.id === meetingId);
+    if (m) {
+      document.getElementById('meeting-devotee').value = m.devoteeName || '';
+      _editingMeetingDevotee = { id: m.devoteeId, name: m.devoteeName, teamName: m.teamName, devoteeStatus: m.devoteeStatus };
+      document.getElementById('meeting-devotee-info').textContent = `${m.teamName || ''} ${m.devoteeStatus ? '· ' + m.devoteeStatus : ''}`;
+      document.getElementById('meeting-date').value = m.scheduledDate || '';
+      document.getElementById('meeting-met-by').value = m.metBy || '';
+      document.getElementById('meeting-status').value = m.status || 'scheduled';
+      document.getElementById('meeting-notes').value = m.notes || '';
+    }
+  } else {
+    document.getElementById('meeting-devotee').value = '';
+    document.getElementById('meeting-devotee-info').textContent = '';
+    _editingMeetingDevotee = null;
+    document.getElementById('meeting-date').value = getToday();
+    document.getElementById('meeting-met-by').value = '';
+    document.getElementById('meeting-status').value = 'scheduled';
+    document.getElementById('meeting-notes').value = '';
+    if (devoteeId && _meetingsDevoteesCache) {
+      const d = _meetingsDevoteesCache.find(x => x.id === devoteeId);
+      if (d) {
+        document.getElementById('meeting-devotee').value = d.name;
+        document.getElementById('meeting-devotee-info').textContent = `${d.teamName || ''} ${d.devoteeStatus ? '· ' + d.devoteeStatus : ''}`;
+        _editingMeetingDevotee = { id: d.id, name: d.name, teamName: d.teamName, devoteeStatus: d.devoteeStatus };
+      }
+    }
+  }
+  openModal('schedule-meeting-modal');
+}
+
+async function _meetingDevoteeFilter() {
+  const container = document.getElementById('meeting-devotee-picker');
+  const inp = document.getElementById('meeting-devotee');
+  const dd  = container.querySelector('.picker-dropdown');
+  const q = (inp.value || '').toLowerCase().trim();
+
+  // Lazy-load devotee cache if user opened the form without first loading meetings
+  if (!_meetingsDevoteesCache) {
+    try { _meetingsDevoteesCache = await DevoteeCache.all(); }
+    catch (e) { return; }
+  }
+
+  // Clear stored selection when user types something different from the chosen name
+  if (_editingMeetingDevotee && _editingMeetingDevotee.name.toLowerCase() !== q) {
+    _editingMeetingDevotee = null;
+    document.getElementById('meeting-devotee-info').textContent = '';
+    inp.classList.remove('has-value');
+  }
+
+  const matches = _meetingsDevoteesCache
+    .filter(d => d.isActive !== false && !d.isNotInterested)
+    .filter(d => !q || (d.name || '').toLowerCase().includes(q))
+    .slice(0, 12);
+
+  if (!matches.length) {
+    dd.innerHTML = '<div class="picker-no-result">No devotee found</div>';
+    dd.classList.remove('hidden');
+    return;
+  }
+  dd.innerHTML = matches.map(d => {
+    const safeName = (d.name || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    const meta = `${d.teamName || ''}${d.devoteeStatus ? ' · ' + d.devoteeStatus : ''}`;
+    return `<div class="picker-option" onclick="_meetingPickDevotee('${d.id}')">
+      <span>${d.name || ''}</span>
+      <span class="picker-team">${meta}</span>
+    </div>`;
+  }).join('');
+  dd.classList.remove('hidden');
+
+  // One-time outside-click handler that hides the dropdown
+  if (!container._dismissBound) {
+    document.addEventListener('click', (e) => {
+      if (!container.contains(e.target)) dd.classList.add('hidden');
+    });
+    container._dismissBound = true;
+  }
+}
+
+function _meetingPickDevotee(id) {
+  const d = _meetingsDevoteesCache.find(x => x.id === id);
+  if (!d) return;
+  _editingMeetingDevotee = { id: d.id, name: d.name, teamName: d.teamName, devoteeStatus: d.devoteeStatus };
+  const inp = document.getElementById('meeting-devotee');
+  inp.value = d.name;
+  inp.classList.add('has-value');
+  document.getElementById('meeting-devotee-info').textContent = `${d.teamName || ''}${d.devoteeStatus ? ' · ' + d.devoteeStatus : ''}`;
+  document.getElementById('meeting-devotee-picker').querySelector('.picker-dropdown').classList.add('hidden');
+}
+
+async function saveScheduledMeeting() {
+  const id = document.getElementById('meeting-id').value;
+  const date = document.getElementById('meeting-date').value;
+  const metBy = document.getElementById('meeting-met-by').value;
+  const status = document.getElementById('meeting-status').value;
+  const notes = document.getElementById('meeting-notes').value.trim();
+
+  if (!_editingMeetingDevotee) { showToast('Please select a devotee', 'error'); return; }
+  if (!date) { showToast('Please select a date', 'error'); return; }
+  if (!metBy) { showToast('Please select Met By', 'error'); return; }
+
+  const data = {
+    devoteeId: _editingMeetingDevotee.id,
+    devoteeName: _editingMeetingDevotee.name,
+    teamName: _editingMeetingDevotee.teamName || '',
+    devoteeStatus: _editingMeetingDevotee.devoteeStatus || '',
+    scheduledDate: date,
+    metBy, status, notes,
+    completedDate: status === 'completed' ? (id ? undefined : date) : '',
+  };
+  if (status === 'completed' && !id) data.completedDate = date;
+
+  try {
+    if (id) await DB.updatePersonalMeeting(id, data);
+    else await DB.addPersonalMeeting(data);
+    showToast(id ? 'Meeting updated' : 'Meeting scheduled', 'success');
+    closeModal('schedule-meeting-modal');
+    _loadPersonalMeetings();
+  } catch (e) {
+    showToast('Failed: ' + (e.message || 'Error'), 'error');
+  }
+}
+
+async function markMeetingComplete(id) {
+  try {
+    await DB.updatePersonalMeeting(id, {
+      status: 'completed',
+      completedDate: getToday(),
+    });
+    showToast('Marked as completed', 'success');
+    _loadPersonalMeetings();
+  } catch (e) {
+    showToast('Failed: ' + (e.message || 'Error'), 'error');
+  }
+}
+
+async function deleteCurrentMeeting() {
+  const id = document.getElementById('meeting-id').value;
+  if (!id) return;
+  if (!confirm('Delete this meeting record?')) return;
+  try {
+    await DB.deletePersonalMeeting(id);
+    showToast('Meeting deleted', 'success');
+    closeModal('schedule-meeting-modal');
+    _loadPersonalMeetings();
+  } catch (e) {
+    showToast('Failed: ' + (e.message || 'Error'), 'error');
+  }
+}
+
+// ══ INDIVIDUAL REPORTS ═════════════════════════════════════════
+// Per-devotee stats (sessions/attended/books/regs/services) for a chosen
+// period (last week / month / year). Click name to open profile.
+
+let _irPeriod = 'week';
+let _irData = null; // { devotees, period, label, range }
+
+async function openIndividualReports() {
+  // Populate year selector once
+  const ySel = document.getElementById('ir-year-input');
+  if (ySel && !ySel.options.length) {
+    const yr = new Date().getFullYear();
+    for (let y = yr; y >= yr - 5; y--) {
+      const opt = document.createElement('option');
+      opt.value = y; opt.textContent = `${y}`;
+      ySel.appendChild(opt);
+    }
+  }
+  // Default month input to current
+  const mEl = document.getElementById('ir-month-input');
+  if (mEl && !mEl.value) {
+    const n = new Date();
+    mEl.value = `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`;
+  }
+  openModal('individual-reports-modal');
+  await _loadIndividualReports();
+}
+
+function _irSetPeriod(p) {
+  _irPeriod = p;
+  document.querySelectorAll('.ir-period-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.period === p);
+  });
+  document.getElementById('ir-month-input').classList.toggle('hidden', p !== 'month');
+  document.getElementById('ir-year-input').classList.toggle('hidden', p !== 'year');
+  _loadIndividualReports();
+}
+
+function _irGetRange() {
+  const today = new Date();
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  if (_irPeriod === 'week') {
+    const start = new Date(today); start.setDate(today.getDate() - 6);
+    return { start: fmt(start), end: fmt(today), label: `Last 7 days (${fmt(start)} → ${fmt(today)})` };
+  }
+  if (_irPeriod === 'month') {
+    const v = document.getElementById('ir-month-input').value || `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`;
+    const [y, m] = v.split('-').map(Number);
+    const start = `${v}-01`;
+    const last = new Date(y, m, 0).getDate();
+    const end = `${v}-${String(last).padStart(2,'0')}`;
+    const label = new Date(y, m-1, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
+    return { start, end, label };
+  }
+  // year
+  const y = parseInt(document.getElementById('ir-year-input').value) || today.getFullYear();
+  return { start: `${y}-01-01`, end: `${y}-12-31`, label: `${y}` };
+}
+
+async function _loadIndividualReports() {
+  const body = document.getElementById('individual-reports-body');
+  body.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  try {
+    const range = _irGetRange();
+    document.getElementById('ir-period-label').textContent = range.label;
+
+    const [sessSnap, allDevotees, books, regs, services] = await Promise.all([
+      fdb.collection('sessions').where('sessionDate', '>=', range.start).where('sessionDate', '<=', range.end).orderBy('sessionDate', 'asc').get(),
+      DevoteeCache.all(),
+      DB.getBookDistributions({ startDate: range.start, endDate: range.end }),
+      DB.getRegistrations(    { startDate: range.start, endDate: range.end }),
+      DB.getServices(         { startDate: range.start, endDate: range.end }),
+    ]);
+    const sessions = sessSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => !s.isCancelled);
+    const totalSessions = sessions.length;
+
+    const atSnaps = await Promise.all(sessions.map(s =>
+      fdb.collection('attendanceRecords').where('sessionId', '==', s.id).get()
+    ));
+    const presentByDev = {};
+    sessions.forEach((s, i) => {
+      atSnaps[i].docs.forEach(d => {
+        const did = d.data().devoteeId;
+        presentByDev[did] = (presentByDev[did] || 0) + 1;
+      });
+    });
+
+    const booksByDev = {};
+    books.forEach(b => { if (b.devoteeId) booksByDev[b.devoteeId] = (booksByDev[b.devoteeId] || 0) + (parseInt(b.quantity) || 0); });
+    const regsByDev = {};
+    regs.forEach(r => { if (r.devoteeId) regsByDev[r.devoteeId] = (regsByDev[r.devoteeId] || 0) + (parseInt(r.count) || 1); });
+    const svcByDev = {};
+    services.forEach(s => { if (s.devoteeId) svcByDev[s.devoteeId] = (svcByDev[s.devoteeId] || 0) + 1; });
+
+    const activeDevotees = allDevotees
+      .filter(d => d.isActive !== false && !d.isNotInterested && d.callingMode !== 'not_interested')
+      .map(d => ({
+        id: d.id,
+        name: d.name,
+        team: d.teamName || '',
+        callingBy: d.callingBy || '',
+        status: d.devoteeStatus || '',
+        sessions: totalSessions,
+        attended: presentByDev[d.id] || 0,
+        books: booksByDev[d.id] || 0,
+        regs: regsByDev[d.id] || 0,
+        services: svcByDev[d.id] || 0,
+      }))
+      .sort((a, b) =>
+        (a.team || '').localeCompare(b.team || '') ||
+        (a.name || '').localeCompare(b.name || '')
+      );
+
+    _irData = { devotees: activeDevotees, range, totalSessions };
+
+    const totals = activeDevotees.reduce((acc, d) => ({
+      attended: acc.attended + d.attended,
+      books: acc.books + d.books,
+      regs: acc.regs + d.regs,
+      services: acc.services + d.services,
+    }), { attended: 0, books: 0, regs: 0, services: 0 });
+
+    body.innerHTML = `
+      <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:.6rem">
+        Total sessions in period: <strong>${totalSessions}</strong> · ${activeDevotees.length} active devotees
+      </div>
+      <div style="overflow-x:auto">
+      <table class="report-table" style="width:100%;font-size:.82rem">
+        <thead>
+          <tr style="background:var(--color-primary,#1A5C3A);color:#fff">
+            <th style="padding:.45rem .55rem;text-align:left">Sno</th>
+            <th style="padding:.45rem .55rem;text-align:left">Name</th>
+            <th style="padding:.45rem .55rem;text-align:left">Team</th>
+            <th style="padding:.45rem .55rem;text-align:center">Sessions</th>
+            <th style="padding:.45rem .55rem;text-align:center">Attended</th>
+            <th style="padding:.45rem .55rem;text-align:center">%</th>
+            <th style="padding:.45rem .55rem;text-align:center">Books</th>
+            <th style="padding:.45rem .55rem;text-align:center">Regs</th>
+            <th style="padding:.45rem .55rem;text-align:center">Services</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${activeDevotees.map((d, i) => {
+            const pct = totalSessions > 0 ? Math.round((d.attended / totalSessions) * 100) : 0;
+            const pctColor = pct >= 75 ? '#16a34a' : pct >= 50 ? '#f59e0b' : '#dc2626';
+            return `<tr style="border-bottom:1px solid var(--color-border)">
+              <td style="padding:.4rem .55rem;color:var(--text-muted)">${i + 1}</td>
+              <td style="padding:.4rem .55rem"><a style="color:var(--color-primary);cursor:pointer;font-weight:600;text-decoration:none" onclick="openProfileModal('${d.id}')">${d.name || '—'}</a></td>
+              <td style="padding:.4rem .55rem">${d.team}</td>
+              <td style="padding:.4rem .55rem;text-align:center">${d.sessions}</td>
+              <td style="padding:.4rem .55rem;text-align:center;font-weight:600">${d.attended}</td>
+              <td style="padding:.4rem .55rem;text-align:center;color:${pctColor};font-weight:700">${pct}%</td>
+              <td style="padding:.4rem .55rem;text-align:center">${d.books || ''}</td>
+              <td style="padding:.4rem .55rem;text-align:center">${d.regs || ''}</td>
+              <td style="padding:.4rem .55rem;text-align:center">${d.services || ''}</td>
+            </tr>`;
+          }).join('')}
+          <tr style="background:#f5f7f5;font-weight:700">
+            <td style="padding:.5rem .55rem"></td>
+            <td style="padding:.5rem .55rem">Grand Total</td>
+            <td></td>
+            <td style="padding:.5rem .55rem;text-align:center">${totalSessions}</td>
+            <td style="padding:.5rem .55rem;text-align:center">${totals.attended}</td>
+            <td></td>
+            <td style="padding:.5rem .55rem;text-align:center">${totals.books}</td>
+            <td style="padding:.5rem .55rem;text-align:center">${totals.regs}</td>
+            <td style="padding:.5rem .55rem;text-align:center">${totals.services}</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+    `;
+  } catch (e) {
+    console.error('loadIndividualReports', e);
+    body.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+  }
+}
+
+function downloadIndividualReports() {
+  if (!_irData) { showToast('Load data first', 'error'); return; }
+  try {
+    const XS = _xls();
+    const { devotees, range, totalSessions } = _irData;
+    const hdr = XS.hdr();
+    const txt = (v) => ({ v, s: XS.cell({ left: true }) });
+    const num = (v) => ({ v: v || 0, s: XS.cell({}) });
+    const pctCell = (a, t) => {
+      const p = t > 0 ? Math.round((a / t) * 100) : 0;
+      const bg = p >= 75 ? 'C8E6C9' : p >= 50 ? 'FFF9C4' : 'FFCDD2';
+      return { v: `${p}%`, s: XS.cell({ bg, bold: true }) };
+    };
+
+    const rows = [
+      [{ v: `Individual Report — ${range.label}`, s: hdr }],
+      [{ v: `Total sessions: ${totalSessions}`, s: XS.cell({ left: true, bold: true }) }],
+      [],
+      [
+        { v: 'Sno', s: hdr }, { v: 'Name', s: hdr }, { v: 'Team', s: hdr }, { v: 'Calling By', s: hdr }, { v: 'Status', s: hdr },
+        { v: 'Sessions', s: hdr }, { v: 'Attended', s: hdr }, { v: '%', s: hdr },
+        { v: 'Books', s: hdr }, { v: 'Regs', s: hdr }, { v: 'Services', s: hdr },
+      ],
+    ];
+    devotees.forEach((d, i) => {
+      rows.push([
+        num(i + 1), txt(d.name), txt(d.team), txt(d.callingBy), txt(d.status),
+        num(d.sessions), num(d.attended), pctCell(d.attended, totalSessions),
+        num(d.books), num(d.regs), num(d.services),
+      ]);
+    });
+    const totals = devotees.reduce((a, d) => ({ at: a.at + d.attended, b: a.b + d.books, r: a.r + d.regs, s: a.s + d.services }), { at: 0, b: 0, r: 0, s: 0 });
+    rows.push([
+      { v: '', s: hdr }, { v: 'Grand Total', s: hdr }, { v: '', s: hdr }, { v: '', s: hdr }, { v: '', s: hdr },
+      { v: totalSessions, s: hdr }, { v: totals.at, s: hdr }, { v: '', s: hdr },
+      { v: totals.b, s: hdr }, { v: totals.r, s: hdr }, { v: totals.s, s: hdr },
+    ]);
+
+    const ws = _xlsSheet(rows.map(r => r.map(c => (c && 'v' in c) ? c : { v: c ?? '' })),
+      [{ wch: 5 }, { wch: 26 }, { wch: 13 }, { wch: 18 }, { wch: 13 }, { wch: 9 }, { wch: 9 }, { wch: 6 }, { wch: 7 }, { wch: 7 }, { wch: 9 }]);
+    rows.forEach((row, r) => row.forEach((cell, c) => {
+      if (cell?.s) { const addr = XLSX.utils.encode_cell({ r, c }); if (ws[addr]) ws[addr].s = cell.s; }
+    }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Individual Report');
+    XLSX.writeFile(wb, `Individual_Report_${range.start}_to_${range.end}.xlsx`);
+    showToast('Downloaded!', 'success');
+  } catch (e) {
+    console.error('downloadIndividualReports', e);
+    showToast('Failed: ' + (e.message || 'Error'), 'error');
+  }
+}

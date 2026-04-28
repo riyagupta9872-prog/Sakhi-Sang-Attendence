@@ -1552,6 +1552,12 @@ button.calling-stat:active { transform: translateY(0); }
 }
 .sh-cancelled-cell { font-style: italic; color: #9ca3af !important; font-size: .71rem; }
 .sh-sno { font-weight: 700; color: var(--text-muted); min-width: 40px; width: 40px; }
+/* Individual Reports period toggle */
+.ir-period-btn.active {
+  background: var(--color-primary, #1A5C3A) !important;
+  color: #fff !important;
+  border-color: var(--color-primary, #1A5C3A) !important;
+}
 /* Freeze: Sno, Name, Mobile columns stay fixed while sessions scroll */
 .sh-freeze   { position: sticky; z-index: 3; }
 .sh-f0       { left: 0; }
