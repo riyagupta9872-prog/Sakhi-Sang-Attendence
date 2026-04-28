@@ -2280,6 +2280,7 @@ let _meetingsDevoteesCache = null;
 let _editingMeetingDevotee = null; // selected devotee object during form
 let _overdueListCache = null;     // computed overdue list (with last-met info)
 let _overdueFilter = 'all';       // 'all' | 'Most Serious' | 'Serious' | 'Expected to be Serious' | 'New Devotee' | 'Inactive'
+let _pmRenderState = { upcoming: [], recent: [] };
 
 async function openPersonalMeetings() {
   openModal('personal-meetings-modal');
@@ -2350,14 +2351,8 @@ async function _loadPersonalMeetings() {
 
     _overdueListCache = overdue;
     _overdueFilter = 'all';
-
-    body.innerHTML = `
-      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1rem;margin-bottom:1rem">
-        ${_renderMeetingSection('Upcoming', upcoming.length, '#1A5C3A', _renderUpcomingCards(upcoming))}
-        ${_renderMeetingSection('Recently Met', recent.length, '#2563eb', _renderRecentCards(recent))}
-      </div>
-      <div id="pm-overdue-section">${_renderOverdueSectionInner()}</div>
-    `;
+    _pmRenderState = { upcoming, recent };
+    _renderPersonalMeetingsBody();
   } catch (e) {
     console.error('loadPersonalMeetings', e);
     body.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load meetings</p></div>';
@@ -2516,10 +2511,36 @@ function _overdueTableHtml(list) {
     </table>`;
 }
 
+function _renderPersonalMeetingsBody() {
+  const body = document.getElementById('personal-meetings-body');
+  if (!body) return;
+  const { upcoming, recent } = _pmRenderState;
+
+  if (_overdueFilter === 'all') {
+    // Default home view: Upcoming + Recently Met (top) + Overdue with chips (bottom)
+    body.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1rem;margin-bottom:1rem">
+        ${_renderMeetingSection('Upcoming', upcoming.length, '#1A5C3A', _renderUpcomingCards(upcoming))}
+        ${_renderMeetingSection('Recently Met', recent.length, '#2563eb', _renderRecentCards(recent))}
+      </div>
+      <div id="pm-overdue-section">${_renderOverdueSectionInner()}</div>
+    `;
+  } else {
+    // Single big-card focus view for the selected category
+    body.innerHTML = `
+      <div style="margin-bottom:.6rem">
+        <button class="btn btn-ghost btn-sm" onclick="setOverdueFilter('all')">
+          <i class="fas fa-arrow-left"></i> Back to overview
+        </button>
+      </div>
+      <div id="pm-overdue-section">${_renderOverdueSectionInner()}</div>
+    `;
+  }
+}
+
 function setOverdueFilter(key) {
   _overdueFilter = key;
-  const wrap = document.getElementById('pm-overdue-section');
-  if (wrap) wrap.innerHTML = _renderOverdueSectionInner();
+  _renderPersonalMeetingsBody();
 }
 
 function _overdueCardHtml(x) {

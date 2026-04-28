@@ -471,6 +471,14 @@ function closeSidebar() {
   document.getElementById('sidebar-overlay')?.classList.add('hidden');
 }
 
+// Collapsible group inside the sidebar (Management / Reports).
+// Click the header → toggles the .expanded class on the .sidebar-group parent.
+function toggleSidebarGroup(headerEl) {
+  const group = headerEl.closest('.sidebar-group');
+  if (!group) return;
+  group.classList.toggle('expanded');
+}
+
 // ── SESSION CONFIGURATION ──────────────────────────────
 async function openSessionConfig() {
   closeSidebar();

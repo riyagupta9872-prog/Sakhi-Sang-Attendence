@@ -125,7 +125,7 @@ function _actRenderLog(key) {
         <div class="form-group">
           <label>Devotee <span class="req">*</span></label>
           <div class="home-picker" id="${p}-picker">
-            <input type="text" id="${p}-devotee-search" placeholder="Type name to search…" autocomplete="off">
+            <input type="search" id="${p}-devotee-search" placeholder="Type name to search…" autocomplete="new-password" name="dev-search-${p}" data-lpignore="true" data-1p-ignore>
             <div class="home-picker-dropdown hidden" id="${p}-picker-dropdown"></div>
             <input type="hidden" id="${p}-devotee-id">
             <input type="hidden" id="${p}-devotee-name">

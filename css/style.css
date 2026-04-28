@@ -2554,6 +2554,47 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
   margin: .5rem .4rem;
 }
 
+/* ── Collapsible group in sidebar (Management / Reports) ─── */
+.sidebar-group { display: flex; flex-direction: column; }
+.sidebar-group-header {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  padding: .7rem .85rem;
+  font-size: .88rem;
+  font-weight: 700;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: background .12s ease;
+}
+.sidebar-group-header:hover { background: var(--bg-subtle); }
+.sidebar-group-header i:first-child {
+  width: 20px; color: var(--brand); font-size: .95rem; text-align: center;
+}
+.sidebar-group-header .sidebar-chevron {
+  margin-left: auto; font-size: .72rem; color: var(--text-muted);
+  transition: transform .2s ease; width: auto;
+}
+.sidebar-group.expanded > .sidebar-group-header .sidebar-chevron { transform: rotate(180deg); }
+.sidebar-group-body {
+  display: none;
+  flex-direction: column;
+  gap: .1rem;
+  padding-left: .5rem;
+  margin-bottom: .15rem;
+  border-left: 2px solid var(--border);
+  margin-left: 1.05rem;
+}
+.sidebar-group.expanded > .sidebar-group-body { display: flex; }
+.sidebar-item.sub {
+  font-size: .83rem; padding: .55rem .75rem;
+}
+.sidebar-item.sub i { font-size: .85rem; }
+
 /* Session topic/speaker chip on calling list */
 .session-info-chip {
   display: flex;
