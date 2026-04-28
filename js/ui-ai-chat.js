@@ -1,7 +1,8 @@
-// Natural-language query interface over Firestore data, powered by Google Gemini.
-// The API key is client-visible by design (static site with Firebase Auth gate).
-// Restrict this key to your app's domain in Google Cloud Console → APIs & Services → Credentials.
-const _GEMINI_KEY = 'AIzaSyDrVNd-3B8oy8qD1EbakU_znbm1SaqYwVA';
+// Natural-language query interface over Firestore data, powered by Gemini.
+// Requests are proxied through a Cloudflare Worker so the API key never
+// leaves Cloudflare's servers (deployed at AI_PROXY_BASE below). Update this
+// constant if you redeploy the Worker under a new name.
+const _AI_PROXY_BASE = 'https://old-truth-f7e0sakhi-ai.riyagupta9872.workers.dev';
 
 // Models tried in order — if one returns "quota exceeded" with limit: 0
 // (no free-tier access), we automatically try the next.
@@ -16,20 +17,9 @@ const _GEMINI_MODELS = [
 let _activeModel = _GEMINI_MODELS[0];
 
 function _geminiUrl(model) {
-  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${_GEMINI_KEY}`;
+  // Worker forwards path 1:1 to Gemini, injecting the API key from its secret.
+  return `${_AI_PROXY_BASE}/v1beta/models/${model}:generateContent`;
 }
-
-// Debug helper — call from console: await listGeminiModels()
-window.listGeminiModels = async function() {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${_GEMINI_KEY}`);
-  const data = await res.json();
-  if (!res.ok) { console.error('listModels failed:', data); return data; }
-  const usable = (data.models || [])
-    .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
-    .map(m => ({ name: m.name.replace('models/', ''), display: m.displayName }));
-  console.table(usable);
-  return usable;
-};
 
 // Show FAB only when authenticated
 firebase.auth().onAuthStateChanged(user => {
