@@ -1367,6 +1367,13 @@ function _mfbOnFiltersChanged(e) {
   }
   if (tab === 'care'         && typeof loadCareData === 'function')        loadCareData();
   if (tab === 'calling-mgmt' && typeof loadCallingMgmtTab === 'function')  loadCallingMgmtTab();
+  // Activity tabs (Books/Service/Registration/Donation) — when the master
+  // Session changes, reset the Reports From/To to the new week (Sunday → Sat).
+  if (['books','service','registration','donation'].includes(tab)
+      && AppState._actSubTab?.[tab] === 'reports'
+      && typeof _actSyncRangeFromFilters === 'function') {
+    _actSyncRangeFromFilters(tab);
+  }
 }
 
 // ── MOBILE VALIDATION ─────────────────────────────────

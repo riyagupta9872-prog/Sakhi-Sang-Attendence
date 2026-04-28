@@ -346,27 +346,58 @@ function _actFmt(v, fmt) {
   return String(v);
 }
 
+// Default date range for activity reports: Sunday session → following Saturday
+// (services for a given Sunday class typically happen across the week that
+// FOLLOWS that class, ending with the next Saturday). If the master Session
+// filter has a Sunday selected, use it; otherwise fall back to the most recent
+// past Sunday.
+function _actDefaultRange() {
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  let sun;
+  const sessionId = AppState.filters?.sessionId;
+  if (sessionId) {
+    sun = new Date(sessionId + 'T00:00:00');
+  } else {
+    const today = new Date();
+    sun = new Date(today);
+    sun.setDate(today.getDate() - today.getDay()); // back up to this week's Sunday
+  }
+  const sat = new Date(sun);
+  sat.setDate(sun.getDate() + 6);
+  return { from: fmt(sun), to: fmt(sat) };
+}
+
+// Called by filtersChanged listener to refresh the activity report when the
+// master Session changes. Resyncs From/To inputs to the new default week
+// and reloads. No-op if the Reports panel for that key isn't built yet.
+function _actSyncRangeFromFilters(key) {
+  const cfg = ACTIVITY_CONFIG[key];
+  if (!cfg) return;
+  const p = cfg.prefix;
+  const fromEl = document.getElementById(p + '-rep-from');
+  const toEl   = document.getElementById(p + '-rep-to');
+  if (!fromEl || !toEl) return;
+  const range = _actDefaultRange();
+  fromEl.value = range.from;
+  toEl.value   = range.to;
+  _actLoadReport(key);
+}
+
 // ── REPORTS view ────────────────────────────────────────
 function _actRenderReports(key) {
   const cfg  = ACTIVITY_CONFIG[key];
   const wrap = document.getElementById('act-' + key + '-reports');
-  const today = getToday();
-  // Default to a 30-day window ending today — much more inclusive than month-start,
-  // so an entry just logged today or last week is always visible by default.
-  const rangeStart = (() => {
-    const d = new Date(today + 'T00:00:00'); d.setDate(d.getDate() - 30);
-    return d.toISOString().slice(0, 10);
-  })();
+  const range = _actDefaultRange();
   const p = cfg.prefix;
   wrap.innerHTML = `
     <div class="act-rpt-controls">
       <div class="form-group">
         <label>From</label>
-        <input type="date" id="${p}-rep-from" value="${rangeStart}" onchange="_actLoadReport('${key}')">
+        <input type="date" id="${p}-rep-from" value="${range.from}" onchange="_actLoadReport('${key}')">
       </div>
       <div class="form-group">
         <label>To</label>
-        <input type="date" id="${p}-rep-to" value="${today}" onchange="_actLoadReport('${key}')">
+        <input type="date" id="${p}-rep-to" value="${range.to}" onchange="_actLoadReport('${key}')">
       </div>
       <button class="btn btn-secondary act-rpt-refresh" onclick="_actLoadReport('${key}')" title="Refresh from server">
         <i class="fas fa-sync-alt"></i>
