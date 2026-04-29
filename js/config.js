@@ -13,7 +13,31 @@ firebase.initializeApp(firebaseConfig);
 const fdb = firebase.firestore();
 const TS  = () => firebase.firestore.FieldValue.serverTimestamp();
 const INC = (n) => firebase.firestore.FieldValue.increment(n);
-fdb.enablePersistence({ synchronizeTabs: true }).catch(() => {});
+fdb.enablePersistence({ synchronizeTabs: true }).catch(err => {
+  if (err.code === 'failed-precondition') {
+    console.warn('[Sakhi Sang] Offline persistence disabled (multiple tabs open)');
+  } else if (err.code === 'unimplemented') {
+    console.warn('[Sakhi Sang] Offline persistence not supported in this browser');
+  }
+});
+
+// Recover from Firestore SDK internal assertion errors (known bug with multi-tab persistence).
+// When this happens the SDK is in an unrecoverable state — a reload is the only fix.
+function _isFirestoreAssertionError(msg) {
+  return typeof msg === 'string' && msg.includes('INTERNAL ASSERTION FAILED');
+}
+window.addEventListener('unhandledrejection', e => {
+  if (_isFirestoreAssertionError(e.reason?.message)) {
+    console.warn('[Sakhi Sang] Firestore internal error — reloading to recover');
+    setTimeout(() => location.reload(), 600);
+  }
+});
+window.addEventListener('error', e => {
+  if (_isFirestoreAssertionError(e.message)) {
+    console.warn('[Sakhi Sang] Firestore internal error — reloading to recover');
+    setTimeout(() => location.reload(), 600);
+  }
+});
 
 // ── APP STATE ─────────────────────────────────────────
 const AppState = {

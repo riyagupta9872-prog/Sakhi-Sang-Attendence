@@ -235,6 +235,7 @@ async function saveCallingWeekConfig() {
 }
 
 async function loadCallingStatus() {
+  _clearCallingTimers();
   _callingLocked = false;
   document.getElementById('calling-list').innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
@@ -744,6 +745,11 @@ async function updateAvailableFrom(devoteeId, date) {
 }
 
 const _reasonTimers = {};
+const _notesTimersCalling = {};
+function _clearCallingTimers() {
+  Object.keys(_reasonTimers).forEach(k => { clearTimeout(_reasonTimers[k]); delete _reasonTimers[k]; });
+  Object.keys(_notesTimersCalling).forEach(k => { clearTimeout(_notesTimersCalling[k]); delete _notesTimersCalling[k]; });
+}
 function _saveCallingReason(devoteeId, reason, notes, availFrom) {
   if (_callingLocked) return;
   clearTimeout(_reasonTimers[devoteeId]);

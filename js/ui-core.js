@@ -1005,6 +1005,7 @@ async function initApp() {
 // Stage 2: bar is visible and editable, but tabs still also use their legacy
 // widgets. The bar mirrors values in both directions through dispatchFilters
 // + a 'filtersChanged' listener that syncs legacy <select> values back.
+let _mfbInitDone = false;
 async function initMasterFilterBar() {
   // Mark Team chip as locked for non-superAdmin users (they cannot change team).
   const teamChip    = document.getElementById('mfb-team-chip');
@@ -1026,11 +1027,13 @@ async function initMasterFilterBar() {
   // Click outside any chip to close all open dropdowns
   _frInitOutsideClose();
 
-  // Listen to dispatchFilters firing → keep widgets in sync (legacy + master)
-  window.addEventListener('filtersChanged', _mfbOnFiltersChanged);
-
-  // Mirror back: legacy per-tab <select>s push values into master state.
-  _mfbAttachLegacyMirror();
+  if (!_mfbInitDone) {
+    _mfbInitDone = true;
+    // Listen to dispatchFilters firing → keep widgets in sync (legacy + master)
+    window.addEventListener('filtersChanged', _mfbOnFiltersChanged);
+    // Mirror back: legacy per-tab <select>s push values into master state.
+    _mfbAttachLegacyMirror();
+  }
 
   _mfbUpdateCaption();
 }
@@ -1412,7 +1415,8 @@ function initAllPickers() {
 
 function setupPicker(containerId, hiddenId) {
   const container = document.getElementById(containerId);
-  if (!container) return;
+  if (!container || container.dataset.pickerInit) return;
+  container.dataset.pickerInit = '1';
   const input    = container.querySelector('.picker-input');
   const dropdown = container.querySelector('.picker-dropdown');
   const hidden   = document.getElementById(hiddenId);
@@ -1453,7 +1457,8 @@ function selectPicker(containerId, hiddenId, name, id) {
 
 function setupUserPicker(containerId, hiddenId, getTeam) {
   const container = document.getElementById(containerId);
-  if (!container) return;
+  if (!container || container.dataset.pickerInit) return;
+  container.dataset.pickerInit = '1';
   const input    = container.querySelector('.picker-input');
   const dropdown = container.querySelector('.picker-dropdown');
   const hidden   = document.getElementById(hiddenId);

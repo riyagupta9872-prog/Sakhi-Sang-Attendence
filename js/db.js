@@ -247,11 +247,23 @@ const DB = {
 
   /* SESSIONS */
   async getTodaySession() {
-    const sunday = getUpcomingSunday();
-    const snap = await fdb.collection('sessions').where('sessionDate', '==', sunday).limit(1).get();
-    if (!snap.empty) return { id: snap.docs[0].id, session_date: sunday };
-    const ref = await fdb.collection('sessions').add({ sessionDate: sunday, createdAt: TS() });
-    return { id: ref.id, session_date: sunday };
+    const upcomingSunday = getUpcomingSunday();
+    // Use upcoming Sunday only if it already exists (admin has configured it in Session Mgmt).
+    // Otherwise fall back to the most recent past session so the app opens on real data.
+    const upcomingSnap = await fdb.collection('sessions')
+      .where('sessionDate', '==', upcomingSunday).limit(1).get();
+    if (!upcomingSnap.empty) {
+      return { id: upcomingSnap.docs[0].id, session_date: upcomingSunday };
+    }
+    const pastSnap = await fdb.collection('sessions')
+      .orderBy('sessionDate', 'desc').limit(1).get();
+    if (!pastSnap.empty) {
+      const d = pastSnap.docs[0];
+      return { id: d.id, session_date: d.data().sessionDate };
+    }
+    // No sessions at all — create upcoming Sunday as the bootstrap session
+    const ref = await fdb.collection('sessions').add({ sessionDate: upcomingSunday, createdAt: TS() });
+    return { id: ref.id, session_date: upcomingSunday };
   },
 
   async getOrCreateSession(dateStr) {
@@ -977,15 +989,18 @@ const DB = {
   async getTrends(period = 'weekly', team = '') {
     const snap = await fdb.collection('sessions').orderBy('sessionDate', 'asc').limit(24).get();
     const sessions = snap.docs.map(d => ({ id: d.id, sessionDate: d.data().sessionDate }));
-    const results = [];
-    for (const s of sessions) {
+    if (!sessions.length) return [];
+    const aSnaps = await Promise.all(sessions.map(s => {
       let q = fdb.collection('attendanceRecords').where('sessionId', '==', s.id);
       if (team) q = q.where('teamName', '==', team);
-      const aSnap = await q.get();
+      return q.get();
+    }));
+    const results = [];
+    sessions.forEach((s, i) => {
       const label = period === 'monthly' ? s.sessionDate.slice(0, 7) : s.sessionDate;
       const ex = results.find(r => r.period === label);
-      if (ex) ex.count += aSnap.size; else results.push({ period: label, count: aSnap.size });
-    }
+      if (ex) ex.count += aSnaps[i].size; else results.push({ period: label, count: aSnaps[i].size });
+    });
     return results;
   },
 
