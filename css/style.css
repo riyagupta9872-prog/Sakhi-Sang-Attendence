@@ -2466,8 +2466,8 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
   .panel-header { padding: .78rem .95rem; }
   .panel-header h2 { font-size: .9rem; }
   .att-sub-tab, .sub-tab { font-size: .76rem; padding: .38rem .62rem; }
-  button.fab { bottom: calc(4.25rem + env(safe-area-inset-bottom, 0)); right: 1rem; width: 50px; height: 50px; font-size: 1.2rem; }
-  .ai-fab    { bottom: calc(4.25rem + env(safe-area-inset-bottom, 0)); left: 1rem; width: 48px; height: 48px; font-size: 1.1rem; }
+  button.fab { bottom: calc(5.5rem + env(safe-area-inset-bottom, 0)); right: 1rem; width: 50px; height: 50px; font-size: 1.2rem; }
+  .ai-fab    { bottom: calc(5.5rem + env(safe-area-inset-bottom, 0)); left: 1rem; width: 48px; height: 48px; font-size: 1.1rem; }
   .header-user-info { display: none; }
   .header-right { gap: .42rem; }
 }
@@ -3388,16 +3388,19 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
   background: linear-gradient(135deg, var(--brand), var(--brand-mid));
   color: #fff;
   border: none;
-  cursor: pointer;
+  cursor: grab;
   align-items: center;
   justify-content: center;
   font-size: 1.2rem;
   box-shadow: var(--shadow-brand), var(--shadow-md);
   z-index: 300;
   transition: transform .2s, box-shadow .2s;
+  touch-action: none;
+  user-select: none;
 }
 .ai-fab:hover { transform: scale(1.08); box-shadow: 0 6px 20px rgba(26,92,58,.45); }
 .ai-fab:active { transform: scale(.94); }
+.ai-fab.dragging { transition: none; cursor: grabbing; transform: scale(1.12); box-shadow: 0 10px 32px rgba(26,92,58,.55); }
 
 .ai-chat-box {
   display: flex;

@@ -21,11 +21,98 @@ function _geminiUrl(model) {
   return `${_AI_PROXY_BASE}/v1beta/models/${model}:generateContent`;
 }
 
-// Show FAB only when authenticated
+// Show FAB only when authenticated; init drag on first show
 firebase.auth().onAuthStateChanged(user => {
   const fab = document.getElementById('ai-fab');
-  if (fab) fab.style.display = user ? 'flex' : 'none';
+  if (!fab) return;
+  fab.style.display = user ? 'flex' : 'none';
+  if (user) _initAiFabDrag();
 });
+
+function _initAiFabDrag() {
+  const fab = document.getElementById('ai-fab');
+  if (!fab || fab._dragInit) return;
+  fab._dragInit = true;
+
+  // Restore saved position (stored as { left, top } in px from viewport top-left)
+  const saved = (() => { try { return JSON.parse(localStorage.getItem('ai-fab-pos')); } catch { return null; } })();
+  if (saved && saved.left != null && saved.top != null) {
+    const S = fab.offsetWidth || 52;
+    const clampedLeft = Math.min(Math.max(0, saved.left), window.innerWidth  - S);
+    const clampedTop  = Math.min(Math.max(0, saved.top),  window.innerHeight - S);
+    fab.style.left   = clampedLeft + 'px';
+    fab.style.top    = clampedTop  + 'px';
+    fab.style.bottom = 'auto';
+    fab.style.right  = 'auto';
+  }
+
+  let _startX, _startY, _originLeft, _originTop, _moved = false;
+  const DRAG_THRESHOLD = 6; // px movement before we consider it a drag
+
+  function _dragStart(x, y) {
+    const rect = fab.getBoundingClientRect();
+    _startX = x; _startY = y;
+    _originLeft = rect.left; _originTop = rect.top;
+    _moved = false;
+    // Switch to top/left absolute so we can freely position during drag
+    fab.style.left   = _originLeft + 'px';
+    fab.style.top    = _originTop  + 'px';
+    fab.style.bottom = 'auto';
+    fab.style.right  = 'auto';
+    fab.classList.add('dragging');
+  }
+
+  function _dragMove(x, y) {
+    const dx = x - _startX, dy = y - _startY;
+    if (!_moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+    _moved = true;
+    const S = fab.offsetWidth;
+    const newLeft = Math.min(Math.max(0, _originLeft + dx), window.innerWidth  - S);
+    const newTop  = Math.min(Math.max(0, _originTop  + dy), window.innerHeight - S);
+    fab.style.left = newLeft + 'px';
+    fab.style.top  = newTop  + 'px';
+  }
+
+  function _dragEnd() {
+    fab.classList.remove('dragging');
+    if (!_moved) {
+      openAiChat();
+      return;
+    }
+    localStorage.setItem('ai-fab-pos', JSON.stringify({
+      left: parseInt(fab.style.left),
+      top:  parseInt(fab.style.top)
+    }));
+  }
+
+  // Mouse
+  fab.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    _dragStart(e.clientX, e.clientY);
+    const onMove = e => _dragMove(e.clientX, e.clientY);
+    const onUp   = () => { _dragEnd(); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+  });
+
+  // Touch
+  fab.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    _dragStart(t.clientX, t.clientY);
+  }, { passive: true });
+
+  fab.addEventListener('touchmove', e => {
+    const t = e.touches[0];
+    _dragMove(t.clientX, t.clientY);
+    if (_moved) e.preventDefault(); // block page scroll while dragging
+  }, { passive: false });
+
+  fab.addEventListener('touchend', e => {
+    if (_moved) e.preventDefault(); // block ghost click after drag
+    _dragEnd();
+  }, { passive: false });
+}
 
 function openAiChat() {
   openModal('ai-chat-modal');

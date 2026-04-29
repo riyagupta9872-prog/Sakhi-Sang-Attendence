@@ -2215,6 +2215,8 @@ async function _doExportOverallReport(bounds, prevBounds, prevLabel, filename) {
       if (wsSummary[addr]) wsSummary[addr].s = cell.s;
     }
   }));
+  // Freeze column A (Team / Date) so it stays visible when scrolling right
+  wsSummary['!views'] = [{ state: 'frozen', xSplit: 1, ySplit: 0, topLeftCell: 'B1' }];
 
   const careRows = [careHdr, careSubHdr, ...careDataRows];
   const wsCare = _xlsSheet(
@@ -2224,6 +2226,8 @@ async function _doExportOverallReport(bounds, prevBounds, prevLabel, filename) {
   careRows.forEach((row, r) => row.forEach((cell, c) => {
     if (cell?.s) { const addr = XLSX.utils.encode_cell({ r, c }); if (wsCare[addr]) wsCare[addr].s = cell.s; }
   }));
+  // Freeze Name column (col B) in Care List so name stays visible when scrolling
+  wsCare['!views'] = [{ state: 'frozen', xSplit: 2, ySplit: 1, topLeftCell: 'C2' }];
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
