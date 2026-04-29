@@ -2466,7 +2466,8 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
   .panel-header { padding: .78rem .95rem; }
   .panel-header h2 { font-size: .9rem; }
   .att-sub-tab, .sub-tab { font-size: .76rem; padding: .38rem .62rem; }
-  button.fab { bottom: 4.75rem; right: 1rem; width: 50px; height: 50px; font-size: 1.2rem; }
+  button.fab { bottom: calc(4.25rem + env(safe-area-inset-bottom, 0)); right: 1rem; width: 50px; height: 50px; font-size: 1.2rem; }
+  .ai-fab    { bottom: calc(4.25rem + env(safe-area-inset-bottom, 0)); left: 1rem; width: 48px; height: 48px; font-size: 1.1rem; }
   .header-user-info { display: none; }
   .header-right { gap: .42rem; }
 }
