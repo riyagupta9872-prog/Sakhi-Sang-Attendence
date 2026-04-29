@@ -1,5 +1,5 @@
 /* ══ EXCEL.JS – Import helpers, export functions ══ */
-console.log('%c[Sakhi Sang] excel.js v138 loaded — template has Kirtan fields + grouped headers', 'background:#1A5C3A;color:#fff;padding:2px 8px;border-radius:3px');
+console.log('%c[Sakhi Sang] excel.js v140 loaded — template has Kirtan fields + grouped headers', 'background:#1A5C3A;color:#fff;padding:2px 8px;border-radius:3px');
 
 // ── IMPORT HELPERS ────────────────────────────────────
 function importCol(row, aliases) {
@@ -274,6 +274,195 @@ async function exportCallingList() {
   }
 }
 
+// ── EXPORT CALLING LIST BY COORDINATOR ───────────────────────────────
+async function exportCallingListByCoord() {
+  showToast('Preparing calling list by coordinator…');
+  try {
+    const today = getToday();
+    const now = new Date();
+    const fyStartYear = (now.getMonth() + 1) >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+    const fyStart = `${fyStartYear}-04-01`;
+    const fyLabel = `Apr-${String(fyStartYear).slice(-2)} to Mar-${String(fyStartYear + 1).slice(-2)}`;
+    const RECENT_N = 6;
+    const XS = _xls();
+
+    // Last N non-cancelled sessions
+    const sessSnap = await fdb.collection('sessions')
+      .where('sessionDate', '<=', today)
+      .orderBy('sessionDate', 'desc').limit(RECENT_N + 4).get();
+    const recentSessions = sessSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(s => !s.isCancelled)
+      .slice(0, RECENT_N)
+      .sort((a, b) => a.sessionDate.localeCompare(b.sessionDate));
+
+    const callingCfg = await DB.getCallingWeekConfig();
+    const configCallingDate = callingCfg?.callingDate || null;
+    const configSessionDate = callingCfg?.sessionDate || null;
+    const includeUpcoming = !!(configCallingDate && configCallingDate > today);
+
+    // Build week map: sessionDate → { csDate, sessionDate, sessId }
+    const weekMap = new Map();
+    recentSessions.forEach(s => weekMap.set(s.sessionDate, { csDate: null, sessionDate: s.sessionDate, sessId: s.id }));
+    if (includeUpcoming && configSessionDate) {
+      const entry = weekMap.get(configSessionDate) || { csDate: null, sessionDate: configSessionDate, sessId: null };
+      entry.csDate = configCallingDate;
+      weekMap.set(configSessionDate, entry);
+    }
+
+    // Fetch calling status for the range
+    const csFrom = recentSessions[0]?.sessionDate || fyStart;
+    const csTo = includeUpcoming ? configCallingDate : today;
+    const csSnap = await fdb.collection('callingStatus')
+      .where('weekDate', '>=', csFrom).where('weekDate', '<=', csTo).get();
+    const csByWeek = {};
+    csSnap.docs.forEach(doc => {
+      const { weekDate, devoteeId, comingStatus, callingNotes, callingReason, availableFrom } = doc.data();
+      if (!csByWeek[weekDate]) csByWeek[weekDate] = {};
+      csByWeek[weekDate][devoteeId] = { status: comingStatus, notes: callingNotes || '', reason: callingReason || '', availableFrom: availableFrom || '' };
+    });
+    Object.keys(csByWeek).forEach(csDate => {
+      if (configCallingDate && csDate === configCallingDate) return;
+      const sd = snapToSunday(csDate);
+      if (weekMap.has(sd) && !weekMap.get(sd).csDate) weekMap.get(sd).csDate = csDate;
+    });
+
+    const weekPairs = [...weekMap.values()].sort((a, b) =>
+      (a.csDate || a.sessionDate).localeCompare(b.csDate || b.sessionDate));
+
+    // Attendance for recent sessions
+    const attPerSession = {};
+    const sessIds = recentSessions.map(s => s.id);
+    for (let i = 0; i < sessIds.length; i += 10) {
+      const aSnap = await fdb.collection('attendanceRecords').where('sessionId', 'in', sessIds.slice(i, i + 10)).get();
+      aSnap.docs.forEach(doc => {
+        const { sessionId, devoteeId } = doc.data();
+        if (!attPerSession[sessionId]) attPerSession[sessionId] = new Set();
+        attPerSession[sessionId].add(devoteeId);
+      });
+    }
+    const sessIdByDate = {};
+    recentSessions.forEach(s => sessIdByDate[s.sessionDate] = s.id);
+
+    let activeDevotees = (await DevoteeCache.all())
+      .filter(d => d.callingBy && d.callingBy.trim() && !d.isNotInterested);
+    if (AppState.userRole === 'teamAdmin') {
+      activeDevotees = activeDevotees.filter(d => d.teamName === AppState.userTeam);
+    }
+
+    const byCoord = {};
+    activeDevotees.forEach(d => {
+      const c = d.callingBy.trim();
+      if (!byCoord[c]) byCoord[c] = [];
+      byCoord[c].push(d);
+    });
+
+    // "New" = joined within last 8 weeks
+    const newThreshold = (() => { const dt = new Date(); dt.setDate(dt.getDate() - 56); return dt.toISOString().slice(0, 10); })();
+
+    // Color palette
+    const HDR_BG = 'E26B0A', HDR_FG = 'FFFFFF';
+    const ACT_BG = 'FFFF00', ACT_FG = '5D4037';
+    const ATT_BG = '008B8B', ATT_FG = 'FFFFFF';
+    const TOT_BG = 'C00000', TOT_FG = 'FFFFFF';
+    const ODD_BG = 'BDD7EE', EVN_BG = 'DAEEF3', NEW_BG = '00FFFF';
+    const NEW_CS_BG = 'FFFF00';
+
+    function mkHdr(txt, bg, fg) {
+      return { v: txt, s: { ...XS.hdr(bg, fg), alignment: { horizontal: 'center', vertical: 'center', wrapText: true } } };
+    }
+
+    const wb = XLSX.utils.book_new();
+    const fixedLabels = ['Sno.', 'Name', 'Mobile Number', 'Ref-2', 'C.R', 'Active', 'Team Wise', 'Calling By', `Attendance\n${fyLabel}`];
+
+    Object.keys(byCoord).sort().forEach(coordName => {
+      const members = [...byCoord[coordName]].sort((a, b) => a.name.localeCompare(b.name));
+
+      const hdrRow = [
+        ...fixedLabels.map((h, ci) => {
+          if (ci === 5) return mkHdr(h, ACT_BG, ACT_FG);
+          if (ci === 8) return mkHdr(h, ATT_BG, ATT_FG);
+          return mkHdr(h, HDR_BG, HDR_FG);
+        }),
+        ...weekPairs.flatMap(({ csDate, sessionDate }) => [
+          mkHdr(`CS  ${csDate ? sheetFmtShortMonth(csDate) : '—'}`, HDR_BG, HDR_FG),
+          mkHdr(`AT  ${sessionDate ? sheetFmtShortMonth(sessionDate) : '—'}`, HDR_BG, HDR_FG)
+        ]),
+        mkHdr('TOTAL', TOT_BG, TOT_FG)
+      ];
+      const totalCols = hdrRow.length;
+      const titleRow = Array.from({ length: totalCols }, (_, i) =>
+        ({ v: i === 0 ? `${coordName} — Calling List (last ${RECENT_N} sessions)` : '', s: XS.hdr('0D5E35') }));
+
+      const dataRows = members.map((d, idx) => {
+        const isNew = (d.dateOfJoining || '') >= newThreshold;
+        const rowBg = isNew ? NEW_BG : (idx % 2 === 0 ? ODD_BG : EVN_BG);
+        const base = { ...XS.cell(), fill: XS.mkFill(rowBg) };
+        let totalPresent = 0;
+
+        const csAtCells = weekPairs.flatMap(({ csDate, sessionDate }) => {
+          const sessId = sessionDate ? sessIdByDate[sessionDate] : null;
+          const came = !!(sessId && attPerSession[sessId]?.has(d.id));
+          if (came) totalPresent++;
+
+          // CS cell: show "New-date" for devotee's join week
+          const joinDate = d.dateOfJoining || '';
+          const newThisWeek = joinDate && sessionDate && joinDate >= (csDate || sessionDate) && joinDate <= sessionDate;
+          const csEntry = !newThisWeek && csDate ? csByWeek[csDate]?.[d.id] : null;
+          const csVal = newThisWeek ? `New-${sheetFmtShortMonth(joinDate)}` : csEntryText(csEntry);
+          const csBg = newThisWeek ? NEW_CS_BG : (csEntryBg(csEntry) || rowBg);
+          const csSt = {
+            ...XS.cell(), fill: XS.mkFill(csBg),
+            font: { sz: 9, bold: newThisWeek, color: { rgb: newThisWeek ? '8B6914' : '000000' } },
+            alignment: { horizontal: 'center', vertical: 'center', wrapText: true }
+          };
+
+          // AT cell
+          const atSt = came
+            ? { ...XS.cell(), fill: XS.mkFill('BBDEFB'), font: { bold: true, sz: 9, color: { rgb: '0D47A1' } }, alignment: { horizontal: 'center' } }
+            : sessId
+              ? { ...base, alignment: { horizontal: 'center' } }
+              : { ...XS.cell(), fill: XS.mkFill(rowBg), font: { sz: 9, color: { rgb: 'BBBBBB' } }, alignment: { horizontal: 'center' } };
+
+          return [{ v: csVal, s: csSt }, { v: sessId ? (came ? 'P' : '') : '—', s: atSt }];
+        });
+
+        const totSt = { ...XS.cell(), fill: XS.mkFill(rowBg), font: { bold: true, sz: 10, color: { rgb: totalPresent > 0 ? '1B5E20' : 'C62828' } }, alignment: { horizontal: 'center' } };
+        return [
+          { v: idx + 1, s: { ...base, font: { sz: 9, color: { rgb: '666666' } } } },
+          { v: d.name, s: { ...base, alignment: { ...XS.left }, font: { sz: 9 } } },
+          { v: d.mobile || '', s: { ...base, alignment: { ...XS.center } } },
+          { v: d.referenceBy || '', s: { ...base, alignment: { ...XS.left }, font: { sz: 9 } } },
+          { v: d.chantingRounds || 0, s: { ...base, alignment: { ...XS.center } } },
+          { v: d.devoteeStatus || '', s: { ...base, alignment: { ...XS.center } } },
+          { v: d.teamName || '', s: { ...base, alignment: { ...XS.center } } },
+          { v: d.callingBy || '', s: { ...base, alignment: { ...XS.left } } },
+          { v: d.lifetimeAttendance || 0, s: { ...XS.cell(), fill: XS.mkFill(isNew ? '00AAAA' : '006666'), font: { bold: true, sz: 9, color: { rgb: 'FFFFFF' } }, alignment: { ...XS.center } } },
+          ...csAtCells,
+          { v: totalPresent, s: totSt }
+        ];
+      });
+
+      const ws = _xlsSheet([titleRow, hdrRow, ...dataRows], [
+        { wch: 4 }, { wch: 22 }, { wch: 13 }, { wch: 18 }, { wch: 4 }, { wch: 10 }, { wch: 14 }, { wch: 18 }, { wch: 12 },
+        ...weekPairs.flatMap(() => [{ wch: 22 }, { wch: 5 }]),
+        { wch: 6 }
+      ]);
+      ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: totalCols - 1 } }];
+      ws['!rows'] = [{ hpt: 18 }, { hpt: 30 }];
+      ws['!views'] = [{ state: 'frozen', xSplit: 9, ySplit: 2, topLeftCell: 'J3' }];
+      XLSX.utils.book_append_sheet(wb, ws, coordName.slice(0, 31));
+    });
+
+    const coordCount = Object.keys(byCoord).length;
+    XLSX.writeFile(wb, `calling_list_${today}.xlsx`);
+    showToast(`Calling list downloaded — ${coordCount} coordinator sheet${coordCount !== 1 ? 's' : ''}`, 'success');
+  } catch (e) {
+    console.error('exportCallingListByCoord error', e);
+    showToast('Export failed: ' + (e.message || 'Unknown error'), 'error');
+  }
+}
+
 // ── EXPORT SHEET EXCEL ────────────────────────────────
 async function exportSheetExcel() {
   const teamFilter = document.getElementById('sheet-team')?.value || '';
@@ -383,19 +572,17 @@ async function _buildAndDownloadDevoteeWorkbook({ devotees, includeTeamCol, file
       : ['Facilitator', 'Reference By', 'Calling By'];
 
     const CATS = [
-      { label: 'Sr.No.',              cols: 1,                       bg: 'ECEFF1', fg: '37474F', subBg: 'CFD8DC' },
-      { label: 'Personal Identity',   cols: includeTeamCol ? 6 : 5,  bg: 'BBDEFB', fg: '0D47A1', subBg: 'E3F2FD' },
-      { label: 'Team Management',     cols: teamMgmtCols.length,     bg: 'FFF9C4', fg: '5D4037', subBg: 'FFFDE7' },
-      { label: 'Professional',        cols: 2,                       bg: 'E1BEE7', fg: '4A148C', subBg: 'F3E5F5' },
-      { label: 'Sadhana & Practices', cols: 6,                       bg: 'C8E6C9', fg: '1B5E20', subBg: 'E8F5E9' },
-      { label: 'Social & Family',     cols: includeTeamCol ? 4 : 3,  bg: 'FFE0B2', fg: 'BF360C', subBg: 'FFF3E0' },
-      { label: 'Status',              cols: 1,                       bg: 'FFCDD2', fg: 'B71C1C', subBg: 'FFEBEE' },
+      { label: 'Sr.No.',              cols: 1,                   bg: 'ECEFF1', fg: '37474F', subBg: 'CFD8DC' },
+      { label: 'Personal Identity',   cols: 6,                   bg: 'BBDEFB', fg: '0D47A1', subBg: 'E3F2FD' },
+      { label: 'Team Management',     cols: teamMgmtCols.length, bg: 'FFF9C4', fg: '5D4037', subBg: 'FFFDE7' },
+      { label: 'Professional',        cols: 2,                   bg: 'E1BEE7', fg: '4A148C', subBg: 'F3E5F5' },
+      { label: 'Sadhana & Practices', cols: 9,                   bg: 'C8E6C9', fg: '1B5E20', subBg: 'E8F5E9' },
+      { label: 'Social & Family',     cols: includeTeamCol ? 4 : 3, bg: 'FFE0B2', fg: 'BF360C', subBg: 'FFF3E0' },
+      { label: 'Status',              cols: 1,                   bg: 'FFCDD2', fg: 'B71C1C', subBg: 'FFEBEE' },
     ];
 
-    // Personal Identity adds an "Alternate Mobile" column on the import template.
-    const personalCols = includeTeamCol
-      ? ['Name', 'Mobile', 'Alternate Mobile', 'D.O.B', 'Address', 'E-Mail']
-      : ['Name', 'Contact', 'D.O.B', 'Address', 'E-Mail'];
+    // Personal Identity — always 6 cols (Mobile + Alternate Mobile in both export and template).
+    const personalCols = ['Name', 'Mobile', 'Alternate Mobile', 'D.O.B', 'Address', 'E-Mail'];
     const socialCols = includeTeamCol
       ? ['Family Favourable', 'Hobbies', 'Skills', 'Date of Joining']
       : ['Family Favourable', 'Hobbies', 'Date of Joining'];
@@ -406,6 +593,7 @@ async function _buildAndDownloadDevoteeWorkbook({ devotees, includeTeamCol, file
       ...teamMgmtCols,
       'Education', 'Profession',
       'Chanting Rounds', 'Reading', 'Hearing', 'Tilak', 'Kanthi', 'Gopi Dress',
+      'Plays Instrument', 'Instrument Name', 'Wants Kirtan Class',
       ...socialCols,
       'Status',
     ];
@@ -414,10 +602,11 @@ async function _buildAndDownloadDevoteeWorkbook({ devotees, includeTeamCol, file
     // Column widths — index-mapped to COL_HEADERS so adding/removing cols stays in sync.
     const widthByHeader = {
       'Sr.No.': 6,
-      'Name': 24, 'Mobile': 13, 'Contact': 13, 'Alternate Mobile': 14, 'D.O.B': 12, 'Address': 30, 'E-Mail': 26,
+      'Name': 24, 'Mobile': 13, 'Alternate Mobile': 14, 'D.O.B': 12, 'Address': 30, 'E-Mail': 26,
       'Team': 14, 'Facilitator': 22, 'Reference By': 22, 'Calling By': 22,
       'Education': 18, 'Profession': 18,
       'Chanting Rounds': 10, 'Reading': 13, 'Hearing': 13, 'Tilak': 8, 'Kanthi': 8, 'Gopi Dress': 11,
+      'Plays Instrument': 13, 'Instrument Name': 18, 'Wants Kirtan Class': 14,
       'Family Favourable': 18, 'Hobbies': 22, 'Skills': 18, 'Date of Joining': 14,
       'Status': 22,
     };
@@ -506,31 +695,33 @@ async function _buildAndDownloadDevoteeWorkbook({ devotees, includeTeamCol, file
       const yn = (v, yes = 'Yes', no = 'No') => v == null || v === '' ? '' : (v ? yes : no);
       // Build by header so reordering categories above stays in sync automatically.
       const cellByHeader = {
-        'Sr.No.':            { v: i + 1,                   s: dataCell() },
-        'Name':              { v: d.name || '',            s: dataCell({ left: true, bold: true }) },
-        'Mobile':            { v: d.mobile || '',          s: dataCell() },
-        'Contact':           { v: d.mobile || '',          s: dataCell() },
-        'Alternate Mobile':  { v: d.mobileAlt || '',       s: dataCell() },
-        'D.O.B':             { v: d.dob || '',             s: dataCell() },
-        'Address':           { v: d.address || '',         s: dataCell({ left: true, wrap: true }) },
-        'E-Mail':            { v: d.email || '',           s: dataCell({ left: true }) },
-        'Team':              { v: d.teamName || '',        s: dataCell() },
-        'Facilitator':       { v: d.facilitator || '',     s: dataCell() },
-        'Reference By':      { v: d.referenceBy || '',     s: dataCell() },
-        'Calling By':        { v: d.callingBy || '',       s: dataCell() },
-        'Education':         { v: d.education || '',       s: dataCell({ left: true }) },
-        'Profession':        { v: d.profession || '',      s: dataCell({ left: true }) },
-        'Chanting Rounds':   { v: d.chantingRounds || 0,   s: dataCell({ bold: true }) },
-        'Reading':           { v: d.reading || '',         s: dataCell() },
-        'Hearing':           { v: d.hearing || '',         s: dataCell() },
-        'Tilak':             { v: yn(d.tilak),             s: dataCell({ bg: d.tilak    ? 'C8E6C9' : d.tilak === false ? 'FFCDD2' : null }) },
-        'Kanthi':            { v: yn(d.kanthi),            s: dataCell({ bg: d.kanthi   ? 'C8E6C9' : d.kanthi === false ? 'FFCDD2' : null }) },
-        'Gopi Dress':        { v: yn(d.gopiDress),         s: dataCell({ bg: d.gopiDress? 'C8E6C9' : d.gopiDress === false ? 'FFCDD2' : null }) },
-        'Family Favourable': { v: d.familyFavourable || '', s: dataCell() },
-        'Hobbies':           { v: d.hobbies || '',         s: dataCell({ left: true, wrap: true }) },
-        'Skills':            { v: d.skills || '',          s: dataCell({ left: true, wrap: true }) },
-        'Date of Joining':   { v: d.dateOfJoining || '',   s: dataCell() },
-        'Status':            { v: d.devoteeStatus || '',   s: dataCell() },
+        'Sr.No.':             { v: i + 1,                    s: dataCell() },
+        'Name':               { v: d.name || '',             s: dataCell({ left: true, bold: true }) },
+        'Mobile':             { v: d.mobile || '',           s: dataCell() },
+        'Alternate Mobile':   { v: d.mobileAlt || '',        s: dataCell() },
+        'D.O.B':              { v: d.dob || '',              s: dataCell() },
+        'Address':            { v: d.address || '',          s: dataCell({ left: true, wrap: true }) },
+        'E-Mail':             { v: d.email || '',            s: dataCell({ left: true }) },
+        'Team':               { v: d.teamName || '',         s: dataCell() },
+        'Facilitator':        { v: d.facilitator || '',      s: dataCell() },
+        'Reference By':       { v: d.referenceBy || '',      s: dataCell() },
+        'Calling By':         { v: d.callingBy || '',        s: dataCell() },
+        'Education':          { v: d.education || '',        s: dataCell({ left: true }) },
+        'Profession':         { v: d.profession || '',       s: dataCell({ left: true }) },
+        'Chanting Rounds':    { v: d.chantingRounds || 0,    s: dataCell({ bold: true }) },
+        'Reading':            { v: d.reading || '',          s: dataCell() },
+        'Hearing':            { v: d.hearing || '',          s: dataCell() },
+        'Tilak':              { v: yn(d.tilak),              s: dataCell({ bg: d.tilak     ? 'C8E6C9' : d.tilak     === false ? 'FFCDD2' : null }) },
+        'Kanthi':             { v: yn(d.kanthi),             s: dataCell({ bg: d.kanthi    ? 'C8E6C9' : d.kanthi    === false ? 'FFCDD2' : null }) },
+        'Gopi Dress':         { v: yn(d.gopiDress),          s: dataCell({ bg: d.gopiDress ? 'C8E6C9' : d.gopiDress === false ? 'FFCDD2' : null }) },
+        'Plays Instrument':   { v: d.playsInstrument || '',  s: dataCell({ bg: d.playsInstrument === 'Yes' ? 'C8E6C9' : d.playsInstrument === 'No' ? 'FFCDD2' : null }) },
+        'Instrument Name':    { v: d.instrumentName || '',   s: dataCell({ left: true }) },
+        'Wants Kirtan Class': { v: d.wantsKirtanClass || '', s: dataCell({ bg: d.wantsKirtanClass === 'Yes' ? 'C8E6C9' : d.wantsKirtanClass === 'No' ? 'FFCDD2' : null }) },
+        'Family Favourable':  { v: d.familyFavourable || '', s: dataCell() },
+        'Hobbies':            { v: d.hobbies || '',          s: dataCell({ left: true, wrap: true }) },
+        'Skills':             { v: d.skills || '',           s: dataCell({ left: true, wrap: true }) },
+        'Date of Joining':    { v: d.dateOfJoining || '',    s: dataCell() },
+        'Status':             { v: d.devoteeStatus || '',    s: dataCell() },
       };
       return COL_HEADERS.map(h => cellByHeader[h] || { v: '', s: dataCell() });
     }
@@ -724,6 +915,124 @@ async function _buildAndDownloadDevoteeWorkbook({ devotees, includeTeamCol, file
       XLSX.utils.book_append_sheet(wb, wsFlat, 'Re-Import (Flat)');
     }
 
+    // Overall sheet — all teams, all data, Team column included, grouped by level.
+    {
+      const ovCats = [
+        { label: 'Sr.No.',              cols: 1,  bg: 'ECEFF1', fg: '37474F', subBg: 'CFD8DC' },
+        { label: 'Personal Identity',   cols: 6,  bg: 'BBDEFB', fg: '0D47A1', subBg: 'E3F2FD' },
+        { label: 'Team Management',     cols: 4,  bg: 'FFF9C4', fg: '5D4037', subBg: 'FFFDE7' },
+        { label: 'Professional',        cols: 2,  bg: 'E1BEE7', fg: '4A148C', subBg: 'F3E5F5' },
+        { label: 'Sadhana & Practices', cols: 9,  bg: 'C8E6C9', fg: '1B5E20', subBg: 'E8F5E9' },
+        { label: 'Social & Family',     cols: 4,  bg: 'FFE0B2', fg: 'BF360C', subBg: 'FFF3E0' },
+        { label: 'Status',              cols: 1,  bg: 'FFCDD2', fg: 'B71C1C', subBg: 'FFEBEE' },
+      ];
+      const ovHeaders = [
+        'Sr.No.',
+        'Name', 'Mobile', 'Alternate Mobile', 'D.O.B', 'Address', 'E-Mail',
+        'Team', 'Facilitator', 'Reference By', 'Calling By',
+        'Education', 'Profession',
+        'Chanting Rounds', 'Reading', 'Hearing', 'Tilak', 'Kanthi', 'Gopi Dress',
+        'Plays Instrument', 'Instrument Name', 'Wants Kirtan Class',
+        'Family Favourable', 'Hobbies', 'Skills', 'Date of Joining',
+        'Status',
+      ];
+      const ovTotal = ovHeaders.length;
+      const ovWidths = ovHeaders.map(h => ({ wch: widthByHeader[h] || 14 }));
+
+      function ovCatHeaderRow() {
+        const row = [];
+        ovCats.forEach(cat => {
+          row.push({ v: cat.label, s: catHdr(cat.bg, cat.fg) });
+          for (let i = 1; i < cat.cols; i++) row.push({ v: '', s: catHdr(cat.bg, cat.fg) });
+        });
+        return row;
+      }
+      function ovColHeaderRow() {
+        const row = []; let ci = 0;
+        ovCats.forEach(cat => {
+          for (let i = 0; i < cat.cols; i++) {
+            row.push({ v: ovHeaders[ci], s: colHdr(cat.subBg, cat.fg) });
+            ci++;
+          }
+        });
+        return row;
+      }
+      function ovCatMergesAt(rowIdx) {
+        const m = []; let c = 0;
+        ovCats.forEach(cat => {
+          if (cat.cols > 1) m.push({ s: { r: rowIdx, c }, e: { r: rowIdx, c: c + cat.cols - 1 } });
+          c += cat.cols;
+        });
+        return m;
+      }
+      function ovFullMergeAt(rowIdx) {
+        return [{ s: { r: rowIdx, c: 0 }, e: { r: rowIdx, c: ovTotal - 1 } }];
+      }
+      function ovEmptyRow() {
+        return Array.from({ length: ovTotal }, () => ({ v: '', s: dataCell() }));
+      }
+      function ovDevoteeRow(d, i) {
+        const yn = (v) => v == null || v === '' ? '' : (v ? 'Yes' : 'No');
+        const cellByHeader = {
+          'Sr.No.':            { v: i + 1,                    s: dataCell() },
+          'Name':              { v: d.name || '',             s: dataCell({ left: true, bold: true }) },
+          'Mobile':            { v: d.mobile || '',           s: dataCell() },
+          'Alternate Mobile':  { v: d.mobileAlt || '',        s: dataCell() },
+          'D.O.B':             { v: d.dob || '',              s: dataCell() },
+          'Address':           { v: d.address || '',          s: dataCell({ left: true, wrap: true }) },
+          'E-Mail':            { v: d.email || '',            s: dataCell({ left: true }) },
+          'Team':              { v: d.teamName || '',         s: dataCell({ bold: true }) },
+          'Facilitator':       { v: d.facilitator || '',      s: dataCell() },
+          'Reference By':      { v: d.referenceBy || '',      s: dataCell() },
+          'Calling By':        { v: d.callingBy || '',        s: dataCell() },
+          'Education':         { v: d.education || '',        s: dataCell({ left: true }) },
+          'Profession':        { v: d.profession || '',       s: dataCell({ left: true }) },
+          'Chanting Rounds':   { v: d.chantingRounds || 0,    s: dataCell({ bold: true }) },
+          'Reading':           { v: d.reading || '',          s: dataCell() },
+          'Hearing':           { v: d.hearing || '',          s: dataCell() },
+          'Tilak':              { v: yn(d.tilak),              s: dataCell({ bg: d.tilak     ? 'C8E6C9' : d.tilak     === false ? 'FFCDD2' : null }) },
+          'Kanthi':             { v: yn(d.kanthi),             s: dataCell({ bg: d.kanthi    ? 'C8E6C9' : d.kanthi    === false ? 'FFCDD2' : null }) },
+          'Gopi Dress':         { v: yn(d.gopiDress),          s: dataCell({ bg: d.gopiDress ? 'C8E6C9' : d.gopiDress === false ? 'FFCDD2' : null }) },
+          'Plays Instrument':   { v: d.playsInstrument || '',  s: dataCell({ bg: d.playsInstrument === 'Yes' ? 'C8E6C9' : d.playsInstrument === 'No' ? 'FFCDD2' : null }) },
+          'Instrument Name':    { v: d.instrumentName || '',   s: dataCell({ left: true }) },
+          'Wants Kirtan Class': { v: d.wantsKirtanClass || '', s: dataCell({ bg: d.wantsKirtanClass === 'Yes' ? 'C8E6C9' : d.wantsKirtanClass === 'No' ? 'FFCDD2' : null }) },
+          'Family Favourable':  { v: d.familyFavourable || '', s: dataCell() },
+          'Hobbies':           { v: d.hobbies || '',          s: dataCell({ left: true, wrap: true }) },
+          'Skills':            { v: d.skills || '',           s: dataCell({ left: true, wrap: true }) },
+          'Date of Joining':   { v: d.dateOfJoining || '',    s: dataCell() },
+          'Status':            { v: d.devoteeStatus || '',    s: dataCell() },
+        };
+        return ovHeaders.map(h => cellByHeader[h] || { v: '', s: dataCell() });
+      }
+
+      const ovRows = [], ovMerges = [];
+      levels.forEach(lvl => {
+        const members = devotees
+          .filter(d => d.isActive !== false)
+          .filter(d => { const cr = d.chantingRounds || 0; return cr >= lvl.min && cr <= lvl.max; })
+          .sort((a, b) => (a.teamName || '').localeCompare(b.teamName || '') || (a.name || '').localeCompare(b.name || ''));
+        if (!members.length) return;
+
+        const bannerRow = Array.from({ length: ovTotal }, (_, i) => ({ v: i === 0 ? lvl.label : '', s: levelBanner }));
+        ovFullMergeAt(ovRows.length).forEach(m => ovMerges.push(m));
+        ovRows.push(bannerRow);
+
+        ovCatMergesAt(ovRows.length).forEach(m => ovMerges.push(m));
+        ovRows.push(ovCatHeaderRow());
+        ovRows.push(ovColHeaderRow());
+
+        members.forEach((d, i) => ovRows.push(ovDevoteeRow(d, i)));
+        ovRows.push(ovEmptyRow());
+      });
+
+      if (ovRows.length) {
+        const wsOv = _xlsSheet(ovRows, ovWidths);
+        wsOv['!merges'] = ovMerges;
+        wsOv['!rows']   = ovRows.map(() => ({ hpt: 18 }));
+        XLSX.utils.book_append_sheet(wb, wsOv, 'Overall');
+      }
+    }
+
     XLSX.writeFile(wb, filename);
     showToast('Database exported!', 'success');
   } catch (e) {
@@ -865,7 +1174,8 @@ const IMPORT_FIELDS = [
   { key: 'kanthi',             label: 'Kanthi (Y/N)',            aliases: ['Kanthi','kanthi','KANTHI'] },
   { key: 'gopiDress',          label: 'Gopi Dress (Y/N)',        aliases: ['Gopi Dress','Gopi','GOPI','gopi dress','Gopi dress'] },
   { key: 'wantsKirtanClass',   label: 'Wants Kirtan Class (Y/N)', aliases: ['Wants Kirtan Class','Wants Kirtan','Kirtan Class','Kirtan','wants_kirtan_class','wants kirtan'] },
-  { key: 'instrumentName',     label: 'Instrument',              aliases: ['Instrument','Instrument Name','Plays','instrument','Instrument played','Music Instrument'] },
+  { key: 'playsInstrument',    label: 'Plays Instrument (Y/N)',  aliases: ['Plays Instrument','plays instrument','Plays Instr','playsInstrument','Plays Instrument?','Plays'] },
+  { key: 'instrumentName',     label: 'Instrument Name',         aliases: ['Instrument','Instrument Name','instrument','Instrument played','Music Instrument','Instrument played'] },
   { key: 'familyMembers',      label: 'Total Family Members',    aliases: ['Family Members','Total Family Members','Family Size','family members','familyMembers'] },
   { key: 'familyParticipants', label: 'Family Members in Class', aliases: ['Family in Class','Family Participants','Members in Class','familyParticipants','Family Members in Class'] },
   { key: 'familyFavourable',   label: 'Favorable to Devotion',   aliases: ['Family Favourable','Family Favorable','Family','family favourable','Family Favourable?','Favorable to Devotion'] },
@@ -1073,26 +1383,155 @@ async function confirmCallingByMapping() {
   return _runImportNow();
 }
 
-async function _runImportNow() {
-  const zone   = document.getElementById('import-drop-zone');
-  const result = document.getElementById('import-result');
-  zone.innerHTML = `<i class="fas fa-spinner" style="font-size:2rem;color:var(--secondary)"></i><p>Saving ${_importRows.length} rows…</p>`;
-  result.classList.add('hidden');
+// ── PRE-IMPORT DUPLICATE PREVIEW ─────────────────────────────────────────────
 
-  // Apply calling-by mapping to rows in-place before import
+// Scans rows without writing anything. Returns { newRows, duplicates, blanks }.
+async function _buildPreviewData(rows, colMap) {
+  function getF(row, key) {
+    const col = Object.keys(colMap).find(c => colMap[c] === key);
+    return col ? (row[col] ?? '') : '';
+  }
+  const pairKey = (n, m) => `${(n || '').trim().toLowerCase()}|${(m || '').trim()}`;
+  const list = await DevoteeCache.all();
+  const existMap = {};
+  list.forEach(d => { existMap[pairKey(d.name, d.mobile)] = d; });
+
+  const newRows = [], duplicates = [], blanks = [];
+  rows.forEach((row, i) => {
+    const name   = String(getF(row, 'name')).trim();
+    const mobile = String(getF(row, 'mobile')).replace(/\D/g, '').slice(0, 10);
+    if (!name) { blanks.push({ rowIdx: i, mobile }); return; }
+    const existing = existMap[pairKey(name, mobile)];
+    if (existing) {
+      duplicates.push({ rowIdx: i, name, mobile, existingName: existing.name, existingTeam: existing.teamName || '', row });
+    } else {
+      newRows.push({ rowIdx: i, name, mobile, row });
+    }
+  });
+  return { newRows, duplicates, blanks };
+}
+
+// Shows the preview modal. _importPreviewData is stored for confirmPreviewImport().
+let _importPreviewData = null;
+
+function showDuplicatePreviewModal(previewData) {
+  _importPreviewData = previewData;
+  const { newRows, duplicates, blanks } = previewData;
+
+  const summaryEl = document.getElementById('import-preview-summary');
+  summaryEl.innerHTML =
+    `<span style="color:#1b5e20;font-weight:700">✅ ${newRows.length} new</span>` +
+    (duplicates.length ? `&nbsp;&nbsp;<span style="color:#e65100;font-weight:700">⚠️ ${duplicates.length} duplicate${duplicates.length > 1 ? 's' : ''}</span>` : '') +
+    (blanks.length    ? `&nbsp;&nbsp;<span style="color:#c62828;font-weight:700">❌ ${blanks.length} blank name</span>` : '');
+
+  const tbody = document.getElementById('import-preview-body');
+  if (!duplicates.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="padding:.75rem;color:var(--text-muted);text-align:center">No duplicates found — all rows are new.</td></tr>';
+    document.getElementById('import-preview-dup-section').style.display = 'none';
+  } else {
+    document.getElementById('import-preview-dup-section').style.display = '';
+    tbody.innerHTML = duplicates.map((d, i) =>
+      `<tr>
+        <td style="padding:.3rem .5rem;text-align:center">
+          <input type="checkbox" id="dup-cb-${i}" checked style="cursor:pointer;width:15px;height:15px">
+        </td>
+        <td style="padding:.3rem .5rem;font-weight:600">${d.name}</td>
+        <td style="padding:.3rem .5rem;color:var(--text-muted)">${d.mobile || '—'}</td>
+        <td style="padding:.3rem .5rem;color:var(--text-muted);font-size:.78rem">${d.existingTeam || '—'}</td>
+      </tr>`
+    ).join('');
+  }
+
+  // Show/hide "update vs skip" choice based on global mode
+  document.getElementById('import-preview-mode-hint').textContent =
+    _importMode === 'upsert'
+      ? 'Checked duplicates will be UPDATED in the database.'
+      : 'Checked duplicates will be SKIPPED (add-only mode). Switch to "Add + Update" mode to update them.';
+
+  openModal('import-preview-modal');
+}
+
+async function confirmPreviewImport() {
+  closeModal('import-preview-modal');
+  if (!_importPreviewData) return;
+
+  const { newRows, duplicates } = _importPreviewData;
+
+  // Collect which duplicates the user kept checked
+  const approvedDuplicates = duplicates.filter((_, i) => {
+    const cb = document.getElementById(`dup-cb-${i}`);
+    return cb && cb.checked;
+  });
+  const rejectedCount = duplicates.length - approvedDuplicates.length;
+
+  // Reconstruct the final row list: new rows + approved duplicates (in original order)
+  const approvedDupIdxs = new Set(approvedDuplicates.map(d => d.rowIdx));
+  const finalRows = _importRows.filter((_, i) => {
+    // Always include new rows; include duplicate rows only if approved
+    const isNew = newRows.some(n => n.rowIdx === i);
+    const isDup = duplicates.some(d => d.rowIdx === i);
+    if (isNew) return true;
+    if (isDup) return approvedDupIdxs.has(i);
+    return false; // blanks always excluded
+  });
+
+  _importPreviewData = null;
+  await _executeImport(finalRows, rejectedCount);
+}
+
+async function _runImportNow() {
+  // Apply calling-by mapping to rows in-place before preview/import
   const cbCol = Object.keys(_importColMap).find(c => _importColMap[c] === 'callingBy');
   if (cbCol && Object.keys(_importCallingByMap).length) {
     _importRows = _importRows.map(r => {
       const orig = String(r[cbCol] ?? '').trim();
-      if (orig && _importCallingByMap[orig]) {
-        return { ...r, [cbCol]: _importCallingByMap[orig] };
-      }
+      if (orig && _importCallingByMap[orig]) return { ...r, [cbCol]: _importCallingByMap[orig] };
       return r;
     });
   }
 
+  const zone = document.getElementById('import-drop-zone');
+  zone.innerHTML = `<i class="fas fa-spinner" style="font-size:2rem;color:var(--secondary)"></i><p>Scanning ${_importRows.length} rows…</p>`;
+
   try {
-    const data = await importWithMapping(_importRows, _importColMap, _importMode);
+    const previewData = await _buildPreviewData(_importRows, _importColMap);
+    zone.innerHTML = `<i class="fas fa-cloud-upload-alt"></i>
+      <p>Click to browse or drag & drop Excel file</p>
+      <small style="color:var(--text-muted)">Supports any column names — auto-detected</small>
+      <input type="file" id="import-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleImportFile(event)">`;
+
+    if (previewData.duplicates.length > 0) {
+      // Show preview modal so user can review/reject duplicates before writing
+      showDuplicatePreviewModal(previewData);
+    } else {
+      // No duplicates — proceed directly
+      await _executeImport(_importRows, 0);
+    }
+  } catch (err) {
+    document.getElementById('import-result').className = 'import-result error';
+    document.getElementById('import-result').innerHTML = `<strong>Scan failed:</strong> ${err.message || 'Unknown error'}`;
+    document.getElementById('import-result').classList.remove('hidden');
+    zone.innerHTML = `<i class="fas fa-cloud-upload-alt"></i>
+      <p>Click to browse or drag & drop Excel file</p>
+      <small style="color:var(--text-muted)">Supports any column names — auto-detected</small>
+      <input type="file" id="import-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleImportFile(event)">`;
+  }
+}
+
+async function _executeImport(rows, preRejectedCount = 0) {
+  const zone   = document.getElementById('import-drop-zone');
+  const result = document.getElementById('import-result');
+  zone.innerHTML = `<i class="fas fa-spinner" style="font-size:2rem;color:var(--secondary)"></i><p>Saving ${rows.length} rows…</p>`;
+  result.classList.add('hidden');
+
+  try {
+    const data = await importWithMapping(rows, _importColMap, _importMode);
+    // Add pre-rejected duplicates (user unchecked) to skipped count for the report
+    if (preRejectedCount > 0) {
+      data.skipped = data.skipped || [];
+      // They're already excluded from rows so just note the count in the report
+      data.preRejected = preRejectedCount;
+    }
     showImportReport(data, result);
     loadDevotees(); loadCallingPersonsFilter();
     showToast(`Import complete — ${data.imported} added${data.updated ? ', ' + data.updated + ' updated' : ''}`, 'success');
@@ -1117,7 +1556,7 @@ async function importWithMapping(rows, colMap, mode = 'add') {
     return excelCol ? (row[excelCol] ?? '') : '';
   }
 
-  let imported = 0, updated = 0, skipped = [], errors = [];
+  let imported = 0, updated = 0, skipped = [], errors = [], importedRows = [], updatedRows = [];
   const list = await DevoteeCache.all();
   // Single duplicate key = (name + mobile). Same name with a different number,
   // or same number with a different name, are NOT duplicates.
@@ -1169,8 +1608,9 @@ async function importWithMapping(rows, colMap, mode = 'add') {
           tilak:               importYN(getField(row, 'tilak')),
           kanthi:              importYN(getField(row, 'kanthi')),
           gopiDress:           importYN(getField(row, 'gopiDress')),
-          wants_kirtan_class:  ((v) => v === 'Yes' || v === 'No' ? v : null)(getField(row, 'wantsKirtanClass') ? (importYN(getField(row, 'wantsKirtanClass')) ? 'Yes' : 'No') : ''),
-          instrument_name:     String(getField(row, 'instrumentName')) || null,
+          wantsKirtanClass:    (() => { const v = importYN(getField(row, 'wantsKirtanClass')); const raw = String(getField(row, 'wantsKirtanClass')).trim(); return raw === '' ? null : (v ? 'Yes' : 'No'); })(),
+          playsInstrument:     (() => { const v = importYN(getField(row, 'playsInstrument')); const raw = String(getField(row, 'playsInstrument')).trim(); return raw === '' ? null : (v ? 'Yes' : 'No'); })(),
+          instrumentName:      String(getField(row, 'instrumentName')) || null,
           familyMembers:       isNaN(rawFamM) ? null : rawFamM,
           familyParticipants:  isNaN(rawFamP) ? null : rawFamP,
           familyFavourable:    String(getField(row, 'familyFavourable')) || null,
@@ -1212,6 +1652,8 @@ async function importWithMapping(rows, colMap, mode = 'add') {
         // Commit succeeded → only NOW promote pending → imported/updated
         imported += pendingImports.length;
         updated  += pendingUpdates.length;
+        pendingImports.forEach(p => importedRows.push({ name: p.name, mobile: p.mobile, team: p.payload.teamName || '' }));
+        pendingUpdates.forEach(p => updatedRows.push({ name: p.name, mobile: p.mobile, team: p.payload.teamName || '' }));
       } catch (commitErr) {
         // Commit failed → none of these rows actually saved. Move them to
         // errors so the report shows accurate counts and lists each failed row.
@@ -1226,7 +1668,7 @@ async function importWithMapping(rows, colMap, mode = 'add') {
   }
 
   DevoteeCache.bust();
-  return { imported, updated, skipped, errors };
+  return { imported, updated, skipped, errors, importedRows, updatedRows };
 }
 
 let _lastSkipReport = [];
@@ -1321,6 +1763,60 @@ function showImportReport(data, resultEl) {
           : ''}
         <button class="btn btn-secondary" style="font-size:.8rem;padding:.35rem .75rem"
           onclick="downloadSkipReport()"><i class="fas fa-download"></i> Download Skip Report (.xlsx)</button>
+      </div>
+    </details>`;
+  }
+
+  // Collapsible: successfully imported rows
+  const importedRows = data.importedRows || [];
+  const updatedRows  = data.updatedRows  || [];
+  if (importedRows.length > 0) {
+    html += `<details style="margin-top:.5rem">
+      <summary style="cursor:pointer;font-weight:600;font-size:.83rem;color:#1b5e20">
+        ✅ ${importedRows.length} added — click to see list ▾
+      </summary>
+      <div style="max-height:200px;overflow-y:auto;margin-top:.35rem">
+        <table style="width:100%;border-collapse:collapse;font-size:.78rem">
+          <thead><tr style="background:#e8f5e9">
+            <th style="padding:.3rem .5rem;text-align:left">Name</th>
+            <th style="padding:.3rem .5rem;text-align:left">Mobile</th>
+            <th style="padding:.3rem .5rem;text-align:left">Team</th>
+          </tr></thead>
+          <tbody>
+            ${importedRows.map((r, i) =>
+              `<tr style="background:${i%2?'#fff':'#f9fbe7'}">
+                <td style="padding:.25rem .5rem;font-weight:600">${r.name}</td>
+                <td style="padding:.25rem .5rem">${r.mobile || '—'}</td>
+                <td style="padding:.25rem .5rem">${r.team || '—'}</td>
+              </tr>`
+            ).join('')}
+          </tbody>
+        </table>
+      </div>
+    </details>`;
+  }
+  if (updatedRows.length > 0) {
+    html += `<details style="margin-top:.4rem">
+      <summary style="cursor:pointer;font-weight:600;font-size:.83rem;color:#1565c0">
+        🔄 ${updatedRows.length} updated — click to see list ▾
+      </summary>
+      <div style="max-height:200px;overflow-y:auto;margin-top:.35rem">
+        <table style="width:100%;border-collapse:collapse;font-size:.78rem">
+          <thead><tr style="background:#e3f2fd">
+            <th style="padding:.3rem .5rem;text-align:left">Name</th>
+            <th style="padding:.3rem .5rem;text-align:left">Mobile</th>
+            <th style="padding:.3rem .5rem;text-align:left">Team</th>
+          </tr></thead>
+          <tbody>
+            ${updatedRows.map((r, i) =>
+              `<tr style="background:${i%2?'#fff':'#e8f4fd'}">
+                <td style="padding:.25rem .5rem;font-weight:600">${r.name}</td>
+                <td style="padding:.25rem .5rem">${r.mobile || '—'}</td>
+                <td style="padding:.25rem .5rem">${r.team || '—'}</td>
+              </tr>`
+            ).join('')}
+          </tbody>
+        </table>
       </div>
     </details>`;
   }

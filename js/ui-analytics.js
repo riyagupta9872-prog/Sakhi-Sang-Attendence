@@ -1589,7 +1589,12 @@ function _renderCMWeek() {
 
   let rows = '';
   let sno  = 1;
-  TEAMS.forEach(team => {
+  // Render TEAMS in canonical order, then any extra teams present in DB but not in TEAMS list
+  const orderedTeams = [
+    ...TEAMS.filter(t => teamMap[t]?.length),
+    ...Object.keys(teamMap).filter(t => !TEAMS.includes(t) && teamMap[t]?.length).sort()
+  ];
+  orderedTeams.forEach(team => {
     const members = teamMap[team];
     if (!members?.length) return;
     rows += `<tr style="background:#e8f5e9">

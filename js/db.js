@@ -52,6 +52,9 @@ function toSnake(d) {
     hobbies:             d.hobbies || null,
     skills:              d.skills || null,
     tilak:               d.tilak || 0,
+    plays_instrument:    d.playsInstrument || null,
+    instrument_name:     d.instrumentName || null,
+    wants_kirtan_class:  d.wantsKirtanClass || null,
     is_not_interested:   d.isNotInterested || false,
     not_interested_at:   tsToISO(d.notInterestedAt),
   };
