@@ -288,6 +288,55 @@
   </button>
 </nav>
 
+<!-- ══════════ BOTTOM NAV (mobile only) ══════════
+     All tabs in a scrollable strip — 4 visible at a time.
+     Arrow buttons on each side scroll by one "page" (4 tab widths).
+     Active tab auto-scrolls into view via _bnavScrollActive() in ui-core.js.
+     applyRoleUI hides individual .bnav-btn elements by role, same as before. -->
+<nav class="bottom-nav">
+  <button class="bnav-arrow" id="bnav-prev" onclick="_bnavScroll(-1)" aria-label="Previous tabs">
+    <i class="fas fa-chevron-left"></i>
+  </button>
+  <div class="bnav-scroll" id="bnav-scroll">
+    <button class="bnav-btn" data-tab="dashboard" onclick="switchTab('dashboard', this)">
+      <i class="fas fa-home"></i><span>Home</span>
+    </button>
+    <button class="bnav-btn" data-tab="devotees" onclick="switchTab('devotees', this)">
+      <i class="fas fa-users"></i><span>Devotees</span>
+    </button>
+    <button class="bnav-btn" data-tab="calling" onclick="switchTab('calling', this)">
+      <i class="fas fa-phone-alt"></i><span>Calling</span>
+    </button>
+    <button class="bnav-btn" data-tab="attendance" onclick="switchTab('attendance', this)">
+      <i class="fas fa-check-circle"></i><span>Attendance</span>
+    </button>
+    <button class="bnav-btn" data-tab="books" onclick="switchTab('books', this)">
+      <i class="fas fa-book-open"></i><span>Books</span>
+    </button>
+    <button class="bnav-btn" data-tab="service" onclick="switchTab('service', this)">
+      <i class="fas fa-hands-helping"></i><span>Service</span>
+    </button>
+    <button class="bnav-btn" data-tab="registration" onclick="switchTab('registration', this)">
+      <i class="fas fa-id-card-alt"></i><span>Reg.</span>
+    </button>
+    <button class="bnav-btn" data-tab="donation" onclick="switchTab('donation', this)">
+      <i class="fas fa-hand-holding-heart"></i><span>Donation</span>
+    </button>
+    <button class="bnav-btn" data-tab="care" onclick="switchTab('care', this)">
+      <i class="fas fa-heart"></i><span>Care</span>
+    </button>
+    <button class="bnav-btn" data-tab="events" onclick="switchTab('events', this)">
+      <i class="fas fa-calendar-star"></i><span>Events</span>
+    </button>
+    <button class="bnav-btn" data-tab="calling-mgmt" onclick="switchTab('calling-mgmt', this)">
+      <i class="fas fa-phone-volume"></i><span>Mgmt</span>
+    </button>
+  </div>
+  <button class="bnav-arrow" id="bnav-next" onclick="_bnavScroll(1)" aria-label="Next tabs">
+    <i class="fas fa-chevron-right"></i>
+  </button>
+</nav>
+
 <!-- ══════════ BREADCRUMB TRAIL ══════════
      A clickable path "Home › Reports › Attendance Reports › Attendance Sheet"
      so users always know where they are inside nested screens. Click any
@@ -2293,7 +2342,7 @@
 <!-- App -->
 <script src="js/config.js"></script>
 <script src="js/db.js"></script>
-<script src="js/excel.js"></script>
+<script src="js/excel.js?v=135"></script>
 <script src="js/ui-core.js"></script>
 <script src="js/ui-devotees.js"></script>
 <script src="js/ui-calling.js"></script>

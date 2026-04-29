@@ -38,6 +38,8 @@ All application logic is split across JS files in [js/](js/), loaded in order vi
 | [js/ui-attendance.js](js/ui-attendance.js) | Attendance sheet, Sunday config, live session marking |
 | [js/ui-analytics.js](js/ui-analytics.js) | Reports tab, Care tab, Events tab |
 | [js/ui-activities.js](js/ui-activities.js) | Activities tab — Book Distribution, Donations, Registrations, Service sub-tabs |
+| [js/ui-home.js](js/ui-home.js) | Home tab — greeting, quick-entry drawers (Attendance Report, Book Dist, Donation, Registration, Service); shared `_initDevoteePicker(prefix)` pattern used by `bd`, `reg`, `srv` prefixes |
+| [js/ui-ai-chat.js](js/ui-ai-chat.js) | AI chat FAB — natural-language queries over Firestore data, proxied through a Cloudflare Worker (`_AI_PROXY_BASE`) to keep the Gemini API key server-side; model waterfall via `_GEMINI_MODELS` if quota exceeded |
 
 - [css/style.css](css/style.css) — all styling
 - [index.html](index.html) — single HTML template with all tab panels

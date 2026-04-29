@@ -793,6 +793,11 @@ function applyRoleUI() {
     const group = btn.closest('.tab-btn-group');
     if (group) group.style.display = allowed ? '' : 'none';
   });
+  // Same gating for the mobile bottom-nav buttons.
+  document.querySelectorAll('.bnav-btn').forEach(btn => {
+    const tab = btn.dataset.tab;
+    btn.style.display = tabs[tab]?.includes(role) ? '' : 'none';
+  });
 
   // If the currently-active panel is one the user can't access, switch to
   // the first tab they CAN access. Devotees is the HTML default, so non-super-
@@ -1602,14 +1607,32 @@ async function loadBirthdays() {
 }
 function closeBirthdayPopup() { document.getElementById('birthday-popup').classList.add('hidden'); }
 
+// ── BOTTOM NAV ARROWS ─────────────────────────────────
+function _bnavScroll(dir) {
+  const el = document.getElementById('bnav-scroll');
+  if (el) el.scrollBy({ left: dir * el.clientWidth, behavior: 'smooth' });
+}
+function _bnavScrollActive() {
+  const el = document.getElementById('bnav-scroll');
+  const active = el && el.querySelector('.bnav-btn.active');
+  if (active) active.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+}
+
 // ── TAB SWITCHING ─────────────────────────────────────
 function switchTab(tab, btn) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + tab).classList.add('active');
   // btn may be omitted when called programmatically (e.g. via breadcrumb).
-  if (btn) btn.classList.add('active');
+  if (btn && btn.classList.contains('tab-btn')) btn.classList.add('active');
   else document.querySelector(`.tab-btn[data-tab="${tab}"]`)?.classList.add('active');
+  // Mirror the active state on the mobile bottom nav so its highlight stays
+  // in sync regardless of which surface (top nav, bottom nav, programmatic)
+  // initiated the switch.
+  document.querySelectorAll('.bnav-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  _bnavScrollActive();
   AppState.currentTab = tab;
   // When teamAdmin leaves Devotees tab onto a team-scoped tab, snap the master
   // Team filter back to their own team (Devotees is the only place they roam).

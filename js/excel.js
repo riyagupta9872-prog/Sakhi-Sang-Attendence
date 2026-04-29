@@ -1,4 +1,5 @@
 /* ══ EXCEL.JS – Import helpers, export functions ══ */
+console.log('%c[Sakhi Sang] excel.js v136 loaded — template has Kirtan fields + grouped headers', 'background:#1A5C3A;color:#fff;padding:2px 8px;border-radius:3px');
 
 // ── IMPORT HELPERS ────────────────────────────────────
 function importCol(row, aliases) {
@@ -352,36 +353,75 @@ async function exportDevoteeDatabase() {
   showToast('Building database export…');
   try {
     const allDevotees = await DevoteeCache.all();
+    return _buildAndDownloadDevoteeWorkbook({
+      devotees: allDevotees,
+      includeTeamCol: false,
+      filename: `sakhi_sang_database_${getToday()}.xlsx`,
+    });
+  } catch (e) {
+    console.error(e);
+    showToast('Export failed', 'error');
+  }
+}
+
+// Shared builder used by BOTH export AND the import template, so the two
+// look identical. Differences:
+//   • Export   → real devotees, per-team sheets (no Team column, implicit).
+//   • Template → 2 sample rows in one sheet (Team column inside Team Management).
+async function _buildAndDownloadDevoteeWorkbook({ devotees, includeTeamCol, filename }) {
+  try {
     const XS = _xls();
 
     // ── Column categories (label, number of cols, header bg, header fg, sub-header bg)
+    // ORDER: Sr.No → Personal Identity → Team Management (right after profile,
+    // per user request) → Professional → Sadhana → Social & Family → Status
+    // The Team Management cols differ for export vs template (template adds
+    // "Team" since one sheet covers all teams; export hides it since each
+    // team has its own sheet).
+    const teamMgmtCols = includeTeamCol
+      ? ['Team', 'Facilitator', 'Reference By', 'Calling By']
+      : ['Facilitator', 'Reference By', 'Calling By'];
+
     const CATS = [
-      { label: 'Sr.No.',              cols: 1, bg: 'ECEFF1', fg: '37474F', subBg: 'CFD8DC' },
-      { label: 'Personal Identity',   cols: 5, bg: 'BBDEFB', fg: '0D47A1', subBg: 'E3F2FD' },
-      { label: 'Professional',        cols: 2, bg: 'E1BEE7', fg: '4A148C', subBg: 'F3E5F5' },
-      { label: 'Sadhana & Practices', cols: 6, bg: 'C8E6C9', fg: '1B5E20', subBg: 'E8F5E9' },
-      { label: 'Social & Family',     cols: 2, bg: 'FFE0B2', fg: 'BF360C', subBg: 'FFF3E0' },
-      { label: 'Team Management',     cols: 4, bg: 'FFF9C4', fg: '5D4037', subBg: 'FFFDE7' },
+      { label: 'Sr.No.',              cols: 1,                       bg: 'ECEFF1', fg: '37474F', subBg: 'CFD8DC' },
+      { label: 'Personal Identity',   cols: includeTeamCol ? 6 : 5,  bg: 'BBDEFB', fg: '0D47A1', subBg: 'E3F2FD' },
+      { label: 'Team Management',     cols: teamMgmtCols.length,     bg: 'FFF9C4', fg: '5D4037', subBg: 'FFFDE7' },
+      { label: 'Professional',        cols: 2,                       bg: 'E1BEE7', fg: '4A148C', subBg: 'F3E5F5' },
+      { label: 'Sadhana & Practices', cols: 6,                       bg: 'C8E6C9', fg: '1B5E20', subBg: 'E8F5E9' },
+      { label: 'Social & Family',     cols: includeTeamCol ? 4 : 3,  bg: 'FFE0B2', fg: 'BF360C', subBg: 'FFF3E0' },
+      { label: 'Status',              cols: 1,                       bg: 'FFCDD2', fg: 'B71C1C', subBg: 'FFEBEE' },
     ];
 
-    // One column header per column, in same order as CATS
+    // Personal Identity adds an "Alternate Mobile" column on the import template.
+    const personalCols = includeTeamCol
+      ? ['Name', 'Mobile', 'Alternate Mobile', 'D.O.B', 'Address', 'E-Mail']
+      : ['Name', 'Contact', 'D.O.B', 'Address', 'E-Mail'];
+    const socialCols = includeTeamCol
+      ? ['Family Favourable', 'Hobbies', 'Skills', 'Date of Joining']
+      : ['Family Favourable', 'Hobbies', 'Date of Joining'];
+
     const COL_HEADERS = [
       'Sr.No.',
-      'Name', 'Contact', 'D.O.B', 'Address', 'E-Mail',
+      ...personalCols,
+      ...teamMgmtCols,
       'Education', 'Profession',
       'Chanting Rounds', 'Reading', 'Hearing', 'Tilak', 'Kanthi', 'Gopi Dress',
-      'Family Favourable', 'Hobbies',
-      'Date of Joining', 'Status', 'Facilitator', 'Reference By',
+      ...socialCols,
+      'Status',
     ];
-    const TOTAL_COLS = COL_HEADERS.length; // 20
+    const TOTAL_COLS = COL_HEADERS.length;
 
-    const colWidths = [
-      { wch: 6 }, { wch: 24 }, { wch: 13 }, { wch: 12 }, { wch: 30 }, { wch: 26 },
-      { wch: 18 }, { wch: 18 },
-      { wch: 10 }, { wch: 13 }, { wch: 13 }, { wch: 8 }, { wch: 8 }, { wch: 11 },
-      { wch: 18 }, { wch: 22 },
-      { wch: 14 }, { wch: 22 }, { wch: 22 }, { wch: 22 },
-    ];
+    // Column widths — index-mapped to COL_HEADERS so adding/removing cols stays in sync.
+    const widthByHeader = {
+      'Sr.No.': 6,
+      'Name': 24, 'Mobile': 13, 'Contact': 13, 'Alternate Mobile': 14, 'D.O.B': 12, 'Address': 30, 'E-Mail': 26,
+      'Team': 14, 'Facilitator': 22, 'Reference By': 22, 'Calling By': 22,
+      'Education': 18, 'Profession': 18,
+      'Chanting Rounds': 10, 'Reading': 13, 'Hearing': 13, 'Tilak': 8, 'Kanthi': 8, 'Gopi Dress': 11,
+      'Family Favourable': 18, 'Hobbies': 22, 'Skills': 18, 'Date of Joining': 14,
+      'Status': 22,
+    };
+    const colWidths = COL_HEADERS.map(h => ({ wch: widthByHeader[h] || 14 }));
 
     const levels = [
       { label: 'Level 1  ·  0 – 4 Rounds  ·  Well Wishers  (Yet to start chanting)', min: 0, max: 4 },
@@ -463,29 +503,36 @@ async function exportDevoteeDatabase() {
     }
 
     function devoteeRow(d, i) {
-      const yn = (v, yes = 'Yes', no = 'No') => v ? yes : no;
-      return [
-        { v: i + 1,                   s: dataCell() },
-        { v: d.name || '',            s: dataCell({ left: true, bold: true }) },
-        { v: d.mobile || '',          s: dataCell() },
-        { v: d.dob || '',             s: dataCell() },
-        { v: d.address || '',         s: dataCell({ left: true, wrap: true }) },
-        { v: d.email || '',           s: dataCell({ left: true }) },
-        { v: d.education || '',       s: dataCell({ left: true }) },
-        { v: d.profession || '',      s: dataCell({ left: true }) },
-        { v: d.chantingRounds || 0,   s: dataCell({ bold: true }) },
-        { v: d.reading || '',         s: dataCell() },
-        { v: d.hearing || '',         s: dataCell() },
-        { v: yn(d.tilak),             s: dataCell({ bg: d.tilak    ? 'C8E6C9' : 'FFCDD2' }) },
-        { v: yn(d.kanthi),            s: dataCell({ bg: d.kanthi   ? 'C8E6C9' : 'FFCDD2' }) },
-        { v: yn(d.gopiDress),         s: dataCell({ bg: d.gopiDress? 'C8E6C9' : 'FFCDD2' }) },
-        { v: d.familyFavourable || '', s: dataCell() },
-        { v: d.hobbies || '',         s: dataCell({ left: true, wrap: true }) },
-        { v: d.dateOfJoining || '',   s: dataCell() },
-        { v: d.devoteeStatus || '',   s: dataCell() },
-        { v: d.facilitator || '',     s: dataCell() },
-        { v: d.referenceBy || '',     s: dataCell() },
-      ];
+      const yn = (v, yes = 'Yes', no = 'No') => v == null || v === '' ? '' : (v ? yes : no);
+      // Build by header so reordering categories above stays in sync automatically.
+      const cellByHeader = {
+        'Sr.No.':            { v: i + 1,                   s: dataCell() },
+        'Name':              { v: d.name || '',            s: dataCell({ left: true, bold: true }) },
+        'Mobile':            { v: d.mobile || '',          s: dataCell() },
+        'Contact':           { v: d.mobile || '',          s: dataCell() },
+        'Alternate Mobile':  { v: d.mobileAlt || '',       s: dataCell() },
+        'D.O.B':             { v: d.dob || '',             s: dataCell() },
+        'Address':           { v: d.address || '',         s: dataCell({ left: true, wrap: true }) },
+        'E-Mail':            { v: d.email || '',           s: dataCell({ left: true }) },
+        'Team':              { v: d.teamName || '',        s: dataCell() },
+        'Facilitator':       { v: d.facilitator || '',     s: dataCell() },
+        'Reference By':      { v: d.referenceBy || '',     s: dataCell() },
+        'Calling By':        { v: d.callingBy || '',       s: dataCell() },
+        'Education':         { v: d.education || '',       s: dataCell({ left: true }) },
+        'Profession':        { v: d.profession || '',      s: dataCell({ left: true }) },
+        'Chanting Rounds':   { v: d.chantingRounds || 0,   s: dataCell({ bold: true }) },
+        'Reading':           { v: d.reading || '',         s: dataCell() },
+        'Hearing':           { v: d.hearing || '',         s: dataCell() },
+        'Tilak':             { v: yn(d.tilak),             s: dataCell({ bg: d.tilak    ? 'C8E6C9' : d.tilak === false ? 'FFCDD2' : null }) },
+        'Kanthi':            { v: yn(d.kanthi),            s: dataCell({ bg: d.kanthi   ? 'C8E6C9' : d.kanthi === false ? 'FFCDD2' : null }) },
+        'Gopi Dress':        { v: yn(d.gopiDress),         s: dataCell({ bg: d.gopiDress? 'C8E6C9' : d.gopiDress === false ? 'FFCDD2' : null }) },
+        'Family Favourable': { v: d.familyFavourable || '', s: dataCell() },
+        'Hobbies':           { v: d.hobbies || '',         s: dataCell({ left: true, wrap: true }) },
+        'Skills':            { v: d.skills || '',          s: dataCell({ left: true, wrap: true }) },
+        'Date of Joining':   { v: d.dateOfJoining || '',   s: dataCell() },
+        'Status':            { v: d.devoteeStatus || '',   s: dataCell() },
+      };
+      return COL_HEADERS.map(h => cellByHeader[h] || { v: '', s: dataCell() });
     }
 
     // ── Build one team's worth of rows + merges, appended into provided arrays
@@ -518,9 +565,108 @@ async function exportDevoteeDatabase() {
 
     const wb = XLSX.utils.book_new();
 
-    // ── Per-team sheets
+    if (includeTeamCol) {
+      // ── TEMPLATE MODE: one "Devotees" sheet with sectioned headers and
+      // 2 sample rows so users see exactly how to fill each column.
+      const rows = [], merges = [];
+
+      // Category header row + merges
+      catMergesAt(rows.length).forEach(m => merges.push(m));
+      rows.push(catHeaderRow());
+      // Column header row
+      rows.push(colHeaderRow());
+      // Sample devotee rows (act like real devotees through devoteeRow)
+      const samples = (devotees && devotees.length) ? devotees : [
+        {
+          name: 'Radha Kumari', mobile: '9876543210', mobileAlt: '9811122233',
+          dob: '2000-06-15', address: 'C-12, Sector 5, Noida', email: 'radha@example.com',
+          teamName: 'Champaklata', facilitator: 'Anjali Mishra Mtg',
+          referenceBy: 'Priya Devi', callingBy: 'Anjali Mishra Mtg',
+          education: 'B.Com', profession: 'Housewife',
+          chantingRounds: 16, reading: 'Regular', hearing: 'Daily',
+          tilak: true, kanthi: true, gopiDress: false,
+          familyFavourable: 'Yes', hobbies: 'Singing, Cooking', skills: 'Music, Art',
+          dateOfJoining: '2023-04-02', devoteeStatus: 'Serious',
+        },
+        {
+          name: 'Sita Devi', mobile: '8765432109', mobileAlt: '',
+          dob: '1998-03-22', address: 'B-4, Govind Nagar, Mathura', email: '',
+          teamName: 'Lalita', facilitator: 'Neha Bhandari',
+          referenceBy: '', callingBy: 'Neha Bhandari',
+          education: '12th Pass', profession: 'Student',
+          chantingRounds: 8, reading: 'Occasionally', hearing: 'Occasionally',
+          tilak: false, kanthi: false, gopiDress: false,
+          familyFavourable: 'Partial', hobbies: 'Dance', skills: 'Teaching',
+          dateOfJoining: '2024-01-07', devoteeStatus: 'Expected to be Serious',
+        },
+      ];
+      samples.forEach((d, i) => rows.push(devoteeRow(d, i)));
+
+      const ws = _xlsSheet(rows, colWidths);
+      ws['!merges'] = merges;
+      ws['!rows']   = rows.map(() => ({ hpt: 22 }));
+      XLSX.utils.book_append_sheet(wb, ws, 'Devotees');
+
+      // Instructions sheet
+      const teamList   = TEAMS.join('  |  ');
+      const statusList = 'Expected to be Serious  |  Serious  |  Most Serious  |  New Devotee  |  Inactive';
+      const instrRows = [
+        ['SAKHI SANG – Devotee Import Template', '', ''],
+        ['', '', ''],
+        ['HOW TO USE:', '', ''],
+        ['1. Fill data in the "Devotees" sheet starting from Row 4', '', ''],
+        ['     Row 1 = section banner (blue/yellow/peach/green/orange/grey)', '', ''],
+        ['     Row 2 = column headers — DO NOT change either of these rows', '', ''],
+        ['2. Delete the 2 sample rows before importing', '', ''],
+        ['3. Save and upload using the Import Excel button', '', ''],
+        ['', '', ''],
+        ['SECTIONS (in order):', '', ''],
+        ['     Personal Identity   — blue', '', ''],
+        ['     Team Management     — yellow  (right after profile)', '', ''],
+        ['     Professional        — purple', '', ''],
+        ['     Sadhana & Practices — green', '', ''],
+        ['     Social & Family     — orange', '', ''],
+        ['     Status              — pink', '', ''],
+        ['', '', ''],
+        ['COLUMN GUIDE:', 'Allowed Values / Format', 'Required?'],
+        ['Name', 'Full name of devotee', 'YES'],
+        ['Mobile', '10-digit number, no spaces or dashes', 'Recommended'],
+        ['Alternate Mobile', '10-digit number (only if a 2nd number is known)', 'Optional'],
+        ['D.O.B', 'YYYY-MM-DD  (e.g. 2000-06-15)', 'Optional'],
+        ['Address', 'Full address', 'Optional'],
+        ['E-Mail', 'Valid email address', 'Optional'],
+        ['Team', teamList, 'Required'],
+        ['Facilitator', 'Name of facilitator (must match a devotee)', 'Optional'],
+        ['Reference By', 'Name of referring devotee', 'Optional'],
+        ['Calling By', 'Name of caller (must match a devotee)', 'Optional'],
+        ['Education', 'e.g. 10th, 12th Pass, B.Com, M.A., PhD…', 'Optional'],
+        ['Profession', 'e.g. Housewife, Teacher, Student, Business…', 'Optional'],
+        ['Chanting Rounds', 'Number between 0 and 64', 'Optional'],
+        ['Reading',  'None  |  Occasionally  |  Regular  |  Daily', 'Optional'],
+        ['Hearing',  'None  |  Occasionally  |  Regular  |  Daily', 'Optional'],
+        ['Tilak',     'Yes  or  No', 'Optional'],
+        ['Kanthi',    'Yes  or  No', 'Optional'],
+        ['Gopi Dress','Yes  or  No', 'Optional'],
+        ['Family Favourable', 'Yes  |  Partial  |  No', 'Optional'],
+        ['Hobbies', 'Free text — e.g. Singing, Dance, Cooking', 'Optional'],
+        ['Skills',  'Free text — e.g. Teaching, Graphic Design', 'Optional'],
+        ['Date of Joining', 'YYYY-MM-DD  (e.g. 2023-04-02)', 'Optional'],
+        ['Status', statusList, 'Optional'],
+        ['', '', ''],
+        ['NOTE: Same Name + same Mobile = duplicate (skipped during import).', '', ''],
+      ];
+      const wsInstr = XLSX.utils.aoa_to_sheet(instrRows);
+      wsInstr['!cols'] = [{ wch: 50 }, { wch: 60 }, { wch: 14 }];
+      XLSX.utils.book_append_sheet(wb, wsInstr, 'Instructions');
+
+      XLSX.writeFile(wb, filename);
+      showToast('Template downloaded!', 'success');
+      return;
+    }
+
+    // ── EXPORT MODE: Per-team sheets + All Teams + Re-Import (Flat)
     TEAMS.forEach(team => {
-      const teamDevotees = allDevotees.filter(d => d.teamName === team && d.isActive !== false);
+      const teamDevotees = devotees.filter(d => d.teamName === team && d.isActive !== false);
       if (!teamDevotees.length) return;
       const rows = [], merges = [];
       appendTeamLevels(rows, merges, teamDevotees);
@@ -530,13 +676,12 @@ async function exportDevoteeDatabase() {
       XLSX.utils.book_append_sheet(wb, ws, team.slice(0, 31));
     });
 
-    // ── All Teams sheet
+    // All Teams sheet
     {
       const rows = [], merges = [];
       TEAMS.forEach(team => {
-        const teamDevotees = allDevotees.filter(d => d.teamName === team && d.isActive !== false);
+        const teamDevotees = devotees.filter(d => d.teamName === team && d.isActive !== false);
         if (!teamDevotees.length) return;
-        // Team banner
         const banner = Array.from({ length: TOTAL_COLS }, (_, i) => ({ v: i === 0 ? `── ${team.toUpperCase()} ──` : '', s: teamBanner }));
         fullMergeAt(rows.length).forEach(m => merges.push(m));
         rows.push(banner);
@@ -549,9 +694,7 @@ async function exportDevoteeDatabase() {
       XLSX.utils.book_append_sheet(wb, ws, 'All Teams');
     }
 
-    // ── Re-Import (Flat) sheet ───────────────────────────
-    // A simple flat sheet with the SAME headers as the import template, so
-    // the user can edit this sheet and re-import without any conversion.
+    // Re-Import (Flat) sheet — simple flat sheet for lossless re-import.
     {
       const flatHeaders = [
         'Name', 'Mobile', 'Alternate Mobile', 'Address', 'DOB',
@@ -562,31 +705,18 @@ async function exportDevoteeDatabase() {
       ];
       const yn = v => v ? 'Yes' : 'No';
       const flatRows = [flatHeaders];
-      const sortedAll = [...allDevotees]
+      const sortedAll = [...devotees]
         .filter(d => d.isActive !== false)
         .sort((a, b) => (a.teamName || '').localeCompare(b.teamName || '') || (a.name || '').localeCompare(b.name || ''));
       sortedAll.forEach(d => {
         flatRows.push([
-          d.name || '',
-          d.mobile || '',
-          d.mobileAlt || '',
-          d.address || '',
-          d.dob || '',
-          d.dateOfJoining || '',
-          d.chantingRounds || 0,
+          d.name || '', d.mobile || '', d.mobileAlt || '', d.address || '', d.dob || '',
+          d.dateOfJoining || '', d.chantingRounds || 0,
           yn(d.kanthi), yn(d.gopiDress), yn(d.tilak),
-          d.teamName || '',
-          d.devoteeStatus || '',
-          d.facilitator || '',
-          d.referenceBy || '',
-          d.callingBy || '',
-          d.education || '',
-          d.email || '',
-          d.profession || '',
-          d.familyFavourable || '',
-          d.reading || '',
-          d.hearing || '',
-          d.hobbies || '',
+          d.teamName || '', d.devoteeStatus || '',
+          d.facilitator || '', d.referenceBy || '', d.callingBy || '',
+          d.education || '', d.email || '', d.profession || '', d.familyFavourable || '',
+          d.reading || '', d.hearing || '', d.hobbies || '',
         ]);
       });
       const wsFlat = XLSX.utils.aoa_to_sheet(flatRows);
@@ -594,86 +724,122 @@ async function exportDevoteeDatabase() {
       XLSX.utils.book_append_sheet(wb, wsFlat, 'Re-Import (Flat)');
     }
 
-    XLSX.writeFile(wb, `sakhi_sang_database_${getToday()}.xlsx`);
+    XLSX.writeFile(wb, filename);
     showToast('Database exported!', 'success');
   } catch (e) {
     console.error(e);
-    showToast('Export failed', 'error');
+    showToast(includeTeamCol ? 'Template download failed' : 'Export failed', 'error');
   }
 }
 
 // ── DOWNLOAD IMPORT TEMPLATE ──────────────────────────
 function downloadImportTemplate() {
-  const teams  = TEAMS;
-  const statuses = ['Expected to be Serious','Serious','Most Serious'];
+  // Plain flat template. Columns grouped by section so related fields are
+  // adjacent (Sadhana fields together, Personal together, etc.) — even
+  // though there are no visible section banners. Order MUST stay grouped:
+  //
+  //  Personal Identity → Team Management → Professional → Sadhana &
+  //  Practices (incl. Kirtan questions) → Social & Family → Status
+  const teams    = TEAMS;
+  const statuses = ['Expected to be Serious','Serious','Most Serious','New Devotee','Inactive'];
 
   const headers = [
-    'Name', 'Mobile', 'Alternate Mobile', 'Address', 'DOB',
-    'Date of Joining', 'Chanting Rounds', 'Kanthi', 'Gopi Dress',
-    'Team', 'Status', 'Facilitator', 'Reference', 'Calling By',
-    'Education', 'Email', 'Profession', 'Family Favourable', 'Reading', 'Hearing',
-    'Hobbies', 'Skills', 'Tilak',
+    // Personal Identity
+    'Name', 'Mobile', 'Alternate Mobile', 'DOB', 'Email', 'Address',
+    // Team Management
+    'Team', 'Facilitator', 'Reference', 'Calling By',
+    // Professional
+    'Education', 'Profession',
+    // Sadhana & Practices  (Kirtan questions are part of this section)
+    'Chanting Rounds', 'Reading', 'Hearing',
+    'Tilak', 'Kanthi', 'Gopi Dress',
+    'Wants Kirtan Class', 'Instrument',
+    // Social & Family
+    'Family Favourable', 'Hobbies', 'Skills', 'Date of Joining',
+    // Status
+    'Status',
   ];
   const sample1 = [
-    'Radha Kumari', '9876543210', '9811122233', 'C-12, Sector 5, Noida',
-    '2000-06-15', '2023-04-02', '16', 'Yes', 'No',
-    'Champaklata', 'Serious', 'Anjali Mishra Mtg', 'Priya Devi', 'Anjali Mishra Mtg',
-    'B.Com', 'radha@example.com', 'Housewife', 'Yes', 'Regular', 'Daily',
-    'Singing, Cooking', 'Music, Art', 'Yes',
+    'Radha Kumari', '9876543210', '9811122233', '2000-06-15', 'radha@example.com', 'C-12, Sector 5, Noida',
+    'Champaklata', 'Anjali Mishra Mtg', 'Priya Devi', 'Anjali Mishra Mtg',
+    'B.Com', 'Housewife',
+    '16', 'Regular', 'Daily',
+    'Yes', 'Yes', 'No',
+    'Yes', 'Harmonium',
+    'Yes', 'Singing, Cooking', 'Music, Art', '2023-04-02',
+    'Serious',
   ];
   const sample2 = [
-    'Sita Devi', '8765432109', '', 'B-4, Govind Nagar, Mathura',
-    '1998-03-22', '2024-01-07', '8', 'No', 'No',
-    'Lalita', 'Expected to be Serious', 'Neha Bhandari', '', 'Neha Bhandari',
-    '12th Pass', '', 'Student', 'Partial', 'Occasionally', 'Occasionally',
-    'Dance', 'Teaching', 'No',
+    'Sita Devi', '8765432109', '', '1998-03-22', '', 'B-4, Govind Nagar, Mathura',
+    'Lalita', 'Neha Bhandari', '', 'Neha Bhandari',
+    '12th Pass', 'Student',
+    '8', 'Occasionally', 'Occasionally',
+    'No', 'No', 'No',
+    'No', '',
+    'Partial', 'Dance', 'Teaching', '2024-01-07',
+    'Expected to be Serious',
   ];
 
   const wsData = XLSX.utils.aoa_to_sheet([headers, sample1, sample2]);
+  // Column widths follow the same order as headers above.
   wsData['!cols'] = [
-    { wch: 22 }, { wch: 14 }, { wch: 16 }, { wch: 30 }, { wch: 13 }, { wch: 15 },
-    { wch: 15 }, { wch: 9 }, { wch: 10 }, { wch: 14 }, { wch: 26 },
-    { wch: 22 }, { wch: 22 }, { wch: 22 },
-    { wch: 16 }, { wch: 24 }, { wch: 18 }, { wch: 18 }, { wch: 14 }, { wch: 14 },
+    { wch: 24 }, { wch: 13 }, { wch: 14 }, { wch: 12 }, { wch: 24 }, { wch: 30 },
+    { wch: 14 }, { wch: 22 }, { wch: 22 }, { wch: 22 },
+    { wch: 16 }, { wch: 18 },
+    { wch: 14 }, { wch: 14 }, { wch: 14 },
+    { wch: 8 }, { wch: 8 }, { wch: 11 },
+    { wch: 18 }, { wch: 16 },
+    { wch: 18 }, { wch: 22 }, { wch: 18 }, { wch: 14 },
+    { wch: 22 },
   ];
 
   const instrRows = [
     ['SAKHI SANG – Devotee Import Template', '', ''],
     ['', '', ''],
     ['HOW TO USE:', '', ''],
-    ['1. Fill your data in the "Devotees" sheet starting from Row 2 (Row 1 = headers — do not change)', '', ''],
+    ['1. Fill data in "Devotees" sheet starting from Row 2 (Row 1 = headers — do not change)', '', ''],
     ['2. Delete the 2 sample rows before importing', '', ''],
-    ['3. Save the file and upload it using Import Excel button', '', ''],
+    ['3. Save and upload using the Import Excel button', '', ''],
+    ['', '', ''],
+    ['COLUMNS ARE GROUPED BY SECTION (in order):', '', ''],
+    ['Personal Identity:', 'Name, Mobile, Alternate Mobile, DOB, Email, Address', ''],
+    ['Team Management:',  'Team, Facilitator, Reference, Calling By', ''],
+    ['Professional:',     'Education, Profession', ''],
+    ['Sadhana & Practices:', 'Chanting Rounds, Reading, Hearing, Tilak, Kanthi, Gopi Dress, Wants Kirtan Class, Instrument', ''],
+    ['Social & Family:',  'Family Favourable, Hobbies, Skills, Date of Joining', ''],
+    ['Status:',           'Status', ''],
     ['', '', ''],
     ['COLUMN GUIDE:', 'Allowed Values / Format', 'Required?'],
     ['Name', 'Full name of devotee', 'YES (mandatory)'],
-    ['Mobile', '10-digit number only, no spaces/dashes', 'Recommended'],
-    ['Alternate Mobile', '10-digit number (optional — only if a 2nd number is known)', 'Optional'],
-    ['Address', 'Full address', 'Optional'],
+    ['Mobile', '10-digit number, no spaces or dashes', 'Recommended'],
+    ['Alternate Mobile', '10-digit number (only if a 2nd number is known)', 'Optional'],
     ['DOB', 'YYYY-MM-DD  (e.g. 2000-06-15)', 'Optional'],
-    ['Date of Joining', 'YYYY-MM-DD  (e.g. 2023-04-02)', 'Optional'],
-    ['Chanting Rounds', 'Number between 0 and 64', 'Optional'],
-    ['Kanthi', 'Yes  or  No', 'Optional'],
-    ['Gopi Dress', 'Yes  or  No', 'Optional'],
-    ['Team', teams.join('  |  '), 'Optional'],
-    ['Status', statuses.join('  |  '), 'Optional'],
-    ['Facilitator', 'Name of facilitator (must match a devotee in database)', 'Optional'],
-    ['Reference', 'Name of referring devotee (must match a devotee in database)', 'Optional'],
-    ['Calling By', 'Name of caller (must match a devotee in database)', 'Optional'],
-    ['Education', 'e.g. 10th, 12th Pass, B.Com, M.A., PhD…', 'Optional'],
     ['Email', 'Valid email address', 'Optional'],
+    ['Address', 'Full address', 'Optional'],
+    ['Team', teams.join('  |  '), 'Optional'],
+    ['Facilitator', 'Name of facilitator (must match a devotee in DB)', 'Optional'],
+    ['Reference', 'Name of referring devotee', 'Optional'],
+    ['Calling By', 'Name of caller (must match a devotee in DB)', 'Optional'],
+    ['Education', 'e.g. 10th, 12th Pass, B.Com, M.A., PhD…', 'Optional'],
     ['Profession', 'e.g. Housewife, Teacher, Student, Business…', 'Optional'],
+    ['Chanting Rounds', 'Number between 0 and 64', 'Optional'],
+    ['Reading',  'None  |  Occasionally  |  Regular  |  Daily', 'Optional'],
+    ['Hearing',  'None  |  Occasionally  |  Regular  |  Daily', 'Optional'],
+    ['Tilak',     'Yes  or  No', 'Optional'],
+    ['Kanthi',    'Yes  or  No', 'Optional'],
+    ['Gopi Dress','Yes  or  No', 'Optional'],
+    ['Wants Kirtan Class', 'Yes  or  No  — interested in attending kirtan class', 'Optional'],
+    ['Instrument', 'Free text — instrument played (e.g. Harmonium, Mridanga, Karatal)', 'Optional'],
     ['Family Favourable', 'Yes  |  Partial  |  No', 'Optional'],
-    ['Reading', 'None  |  Occasionally  |  Regular  |  Daily', 'Optional'],
-    ['Hearing', 'None  |  Occasionally  |  Regular  |  Daily', 'Optional'],
     ['Hobbies', 'Free text — e.g. Singing, Dance, Cooking', 'Optional'],
-    ['Skills', 'Free text — e.g. Teaching, Graphic Design, Music', 'Optional'],
-    ['Tilak', 'Yes  or  No', 'Optional'],
+    ['Skills',  'Free text — e.g. Teaching, Graphic Design, Music', 'Optional'],
+    ['Date of Joining', 'YYYY-MM-DD  (e.g. 2023-04-02)', 'Optional'],
+    ['Status', statuses.join('  |  '), 'Optional'],
     ['', '', ''],
-    ['NOTE: Duplicate mobile numbers are automatically skipped during import.', '', ''],
+    ['NOTE: Same Name + same Mobile = duplicate (skipped during import).', '', ''],
   ];
   const wsInstr = XLSX.utils.aoa_to_sheet(instrRows);
-  wsInstr['!cols'] = [{ wch: 50 }, { wch: 60 }, { wch: 14 }];
+  wsInstr['!cols'] = [{ wch: 26 }, { wch: 70 }, { wch: 16 }];
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, wsData,  'Devotees');
@@ -698,6 +864,8 @@ const IMPORT_FIELDS = [
   { key: 'tilak',              label: 'Tilak (Y/N)',             aliases: ['Tilak','tilak','TILAK'] },
   { key: 'kanthi',             label: 'Kanthi (Y/N)',            aliases: ['Kanthi','kanthi','KANTHI'] },
   { key: 'gopiDress',          label: 'Gopi Dress (Y/N)',        aliases: ['Gopi Dress','Gopi','GOPI','gopi dress','Gopi dress'] },
+  { key: 'wantsKirtanClass',   label: 'Wants Kirtan Class (Y/N)', aliases: ['Wants Kirtan Class','Wants Kirtan','Kirtan Class','Kirtan','wants_kirtan_class','wants kirtan'] },
+  { key: 'instrumentName',     label: 'Instrument',              aliases: ['Instrument','Instrument Name','Plays','instrument','Instrument played','Music Instrument'] },
   { key: 'familyMembers',      label: 'Total Family Members',    aliases: ['Family Members','Total Family Members','Family Size','family members','familyMembers'] },
   { key: 'familyParticipants', label: 'Family Members in Class', aliases: ['Family in Class','Family Participants','Members in Class','familyParticipants','Family Members in Class'] },
   { key: 'familyFavourable',   label: 'Favorable to Devotion',   aliases: ['Family Favourable','Family Favorable','Family','family favourable','Family Favourable?','Favorable to Devotion'] },
@@ -968,12 +1136,19 @@ async function importWithMapping(rows, colMap, mode = 'add') {
   for (const chunk of chunks) {
     const batch = fdb.batch();
     let batchHasWrites = false;
+    // Track rows queued in this batch so we ONLY count them as imported/updated
+    // AFTER batch.commit() actually succeeds. Previous version incremented
+    // counters before the commit, so failed commits caused the report to
+    // overcount (rows shown as imported but never saved).
+    const pendingImports = [];
+    const pendingUpdates = [];
 
     chunk.forEach((row) => {
       const rowNum = globalRow++;
+      let name = '', mobile = '';
       try {
-        const name   = String(getField(row, 'name')).trim();
-        const mobile = String(getField(row, 'mobile')).replace(/\D/g, '').slice(0, 10);
+        name   = String(getField(row, 'name')).trim();
+        mobile = String(getField(row, 'mobile')).replace(/\D/g, '').slice(0, 10);
         if (!name) { skipped.push({ row: rowNum, name: '(blank)', mobile: mobile || '', reason: 'Name is empty' }); return; }
 
         const rawFamM = parseInt(getField(row, 'familyMembers'));
@@ -994,6 +1169,8 @@ async function importWithMapping(rows, colMap, mode = 'add') {
           tilak:               importYN(getField(row, 'tilak')),
           kanthi:              importYN(getField(row, 'kanthi')),
           gopiDress:           importYN(getField(row, 'gopiDress')),
+          wants_kirtan_class:  ((v) => v === 'Yes' || v === 'No' ? v : null)(getField(row, 'wantsKirtanClass') ? (importYN(getField(row, 'wantsKirtanClass')) ? 'Yes' : 'No') : ''),
+          instrument_name:     String(getField(row, 'instrumentName')) || null,
           familyMembers:       isNaN(rawFamM) ? null : rawFamM,
           familyParticipants:  isNaN(rawFamP) ? null : rawFamP,
           familyFavourable:    String(getField(row, 'familyFavourable')) || null,
@@ -1013,7 +1190,7 @@ async function importWithMapping(rows, colMap, mode = 'add') {
         if (existId) {
           if (mode === 'upsert') {
             batch.update(fdb.collection('devotees').doc(existId), payload);
-            updated++;
+            pendingUpdates.push({ row: rowNum, name, mobile, payload });
           } else {
             skipped.push({ row: rowNum, name, mobile: mobile || '', reason: `Duplicate — same name + mobile already exists`, payload });
           }
@@ -1021,15 +1198,31 @@ async function importWithMapping(rows, colMap, mode = 'add') {
           const ref = fdb.collection('devotees').doc();
           batch.set(ref, { ...payload, lifetimeAttendance: 0, createdAt: TS() });
           pairMap[pairKey(name, mobile)] = { id: ref.id, name };
-          imported++;
+          pendingImports.push({ row: rowNum, name, mobile, payload });
         }
         batchHasWrites = true;
       } catch (err) {
-        errors.push({ row: rowNum, name: '', mobile: '', reason: err.message });
+        errors.push({ row: rowNum, name, mobile, reason: err.message || 'Failed to build row' });
       }
     });
 
-    if (batchHasWrites) await batch.commit();
+    if (batchHasWrites) {
+      try {
+        await batch.commit();
+        // Commit succeeded → only NOW promote pending → imported/updated
+        imported += pendingImports.length;
+        updated  += pendingUpdates.length;
+      } catch (commitErr) {
+        // Commit failed → none of these rows actually saved. Move them to
+        // errors so the report shows accurate counts and lists each failed row.
+        const reason = `Save failed: ${commitErr.message || commitErr.code || 'Firestore error'}`;
+        [...pendingImports, ...pendingUpdates].forEach(p => {
+          errors.push({ row: p.row, name: p.name, mobile: p.mobile, reason, payload: p.payload });
+        });
+        // Roll back the pairMap so duplicates aren't accidentally suppressed
+        pendingImports.forEach(p => { delete pairMap[pairKey(p.name, p.mobile)]; });
+      }
+    }
   }
 
   DevoteeCache.bust();
@@ -1039,34 +1232,70 @@ async function importWithMapping(rows, colMap, mode = 'add') {
 let _lastSkipReport = [];
 
 function showImportReport(data, resultEl) {
-  const allSkipped = [...(data.skipped || []), ...(data.errors || [])];
-  _lastSkipReport = allSkipped;
+  // Errors = rows that FAILED to save (data loss). Skipped = intentional
+  // (duplicates, blank names). User needs to clearly see the difference so
+  // they know if they actually lost data vs. just had duplicates.
+  const errors  = data.errors  || [];
+  const skipped = data.skipped || [];
+  const allIssues = [...errors, ...skipped];
+  _lastSkipReport = allIssues;
 
   const updLine = data.updated ? ` &nbsp;|&nbsp; Updated: <b>${data.updated}</b>` : '';
-  const skipCount = allSkipped.length;
-  const forceableCount = allSkipped.filter(s => s.payload).length;
+  const errCount  = errors.length;
+  const skipCount = skipped.length;
+  const totalIssues = allIssues.length;
+  const forceableCount = allIssues.filter(s => s.payload).length;
 
-  let html = `<div style="margin-bottom:.5rem">
-    ✅ Added: <b>${data.imported}</b>${updLine} &nbsp;|&nbsp; ⚠️ Skipped: <b>${skipCount}</b>
+  // Big red banner if any rows actually failed to save (data loss).
+  let html = '';
+  if (errCount > 0) {
+    html += `<div style="background:#ffebee;border:2px solid #c62828;border-radius:6px;padding:.7rem .9rem;margin-bottom:.6rem;font-size:.88rem">
+      <div style="font-weight:700;color:#c62828;margin-bottom:.2rem">
+        <i class="fas fa-exclamation-triangle"></i> ${errCount} row${errCount > 1 ? 's' : ''} FAILED to save
+      </div>
+      <div style="font-size:.78rem;color:#5d4037">
+        These rows are <strong>not in the database</strong>. Review the issues below and use "Add Anyway" or fix the Excel and re-import.
+      </div>
+    </div>`;
+  }
+
+  html += `<div style="margin-bottom:.5rem">
+    ✅ Added: <b>${data.imported}</b>${updLine}
+    &nbsp;|&nbsp; ${errCount > 0 ? `❌ Failed: <b style="color:#c62828">${errCount}</b> &nbsp;|&nbsp;` : ''}
+    ⚠️ Skipped (duplicates): <b>${skipCount}</b>
   </div>`;
+  // Use this combined count for the rest of the rendering logic below.
+  const allSkipped = allIssues;
 
-  if (skipCount > 0) {
+  if (totalIssues > 0) {
+    // Errors are sorted FIRST so the user sees real failures before duplicates.
+    const errorSet = new Set(errors);
+    const sortedIssues = [...errors, ...skipped];
+    _lastSkipReport = sortedIssues; // keep in same order as table for force-add indexing
     html += `<details open style="margin-top:.4rem">
       <summary style="cursor:pointer;font-weight:600;font-size:.83rem;color:var(--danger)">
-        ${skipCount} skipped / error rows — click to review ▾
+        ${totalIssues} issue${totalIssues > 1 ? 's' : ''} — click to review ▾
       </summary>
       <div style="max-height:260px;overflow-y:auto;margin-top:.4rem">
         <table style="width:100%;border-collapse:collapse;font-size:.78rem" id="skip-report-table">
           <thead><tr style="background:var(--primary);color:#fff">
             <th style="padding:.3rem .5rem;text-align:left">Row</th>
+            <th style="padding:.3rem .5rem;text-align:left">Type</th>
             <th style="padding:.3rem .5rem;text-align:left">Name</th>
             <th style="padding:.3rem .5rem;text-align:left">Mobile</th>
             <th style="padding:.3rem .5rem;text-align:left">Issue</th>
             <th style="padding:.3rem .5rem;text-align:center">Action</th>
           </tr></thead>
           <tbody>
-            ${allSkipped.map((s, i) => `<tr id="skip-row-${i}" style="background:${i%2?'#fff':'#fafafa'}">
+            ${sortedIssues.map((s, i) => {
+              const isErr = errorSet.has(s);
+              const rowBg = isErr ? '#ffebee' : (i%2?'#fff':'#fafafa');
+              const typeBadge = isErr
+                ? '<span style="background:#c62828;color:#fff;padding:.05rem .4rem;border-radius:3px;font-size:.7rem;font-weight:700">FAILED</span>'
+                : '<span style="background:#f9a825;color:#fff;padding:.05rem .4rem;border-radius:3px;font-size:.7rem;font-weight:700">DUPLICATE</span>';
+              return `<tr id="skip-row-${i}" style="background:${rowBg}">
               <td style="padding:.25rem .5rem;color:var(--text-muted)">${s.row}</td>
+              <td style="padding:.25rem .5rem">${typeBadge}</td>
               <td style="padding:.25rem .5rem;font-weight:600">${s.name || ''}</td>
               <td style="padding:.25rem .5rem">${s.mobile || ''}</td>
               <td style="padding:.25rem .5rem;color:var(--danger);font-size:.75rem">${s.reason}</td>
@@ -1078,7 +1307,8 @@ function showImportReport(data, resultEl) {
                      </button>`
                   : `<span style="color:var(--text-muted);font-size:.72rem">—</span>`}
               </td>
-            </tr>`).join('')}
+            </tr>`;
+            }).join('')}
           </tbody>
         </table>
       </div>
@@ -1095,10 +1325,13 @@ function showImportReport(data, resultEl) {
     </details>`;
   }
 
-  resultEl.className = skipCount > 0 ? 'import-result' : 'import-result success';
-  resultEl.style.cssText = skipCount > 0
-    ? 'background:#fff8e1;border:1.5px solid #f9a825;color:#5d4037'
-    : '';
+  // Background: red if any actual failures, yellow if just duplicates, green if clean.
+  resultEl.className = (errCount > 0 || skipCount > 0) ? 'import-result' : 'import-result success';
+  resultEl.style.cssText = errCount > 0
+    ? 'background:#ffebee;border:2px solid #c62828;color:#5d4037'
+    : skipCount > 0
+      ? 'background:#fff8e1;border:1.5px solid #f9a825;color:#5d4037'
+      : '';
   resultEl.innerHTML = html;
   resultEl.classList.remove('hidden');
 }
@@ -1146,10 +1379,18 @@ async function forceAddAllSkipped() {
 function downloadSkipReport() {
   if (!_lastSkipReport.length) return;
   const ws = XLSX.utils.aoa_to_sheet([
-    ['Row #', 'Name', 'Mobile', 'Reason Skipped'],
-    ..._lastSkipReport.map(s => [s.row, s.name || '', s.mobile || '', s.reason])
+    ['Row #', 'Type', 'Name', 'Mobile', 'Reason'],
+    ..._lastSkipReport.map(s => [
+      s.row,
+      // "Save failed:" prefix is set when a batch.commit() fails — that's a real
+      // data-loss issue. Anything else is a duplicate-skip.
+      /^Save failed/i.test(s.reason || '') || /Failed to build/.test(s.reason || '') ? 'FAILED' : 'DUPLICATE',
+      s.name || '',
+      s.mobile || '',
+      s.reason,
+    ])
   ]);
-  ws['!cols'] = [{ wch: 6 }, { wch: 30 }, { wch: 14 }, { wch: 55 }];
+  ws['!cols'] = [{ wch: 6 }, { wch: 11 }, { wch: 30 }, { wch: 14 }, { wch: 55 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Skipped Rows');
   XLSX.writeFile(wb, `import_skip_report_${getToday()}.xlsx`);

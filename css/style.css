@@ -684,6 +684,87 @@ button.contact-icon { border: none; padding: 0; }
   font-weight: 700;
   background: var(--brand-subtle);
   color: var(--brand);
+  /* Freeze the Team column so the row label stays visible while user
+     scrolls horizontally through Attendance/Books/Service/etc columns. */
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  box-shadow: 2px 0 4px rgba(0,0,0,.06);
+}
+/* Header cells in the Team column also need to be sticky so the column
+   header doesn't scroll out of view at the same time. */
+.dashboard-table thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+}
+
+/* ── Bottom nav (mobile) ───────────────────────────────
+   Most-used tabs fixed to the bottom on small screens. Top nav still
+   present for everything else. Buttons reuse `.active` state from the
+   top nav via JS sync (see _syncBottomNavActive in ui-core.js). */
+.bottom-nav {
+  display: none;
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  background: var(--bg-card, #fff);
+  border-top: 1px solid var(--border, #e0e0e0);
+  box-shadow: 0 -2px 12px rgba(0,0,0,.08);
+  z-index: 90;
+  align-items: stretch;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+/* Scrollable strip between the two arrows */
+.bnav-scroll {
+  flex: 1;
+  display: flex;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+}
+.bnav-scroll::-webkit-scrollbar { display: none; }
+/* Arrow buttons */
+.bnav-arrow {
+  flex: 0 0 30px;
+  display: flex; align-items: center; justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-muted, #9ca3af);
+  font-size: .8rem;
+  cursor: pointer;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  transition: color .12s;
+}
+.bnav-arrow:active { color: var(--brand, #1A5C3A); }
+/* Tab buttons — flex: 0 0 25% means exactly 4 visible at a time */
+.bnav-btn {
+  flex: 0 0 25%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: .15rem;
+  padding: .4rem .1rem;
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  font-size: .64rem;
+  font-weight: 600;
+  color: var(--text-muted, #6b7280);
+  cursor: pointer;
+  transition: background .12s, color .12s;
+  -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
+}
+.bnav-btn i { font-size: 1.1rem; }
+.bnav-btn:active { background: var(--bg-subtle, #f5f5f5); }
+.bnav-btn.active { color: var(--brand, #1A5C3A); }
+.bnav-btn.active i { color: var(--brand, #1A5C3A); }
+
+@media (max-width: 720px) {
+  .bottom-nav { display: flex; }
+  /* Pad page so content isn't hidden behind the bottom nav (~56px) */
+  body { padding-bottom: calc(60px + env(safe-area-inset-bottom, 0)); }
+  /* Hide entire top tab nav on mobile — all tabs live in the bottom nav */
+  .tab-nav { display: none; }
 }
 .dashboard-table .dt-num {
   font-weight: 700;
