@@ -19,7 +19,7 @@ async function loadNotInterestedList() {
       wrap.innerHTML = '<div class="empty-state"><i class="fas fa-ban"></i><p>No devotees marked as Not Interested</p></div>';
       return;
     }
-    wrap.innerHTML = `<div class="calling-table-wrap"><table class="calling-table">
+    wrap.innerHTML = `<div class="calling-table-wrap"><table class="calling-table tbl-freeze-name">
       <thead><tr>
         <th>#</th><th>Name</th><th>Mobile</th><th>Team</th>
         <th>Date of Joining</th><th>Moved Not Interested On</th>
@@ -441,7 +441,7 @@ function filterCallingList() {
 function renderCallingList(devotees, locked) {
   const wrap = document.getElementById('calling-list');
   if (!devotees.length) { wrap.innerHTML = '<div class="empty-state"><i class="fas fa-phone-slash"></i><p>No devotees found</p></div>'; return; }
-  wrap.innerHTML = `<div class="calling-table-wrap"><table class="calling-table">
+  wrap.innerHTML = `<div class="calling-table-wrap"><table class="calling-table tbl-freeze-name">
     <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>${locked ? 'Status' : '✓ Coming'}</th><th>Reason &amp; Notes</th></tr></thead>
     <tbody>${devotees.map((d, i) => renderCallingRow(d, i + 1, locked)).join('')}</tbody>
   </table></div>`;
@@ -925,7 +925,7 @@ async function openAbsentModal(week, callingBy, team) {
       contentEl.innerHTML = '<p style="text-align:center;color:var(--success)"><i class="fas fa-check-circle"></i> Everyone came!</p>';
       return;
     }
-    contentEl.innerHTML = `<div class="table-scroll"><table class="calling-table" style="margin:0">
+    contentEl.innerHTML = `<div class="table-scroll"><table class="calling-table tbl-freeze-name" style="margin:0">
       <thead><tr>
         <th>#</th><th>Name</th><th>Team</th><th>Calling By</th><th>Mobile</th>
       </tr></thead>
@@ -1118,7 +1118,7 @@ async function loadLateReports() {
         <span style="color:var(--text-muted);font-size:.78rem"><i class="fas fa-sort-amount-down"></i> Sorted: most late first</span>
       </div>
       <div class="table-scroll">
-        <table class="calling-table sr-table" style="margin:0;min-width:640px">
+        <table class="calling-table sr-table tbl-freeze-name" style="margin:0;min-width:640px">
           <thead><tr>
             <th style="min-width:36px">#</th>
             <th style="min-width:160px">Name</th>

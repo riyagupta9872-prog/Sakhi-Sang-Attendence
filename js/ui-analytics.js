@@ -426,7 +426,7 @@ async function loadNewComersReport() {
         <strong style="color:var(--primary)">${formatDate(sess.session_date)}</strong>
       </div>
       <div class="table-scroll">
-        <table class="report-table">
+        <table class="report-table tbl-freeze-name">
           <thead><tr>
             <th>#</th><th>Name</th><th>Source</th><th>Mobile</th><th>Reference</th>
             <th>Team</th><th>Calling By</th><th style="text-align:center">C.R.</th>
@@ -555,7 +555,7 @@ async function loadAttendanceDetail() {
     c.innerHTML = `
       <div style="margin-bottom:.75rem;color:var(--text-muted);font-size:.85rem">${records.length} devotees present</div>
       <div class="table-scroll">
-        <table class="report-table">
+        <table class="report-table tbl-freeze-name">
           <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Rounds</th><th>Team</th><th>Calling By</th><th>Type</th></tr></thead>
           <tbody>${records.map((r, i) => `
             <tr><td style="color:var(--text-muted)">${i+1}</td>
@@ -774,7 +774,7 @@ function openCareDetail(type) {
   content.innerHTML = `
     <div style="margin-bottom:.5rem;color:var(--text-muted);font-size:.82rem">${list.length} devotee${list.length === 1 ? '' : 's'}</div>
     <div class="table-scroll">
-      <table class="report-table">
+      <table class="report-table tbl-freeze-name">
         <thead><tr>
           <th>#</th><th>Name</th><th>Mobile</th><th>Reference</th><th>Team</th><th>Calling By</th><th style="text-align:center">C.R.</th>
         </tr></thead>
@@ -1136,7 +1136,7 @@ function _buildMgmtSeparateLists({ online, festival, notInterested }) {
       <div class="sr-team-banner" style="background:${bgColor};color:#fff">
         <i class="${icon}"></i> ${title} <span style="font-size:.8rem;font-weight:400;opacity:.85">(${items.length})</span>
       </div>
-      <table class="calling-table sr-table" style="margin:0">
+      <table class="calling-table sr-table tbl-freeze-name" style="margin:0">
         <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>Restore</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -1974,7 +1974,7 @@ async function _renderCMNewComers() {
         <span style="margin-left:.5rem;font-size:.72rem;color:var(--text-light)">(joined or attended fresh)</span>
       </div>
       <div class="table-scroll">
-        <table class="calling-table">
+        <table class="calling-table tbl-freeze-name">
           <thead><tr>
             <th style="min-width:30px">#</th>
             <th style="min-width:160px">Name</th>
@@ -2042,7 +2042,7 @@ function _renderCMSingleList(type) {
       <i class="${icon}"></i> ${title}
       <span style="font-size:.8rem;font-weight:400;opacity:.85"> (${items.length})</span>
     </div>
-    <table class="calling-table sr-table" style="margin:0">
+    <table class="calling-table sr-table tbl-freeze-name" style="margin:0">
       <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>Actions</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
@@ -2378,7 +2378,7 @@ function _renderLateComers() {
 
   const tableHtml = !rows.length
     ? '<div class="empty-state"><i class="fas fa-check-circle" style="color:#16a34a"></i><p>No devotees in this category</p></div>'
-    : `<div class="table-scroll"><table class="report-table late-comers-table" style="width:100%;font-size:.85rem">
+    : `<div class="table-scroll"><table class="report-table late-comers-table tbl-freeze-name" style="width:100%;font-size:.85rem">
         <thead><tr style="background:var(--color-primary,#1A5C3A);color:#fff">
           <th style="padding:.5rem .6rem;text-align:left">#</th>
           <th style="padding:.5rem .6rem;text-align:left">Name</th>
@@ -3019,7 +3019,7 @@ async function _loadIndividualReports() {
         Total sessions in period: <strong>${totalSessions}</strong> · ${activeDevotees.length} active devotees
       </div>
       <div class="table-scroll">
-      <table class="report-table" style="width:100%;font-size:.82rem">
+      <table class="report-table tbl-freeze-name" style="width:100%;font-size:.82rem">
         <thead>
           <tr style="background:var(--color-primary,#1A5C3A);color:#fff">
             <th style="padding:.45rem .55rem;text-align:left">Sno</th>
