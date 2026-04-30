@@ -661,10 +661,11 @@ button.contact-icon { border: none; padding: 0; }
   border-radius: var(--radius-sm);
 }
 .dashboard-table {
-  width: 100%; border-collapse: collapse;
+  width: 100%; border-collapse: separate; border-spacing: 0;
   font-size: .85rem; background: var(--bg-card);
   box-shadow: var(--shadow-sm);
-  border-radius: var(--radius-sm); overflow: hidden;
+  border-radius: var(--radius-sm);
+  /* No `overflow: hidden` here — it would break sticky thead/first-col. */
   min-width: 900px;
 }
 .dashboard-table th, .dashboard-table td {
@@ -695,13 +696,6 @@ button.contact-icon { border: none; padding: 0; }
   left: 0;
   z-index: 2;
   box-shadow: 2px 0 4px rgba(0,0,0,.06);
-}
-/* Header cells in the Team column also need to be sticky so the column
-   header doesn't scroll out of view at the same time. */
-.dashboard-table thead th:first-child {
-  position: sticky;
-  left: 0;
-  z-index: 3;
 }
 
 /* ── Bottom nav (mobile) ───────────────────────────────
@@ -840,6 +834,16 @@ button.contact-icon { border: none; padding: 0; }
   background: var(--gray-50);
   border-bottom: 1px solid var(--border);
   font-size: .76rem;
+  /* Stick under the page header (below tab-nav on desktop, below header on
+     mobile since tab-nav is hidden). Keeps context visible while scrolling
+     and prevents content from leaking through between header and content. */
+  position: sticky;
+  top: calc(var(--header-h) + var(--nav-h));
+  z-index: 95;
+}
+@media (max-width: 720px) {
+  /* Tab-nav is hidden on mobile — anchor breadcrumb directly under header. */
+  .breadcrumb-trail { top: var(--header-h); }
 }
 .breadcrumb-trail:empty { display: none; }
 .bc-seg {
@@ -866,14 +870,22 @@ button.contact-icon { border: none; padding: 0; }
 }
 
 /* ── FILTER RIBBON (chip-based) ─────────────────────── */
+/* Stacks immediately below the breadcrumb (which is ~32px tall) so the
+   bar stays anchored under the header and content scrolls below it
+   without any visible gap. */
 .filter-ribbon {
   position: sticky;
-  top: calc(var(--header-h, 64px) + var(--nav-h, 52px));
+  top: calc(var(--header-h, 64px) + var(--nav-h, 52px) + 32px);
   z-index: 30;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow-xs);
   padding: .4rem .9rem .3rem;
+}
+@media (max-width: 720px) {
+  /* On mobile tab-nav is hidden, so the breadcrumb sits directly under the
+     header; offset filter-ribbon to stack right below the breadcrumb. */
+  .filter-ribbon { top: calc(var(--header-h) + 32px); }
 }
 .fr-chips {
   display: flex; flex-wrap: wrap; gap: .5rem;
@@ -1504,7 +1516,7 @@ button.calling-stat:active { transform: translateY(0); }
 }
 
 .calling-table-wrap { overflow: auto; max-height: 75vh; border-radius: var(--radius-sm); }
-.calling-table { width: 100%; border-collapse: collapse; min-width: 800px; }
+.calling-table { width: 100%; border-collapse: separate; border-spacing: 0; min-width: 800px; }
 .calling-table th {
   background: var(--brand); color: #fff;
   font-size: .75rem; font-weight: 700; text-align: left;
@@ -3099,10 +3111,13 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
   gap: .35rem;
 }
 
-/* ── Shared report tables (home module reports) ── */
+/* ── Shared report tables (home module reports) ──
+   border-collapse: separate is REQUIRED for position: sticky on table cells
+   to work reliably on mobile browsers (Safari iOS, Chrome Android) and Firefox. */
 .report-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: .84rem;
 }
 .report-table th {
@@ -3564,29 +3579,45 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
   border-radius: var(--radius-sm);
 }
 
-/* ── DASHBOARD TABLE ── */
-/* (First column already sticky at lines 682-700; here we add the sticky header.
-   Use thead-as-sticky so both header rows lock together.) */
+/* ── DASHBOARD TABLE ──
+   Sticky thead block + sticky first column. Works because the table uses
+   border-collapse: separate (line 664) and the wrap is the scroll context. */
 .dashboard-table thead {
   position: sticky;
   top: 0;
   z-index: 4;
 }
-.dashboard-table thead th:first-child { z-index: 6; }
+.dashboard-table thead th { background: var(--brand); }
+.dashboard-table thead tr.dt-sub th { background: var(--brand-mid); }
+/* Corner cell (Team header — rowspan=2) sticks on BOTH axes. */
+.dashboard-table thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 6;
+  background: var(--brand);
+}
 
-/* ── CALLING TABLES ── */
-/* (.calling-table th already has position: sticky; top: 0 — line 1503-1508.
-   Add sticky first column for horizontal scroll.) */
-.calling-table tbody td:first-child {
+/* ── CALLING TABLES ──
+   Sticky thead row + sticky first column (or second column when .tbl-freeze-name
+   is set on tables that have `# | Name | ...` structure). */
+.calling-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: var(--brand);
+  color: #fff;
+}
+.calling-table tbody td:first-child,
+.calling-table thead th:first-child {
   position: sticky;
   left: 0;
   background: #fff;
-  z-index: 1;
+  z-index: 2;
   box-shadow: 2px 0 4px rgba(0,0,0,.04);
 }
-.calling-table th:first-child {
-  left: 0;
-  z-index: 3;
+.calling-table thead th:first-child {
+  z-index: 6;
+  background: var(--brand);
 }
 .calling-table tr:hover td:first-child { background: var(--gray-50); }
 .calling-table tr.row-confirmed td:first-child { background: #f0fdf4; }
@@ -3599,15 +3630,16 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
   z-index: 5;
   background: var(--bg-subtle);
 }
-.report-table tbody td:first-child {
+.report-table tbody td:first-child,
+.report-table thead th:first-child {
   position: sticky;
   left: 0;
   background: #fff;
-  z-index: 1;
+  z-index: 2;
 }
 .report-table thead th:first-child {
   z-index: 6;
-  left: 0;
+  background: var(--bg-subtle);
 }
 .report-table tr:hover td:first-child { background: var(--gray-50); }
 .report-table .totals-row td:first-child { background: var(--brand-subtle); }
@@ -3615,3 +3647,12 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
 /* Inner detail tables (nested under team rows) — no sticky needed */
 .inner-table thead th { position: static; }
 .inner-table tbody td:first-child { position: static; background: transparent; }
+
+/* iOS smooth-scroll for all our scroll wrappers (sticky needs momentum scroll
+   to stay anchored on Safari; without this, sticky jitters on iOS). */
+.dashboard-wrap,
+.calling-table-wrap,
+.table-scroll,
+.attendance-sheet-wrap {
+  -webkit-overflow-scrolling: touch;
+}
