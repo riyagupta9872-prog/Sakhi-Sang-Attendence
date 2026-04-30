@@ -794,7 +794,10 @@ function applyRoleUI() {
   });
   document.querySelectorAll('.bnav-btn').forEach(btn => {
     const tab = btn.dataset.tab;
-    btn.style.display = tabs[tab]?.includes(role) ? '' : 'none';
+    const allowed = tabs[tab]?.includes(role);
+    btn.style.display = allowed ? '' : 'none';
+    const group = btn.closest('.bnav-btn-group');
+    if (group) group.style.display = allowed ? '' : 'none';
   });
 
   const activePanel = document.querySelector('.tab-panel.active');
@@ -1736,14 +1739,15 @@ const TAB_VIEWS = {
     { key: 'submission', label: 'Submission Reports', icon: 'fa-chart-line' },
   ],
   attendance: [
-    { key: 'live',      label: 'Live Attendance',  icon: 'fa-check-circle' },
+    { key: 'live',       label: 'Live Attendance',   icon: 'fa-check-circle' },
     { divider: true, label: 'REPORTS' },
-    { key: 'sheet',     label: 'Attendance Sheet', icon: 'fa-table' },
-    { key: 'late',      label: 'Late Comers',      icon: 'fa-clock' },
-    { key: 'newcomers', label: 'New Comers',       icon: 'fa-user-plus' },
-    { key: 'serious',   label: 'Serious Analysis', icon: 'fa-star' },
-    { key: 'teams',     label: 'Team Leaderboard', icon: 'fa-trophy' },
-    { key: 'trends',    label: 'Trends',           icon: 'fa-chart-line' },
+    { key: 'sheet',      label: 'Attendance Sheet',  icon: 'fa-table' },
+    { key: 'late',       label: 'Late Comers',       icon: 'fa-clock' },
+    { key: 'individual', label: 'Individual Reports', icon: 'fa-id-card' },
+    { key: 'newcomers',  label: 'New Comers',        icon: 'fa-user-plus' },
+    { key: 'serious',    label: 'Serious Analysis',  icon: 'fa-star' },
+    { key: 'teams',      label: 'Team Leaderboard',  icon: 'fa-trophy' },
+    { key: 'trends',     label: 'Trends',            icon: 'fa-chart-line' },
   ],
   books:        [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
   service:      [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
@@ -1772,8 +1776,9 @@ function _closeAllTabMenus() {
 function onTabBtnClick(tab, btn, event) {
   event?.stopPropagation();
   if (TAB_VIEWS[tab]) {
-    // Has sub-views — toggle the dropdown menu instead of switching directly.
-    const menu = document.getElementById('tab-menu-' + tab);
+    // Has sub-views — toggle the dropdown menu (use the menu that lives
+    // inside this button's group, so top-nav vs bottom-nav doesn't conflict).
+    const menu = btn.parentElement?.querySelector('.tab-menu');
     if (!menu) return;
     const wasHidden = menu.classList.contains('hidden');
     _closeAllTabMenus();
@@ -1787,16 +1792,22 @@ function onTabBtnClick(tab, btn, event) {
   }
 }
 
-// Position a fixed-position dropdown directly under its trigger button,
-// keeping it inside the viewport on the right edge.
+// Position a fixed-position dropdown either UNDER (desktop top-nav) or ABOVE
+// (mobile bottom-nav) its trigger button, keeping it inside the viewport.
 function _positionTabMenu(menu, btn) {
   const r = btn.getBoundingClientRect();
-  menu.style.top = (r.bottom + 6) + 'px';
-  // Measure the menu's actual rendered width to clamp inside viewport.
+  const isBnav = menu.classList.contains('tab-menu-bnav');
   const menuW = menu.offsetWidth || 240;
+  const menuH = menu.offsetHeight || 280;
   const maxLeft = window.innerWidth - menuW - 8;
   const left = Math.max(8, Math.min(r.left, maxLeft));
   menu.style.left = left + 'px';
+  if (isBnav) {
+    // Anchor above the bottom-nav button.
+    menu.style.top = Math.max(8, r.top - menuH - 6) + 'px';
+  } else {
+    menu.style.top = (r.bottom + 6) + 'px';
+  }
 }
 
 function navTabView(tab, view) {
@@ -1931,13 +1942,15 @@ async function applyTabView(tab, view) {
   AppState._tabView = AppState._tabView || {};
   AppState._tabView[tab] = view;
 
-  // Reflect the active view in the dropdown so users see which one is current.
-  const menu = document.getElementById('tab-menu-' + tab);
-  if (menu) {
+  // Reflect the active view in BOTH dropdowns (top-nav and bottom-nav)
+  // so users see which one is current regardless of surface.
+  ['tab-menu-' + tab, 'bnav-menu-' + tab].forEach(menuId => {
+    const menu = document.getElementById(menuId);
+    if (!menu) return;
     menu.querySelectorAll('.tab-menu-item').forEach(it => {
       it.classList.toggle('active', it.dataset.view === view);
     });
-  }
+  });
 
   // Session-anchored Reports auto-snap to the most recent past session.
   if (_isSessionAnchoredReportsView(tab, view)) {
@@ -1968,18 +1981,20 @@ async function applyTabView(tab, view) {
       const reportsBtn = document.querySelector('#tab-attendance .att-sub-tab:nth-child(2)');
       if (reportsBtn) switchAttSubTab(reportsBtn, 'reports');
       const subId = ({
-        sheet:     'attendance-detail',
-        late:      'late-comers',
-        newcomers: 'newcomers-report',
-        serious:   'serious-analysis',
-        teams:     'team-leaderboard',
-        trends:    'trends',
+        sheet:      'attendance-detail',
+        late:       'late-comers',
+        individual: 'individual-reports',
+        newcomers:  'newcomers-report',
+        serious:    'serious-analysis',
+        teams:      'team-leaderboard',
+        trends:     'trends',
       })[view];
       if (subId) {
         const innerBtn = document.querySelector(`#att-panel-reports .sub-tab[onclick*="'${subId}'"]`);
         if (innerBtn) switchSubTab(innerBtn, subId);
         if (subId === 'attendance-detail' && typeof loadYearlySheet === 'function') loadYearlySheet();
-        if (subId === 'late-comers'      && typeof loadLateComersReport === 'function') loadLateComersReport();
+        if (subId === 'late-comers'       && typeof loadLateComersReport === 'function') loadLateComersReport();
+        if (subId === 'individual-reports' && typeof _loadIndividualReports === 'function') _loadIndividualReports();
       }
     }
   } else if (['books','service','registration','donation'].includes(tab)) {
@@ -1997,39 +2012,47 @@ async function applyTabView(tab, view) {
 
 // Dynamically wraps each tab button that has TAB_VIEWS in a .tab-btn-group +
 // dropdown menu, and overrides its inline onclick. Called once at app init.
+// Wires both the desktop top-nav (.tab-btn) and the mobile bottom-nav (.bnav-btn).
 function _buildTabMenus() {
   Object.entries(TAB_VIEWS).forEach(([tab, items]) => {
-    const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
-    if (!btn || btn.closest('.tab-btn-group')) return;
+    // Wire BOTH the top-nav button and the bottom-nav button if they exist
+    [`.tab-btn[data-tab="${tab}"]`, `.bnav-btn[data-tab="${tab}"]`].forEach(sel => {
+      const btn = document.querySelector(sel);
+      if (!btn || btn.closest('.tab-btn-group')) return;
+      const isBnav = btn.classList.contains('bnav-btn');
 
-    // Wrap the button in a positioning container
-    const group = document.createElement('div');
-    group.className = 'tab-btn-group';
-    btn.parentElement.insertBefore(group, btn);
-    group.appendChild(btn);
+      // Wrap the button in a positioning container
+      const group = document.createElement('div');
+      group.className = 'tab-btn-group' + (isBnav ? ' bnav-btn-group' : '');
+      btn.parentElement.insertBefore(group, btn);
+      group.appendChild(btn);
 
-    // Add chevron caret to the button
-    const caret = document.createElement('i');
-    caret.className = 'fas fa-chevron-down tab-btn-caret';
-    btn.appendChild(caret);
-
-    // Build dropdown menu
-    const menu = document.createElement('div');
-    menu.className = 'tab-menu hidden';
-    menu.id = 'tab-menu-' + tab;
-    menu.innerHTML = items.map(it => {
-      if (it.divider) {
-        return `<div class="tab-menu-divider">${it.label || ''}</div>`;
+      // Add chevron caret to the desktop button (bottom-nav buttons are
+      // already cramped; the dropdown indicator there is implicit).
+      if (!isBnav) {
+        const caret = document.createElement('i');
+        caret.className = 'fas fa-chevron-down tab-btn-caret';
+        btn.appendChild(caret);
       }
-      return `<button class="tab-menu-item" data-view="${it.key}" onclick="navTabView('${tab}','${it.key}')">
-        <i class="fas ${it.icon}"></i><span>${it.label}</span>
-      </button>`;
-    }).join('');
-    group.appendChild(menu);
 
-    // Replace inline onclick with our toggle handler
-    btn.removeAttribute('onclick');
-    btn.addEventListener('click', (e) => onTabBtnClick(tab, btn, e));
+      // Build dropdown menu (one per surface — IDs differ for top vs bottom)
+      const menu = document.createElement('div');
+      menu.className = 'tab-menu hidden' + (isBnav ? ' tab-menu-bnav' : '');
+      menu.id = (isBnav ? 'bnav-menu-' : 'tab-menu-') + tab;
+      menu.innerHTML = items.map(it => {
+        if (it.divider) {
+          return `<div class="tab-menu-divider">${it.label || ''}</div>`;
+        }
+        return `<button class="tab-menu-item" data-view="${it.key}" onclick="navTabView('${tab}','${it.key}')">
+          <i class="fas ${it.icon}"></i><span>${it.label}</span>
+        </button>`;
+      }).join('');
+      group.appendChild(menu);
+
+      // Replace inline onclick with our toggle handler
+      btn.removeAttribute('onclick');
+      btn.addEventListener('click', (e) => onTabBtnClick(tab, btn, e));
+    });
   });
 
   // Click outside any tab group closes all menus
