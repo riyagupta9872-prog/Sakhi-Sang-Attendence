@@ -55,8 +55,9 @@ function toSnake(d) {
     plays_instrument:    d.playsInstrument || null,
     instrument_name:     d.instrumentName || null,
     wants_kirtan_class:  d.wantsKirtanClass || null,
-    is_not_interested:   d.isNotInterested || false,
-    not_interested_at:   tsToISO(d.notInterestedAt),
+    is_not_interested:      d.isNotInterested || false,
+    not_interested_at:      tsToISO(d.notInterestedAt),
+    prior_sessions_attended: d.priorSessionsAttended || 0,
   };
 }
 
@@ -87,8 +88,9 @@ function toCamel(f) {
     hobbies:           (f.hobbies || '').trim() || null,
     skills:            (f.skills || '').trim() || null,
     tilak:             parseInt(f.tilak) || 0,
-    isNotInterested:   f.is_not_interested || false,
-    notInterestedAt:   f.not_interested_at || null,
+    isNotInterested:         f.is_not_interested || false,
+    notInterestedAt:         f.not_interested_at || null,
+    priorSessionsAttended:   parseInt(f.prior_sessions_attended) || 0,
   };
 }
 

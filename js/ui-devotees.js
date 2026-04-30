@@ -121,7 +121,8 @@ async function openProfileModal(id) {
     AppState.currentDevoteeName = d.name;
     const yn = v => v ? '<span class="pf-yes">✓ Yes</span>' : '<span class="pf-no">✗ No</span>';
     const val = v => (v === 0 || v) ? v : '—';
-    const totalSessions = _sundaysSince(d.date_of_joining);
+    const totalSessions  = _sundaysSince(d.date_of_joining);
+    const totalAttended  = (d.lifetime_attendance || 0) + (d.prior_sessions_attended || 0);
 
     // Hero + completion gauge
     if (heroEl) {
@@ -195,7 +196,8 @@ async function openProfileModal(id) {
         <div class="profile-fields">
           <div class="profile-field"><label>Daily Chanting Rounds</label><span style="font-size:1.1rem;font-family:'Cinzel',serif">${val(d.chanting_rounds) || 0}</span></div>
           <div class="profile-field"><label>Lifetime Attendance</label>
-            <span style="color:var(--primary);font-size:1.1rem;font-family:'Cinzel',serif">${d.lifetime_attendance || 0}<span style="color:var(--text-muted);font-size:.78rem;font-family:'Nunito',sans-serif"> / ${totalSessions} sessions${!d.date_of_joining ? ' <span title="No joining date — counted from 01 Apr 2026" style="cursor:help;font-size:.7rem">*</span>' : ''}</span></span>
+            <span style="color:var(--primary);font-size:1.1rem;font-family:'Cinzel',serif">${totalAttended}<span style="color:var(--text-muted);font-size:.78rem;font-family:'Nunito',sans-serif"> / ${totalSessions} sessions${!d.date_of_joining ? '<span title="No joining date — counted from 01 Apr 2026" style="cursor:help;font-size:.7rem"> *</span>' : ''}</span></span>
+            ${d.prior_sessions_attended > 0 ? `<div style="font-size:.72rem;color:var(--text-muted);margin-top:.2rem"><i class="fas fa-info-circle"></i> ${d.lifetime_attendance || 0} tracked in app + ${d.prior_sessions_attended} before app</div>` : ''}
           </div>
           <div class="profile-field"><label>Reading</label><span>${d.reading ? `<span class="pf-tag">${d.reading}</span>` : '—'}</span></div>
           <div class="profile-field"><label>Hearing</label><span>${d.hearing ? `<span class="pf-tag">${d.hearing}</span>` : '—'}</span></div>
@@ -355,6 +357,7 @@ function clearDevoteeForm() {
   document.getElementById('f-plays-instrument').value = '';
   document.getElementById('f-instrument-name').value = '';
   document.getElementById('f-wants-kirtan').value = '';
+  const fPriorClear = document.getElementById('f-prior-sessions'); if (fPriorClear) fPriorClear.value = 0;
   _toggleInstrumentField('');
   clearPicker('picker-facilitator', 'f-facilitator');
   clearPicker('picker-reference',   'f-reference');
@@ -409,6 +412,7 @@ async function populateEditForm(id) {
     document.getElementById('f-plays-instrument').value  = d.plays_instrument || '';
     document.getElementById('f-instrument-name').value   = d.instrument_name || '';
     document.getElementById('f-wants-kirtan').value      = d.wants_kirtan_class || '';
+    const fPrior = document.getElementById('f-prior-sessions'); if (fPrior) fPrior.value = d.prior_sessions_attended || 0;
     _toggleInstrumentField(d.plays_instrument || '');
     const fm = document.getElementById('f-family-members');    if(fm) fm.value = d.family_members || '';
     const fp = document.getElementById('f-family-participants'); if(fp) fp.value = d.family_participants || '';
@@ -446,7 +450,8 @@ function getFormPayload() {
     instrument_name:      document.getElementById('f-plays-instrument').value === 'Yes'
                             ? document.getElementById('f-instrument-name').value
                             : '',
-    wants_kirtan_class:   document.getElementById('f-wants-kirtan').value,
+    wants_kirtan_class:       document.getElementById('f-wants-kirtan').value,
+    prior_sessions_attended:  parseInt(document.getElementById('f-prior-sessions')?.value) || 0,
   };
 }
 
