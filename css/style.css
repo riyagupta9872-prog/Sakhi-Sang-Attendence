@@ -92,9 +92,20 @@ body {
   color: var(--text);
   font-size: 14px;
   line-height: 1.6;
-  min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* ─── APP SHELL ───────────────────────────────────────────
+     Body is a vertical flex container locked to viewport height.
+     This guarantees header, tab-nav, breadcrumb, and filter-ribbon
+     stay visible at the top regardless of scroll state, and only
+     <main> scrolls. Sticky positioning inside <main> (thead, first
+     column) then works reliably across all browsers because there's
+     a single, well-defined scroll context. */
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;             /* dynamic vh — handles mobile URL bar collapse */
+  height: 100vh;              /* fallback for browsers without dvh */
+  overflow: hidden;
 }
 
 /* ── SCROLLBAR ── */
@@ -118,7 +129,9 @@ h3 { font-size: .93rem; }
 .app-header {
   background: linear-gradient(135deg, #1a5c3a 0%, #1e6b45 55%, #2d7a52 100%);
   height: var(--header-h);
-  position: sticky; top: 0; z-index: 100;
+  /* App-shell flex item — never scrolls (no sticky needed). */
+  flex: 0 0 var(--header-h);
+  z-index: 100;
   box-shadow: 0 2px 16px rgba(26,92,58,.3);
 }
 .header-content {
@@ -243,7 +256,9 @@ h3 { font-size: .93rem; }
 .tab-nav {
   background: #fff;
   height: var(--nav-h);
-  position: sticky; top: var(--header-h); z-index: 99;
+  /* App-shell flex item — desktop only (mobile hides via display: none). */
+  flex: 0 0 var(--nav-h);
+  z-index: 99;
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow-xs);
   display: flex; align-items: center;
@@ -366,10 +381,21 @@ h3 { font-size: .93rem; }
 }
 .tab-btn.active i { color: rgba(255,255,255,.85); }
 
-/* ── MAIN CONTENT ── */
+/* ── MAIN CONTENT ──
+   The ONLY vertical scroll container in the app shell. Everything inside
+   (tables, panels, lists) scrolls within this region. position:sticky on
+   table thead/first-col anchors to this scroll context, which is reliable
+   because there's only one scroll container in the chain. */
 .main-content {
-  max-width: 1280px; margin: 0 auto;
-  padding: .85rem 1.25rem 6rem;
+  flex: 1 1 0;
+  min-height: 0;                 /* required so flex children can shrink/scroll */
+  overflow-y: auto;
+  overflow-x: hidden;            /* tables manage their own horizontal scroll */
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+  /* Centered max-width content via inner padding (margin:auto won't work on
+     a flex-grow item without losing its scroll behaviour). */
+  padding: .85rem max(1.25rem, calc((100% - 1280px) / 2)) 6rem;
 }
 
 /* ── TAB PANELS ── */
@@ -655,8 +681,7 @@ button.contact-icon { border: none; padding: 0; }
 
 /* ── DASHBOARD ──────────────────────────────────────── */
 .dashboard-wrap {
-  overflow: auto;
-  max-height: 75vh;
+  overflow-x: auto;            /* horizontal only — vertical scroll lives at main-content */
   margin-top: .5rem;
   border-radius: var(--radius-sm);
 }
@@ -769,21 +794,13 @@ button.contact-icon { border: none; padding: 0; }
 
 @media (max-width: 720px) {
   .bottom-nav { display: flex; }
-  /* Pad page so content isn't hidden behind the bottom nav */
-  body { padding-bottom: calc(62px + env(safe-area-inset-bottom, 0)); }
+  /* Pad main scroll area so content isn't hidden behind the fixed bottom nav.
+     (body itself doesn't scroll in the app-shell layout — main-content does.) */
+  .main-content { padding-bottom: calc(72px + env(safe-area-inset-bottom, 0)); }
   /* Hide entire top tab nav on mobile — all tabs live in the bottom nav */
   .tab-nav { display: none; }
-  /* Re-show in-panel sub-tabs on mobile — desktop uses the top-nav dropdown
-     but that dropdown is hidden on mobile so sub-tabs must be visible here */
-  #tab-attendance > .att-sub-tabs,
-  #tab-calling > .att-sub-tabs,
-  #tab-books > .att-sub-tabs,
-  #tab-service > .att-sub-tabs,
-  #tab-registration > .att-sub-tabs,
-  #tab-donation > .att-sub-tabs,
-  #tab-calling-mgmt > .att-sub-tabs {
-    display: flex;
-  }
+  /* Sub-tabs stay hidden on mobile too — bottom-nav dropdowns drive sub-view
+     navigation. Inline sub-tabs would duplicate that. */
 }
 .dashboard-table .dt-num {
   font-weight: 700;
@@ -834,16 +851,9 @@ button.contact-icon { border: none; padding: 0; }
   background: var(--gray-50);
   border-bottom: 1px solid var(--border);
   font-size: .76rem;
-  /* Stick under the page header (below tab-nav on desktop, below header on
-     mobile since tab-nav is hidden). Keeps context visible while scrolling
-     and prevents content from leaking through between header and content. */
-  position: sticky;
-  top: calc(var(--header-h) + var(--nav-h));
+  /* App-shell flex item — sits below tab-nav, above main scroll area. */
+  flex: 0 0 auto;
   z-index: 95;
-}
-@media (max-width: 720px) {
-  /* Tab-nav is hidden on mobile — anchor breadcrumb directly under header. */
-  .breadcrumb-trail { top: var(--header-h); }
 }
 .breadcrumb-trail:empty { display: none; }
 .bc-seg {
@@ -870,22 +880,14 @@ button.contact-icon { border: none; padding: 0; }
 }
 
 /* ── FILTER RIBBON (chip-based) ─────────────────────── */
-/* Stacks immediately below the breadcrumb (which is ~32px tall) so the
-   bar stays anchored under the header and content scrolls below it
-   without any visible gap. */
+/* App-shell flex item — locked at top of the chrome stack, no sticky needed. */
 .filter-ribbon {
-  position: sticky;
-  top: calc(var(--header-h, 64px) + var(--nav-h, 52px) + 32px);
+  flex: 0 0 auto;
   z-index: 30;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow-xs);
   padding: .4rem .9rem .3rem;
-}
-@media (max-width: 720px) {
-  /* On mobile tab-nav is hidden, so the breadcrumb sits directly under the
-     header; offset filter-ribbon to stack right below the breadcrumb. */
-  .filter-ribbon { top: calc(var(--header-h) + 32px); }
 }
 .fr-chips {
   display: flex; flex-wrap: wrap; gap: .5rem;
@@ -1515,7 +1517,7 @@ button.calling-stat:active { transform: translateY(0); }
   border: 1px solid #fcd34d; margin-left: .3rem;
 }
 
-.calling-table-wrap { overflow: auto; max-height: 75vh; border-radius: var(--radius-sm); }
+.calling-table-wrap { overflow-x: auto; border-radius: var(--radius-sm); }
 .calling-table { width: 100%; border-collapse: separate; border-spacing: 0; min-width: 800px; }
 .calling-table th {
   background: var(--brand); color: #fff;
@@ -3572,10 +3574,11 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
    STICKY TABLE HEADERS + FIRST COLUMN
    ════════════════════════════════════════════════════ */
 
-/* Generic scroll wrapper used by inline tables (analytics / home / activities) */
+/* Generic scroll wrapper used by inline tables (analytics / home / activities).
+   Horizontal scroll only — vertical scrolling lives at main-content (the
+   single, well-defined scroll context that sticky thead anchors against). */
 .table-scroll {
-  overflow: auto;
-  max-height: 75vh;
+  overflow-x: auto;
   border-radius: var(--radius-sm);
 }
 

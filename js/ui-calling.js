@@ -1154,10 +1154,9 @@ function _toggleCSReportTeam(teamId, rowEl) {
 
 // ── Calling-stat detail modal ─────────────────────────────────
 // Click any stat pill (Confirmed / Not reached / Online / Festival / Not Interested
-// / Not called) to see the actual devotees behind that number, with bulk-action
-// support for super admins to move people between status lists or change team.
+// / Not called) to see the actual devotees behind that number — read-only view.
+// Bulk actions are not exposed here; they live in the Calling Mgmt tab.
 let _csModalDevotees = [];
-let _csModalSelected = new Set();
 let _csModalTitle = '';
 
 function openCallingStatList(type) {
@@ -1185,12 +1184,10 @@ function openCallingStatList(type) {
   const cfg = map[type];
   if (!cfg) return;
   _csModalDevotees = all.filter(cfg.filter);
-  _csModalSelected.clear();
   _csModalTitle = `<i class="${cfg.icon}" style="color:${cfg.color}"></i> ${cfg.title}`;
   document.getElementById('cs-modal-title').innerHTML =
     `${_csModalTitle} <span style="color:var(--text-muted);font-weight:400;font-size:.85rem">(${_csModalDevotees.length})</span>`;
   document.getElementById('cs-modal-search').value = '';
-  document.getElementById('cs-modal-checkall').checked = false;
 
   _renderCSModal();
   openModal('calling-stat-modal');
@@ -1206,7 +1203,6 @@ function _renderCSModal() {
   // Modal always inherits the master bar's Team and Calling By context.
   const teamVal = (typeof getFilterTeam      === 'function') ? getFilterTeam()      : '';
   const byVal   = (typeof getFilterCallingBy === 'function') ? getFilterCallingBy() : '';
-  const isAdmin = AppState.userRole === 'superAdmin';
   const list = _csModalDevotees.filter(d => {
     if (teamVal && d.team_name !== teamVal) return false;
     if (byVal   && d.calling_by !== byVal)  return false;
@@ -1218,59 +1214,22 @@ function _renderCSModal() {
   const el = document.getElementById('cs-modal-content');
   if (!list.length) {
     el.innerHTML = '<div class="empty-state" style="padding:2rem"><i class="fas fa-inbox"></i><p>No devotees</p></div>';
-    _updateCSModalCount();
     return;
   }
   el.innerHTML = `
-    <div class="table-scroll"><table class="report-table">
+    <div class="table-scroll"><table class="report-table tbl-freeze-name">
       <thead><tr>
-        ${isAdmin ? '<th style="width:30px"></th>' : ''}
         <th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th>
       </tr></thead>
-      <tbody>${list.map((d, i) => {
-        const checked = _csModalSelected.has(d.id) ? ' checked' : '';
-        return `<tr>
-          ${isAdmin ? `<td><input type="checkbox" data-id="${d.id}" class="cs-modal-row-check" onchange="_csModalToggle('${d.id}', this.checked)"${checked}></td>` : ''}
+      <tbody>${list.map((d, i) => `<tr>
           <td style="color:var(--text-muted)">${i + 1}</td>
           <td><button class="cm-link" onclick="openProfileModal('${d.id}')">${d.name || '—'}</button></td>
           <td>${d.mobile ? contactIcons(d.mobile, { altMobile: d.mobile_alt, devoteeId: d.id, name: d.name }) + ' <span style="font-size:.78rem">' + d.mobile + '</span>' : '—'}</td>
           <td>${teamBadge(d.team_name)}</td>
           <td style="font-size:.82rem">${d.calling_by || '—'}</td>
-        </tr>`;
-      }).join('')}</tbody>
+        </tr>`).join('')}</tbody>
     </table></div>`;
-  _updateCSModalCount();
 }
 
-function _csModalToggle(id, checked) {
-  if (checked) _csModalSelected.add(id);
-  else _csModalSelected.delete(id);
-  _updateCSModalCount();
-}
-function _csModalSelectAll(checked) {
-  document.querySelectorAll('#cs-modal-content input.cs-modal-row-check').forEach(b => {
-    b.checked = checked;
-    if (checked) _csModalSelected.add(b.dataset.id);
-    else         _csModalSelected.delete(b.dataset.id);
-  });
-  _updateCSModalCount();
-}
-function _updateCSModalCount() {
-  const el = document.getElementById('cs-modal-sel-count');
-  if (el) el.textContent = _csModalSelected.size;
-}
-
-// Bulk action from inside the calling-stat modal — reuses the Calling Mgmt
-// bulk-action modal so super admins can re-assign team / calling-by, shift
-// to online / festival / not-interested, etc.
-function _csModalOpenBulk() {
-  if (AppState.userRole !== 'superAdmin') { showToast('Super Admin only', 'error'); return; }
-  if (!_csModalSelected.size) { showToast('Select at least one devotee', 'error'); return; }
-  // Pipe selection into the Calling Mgmt bulk-action infrastructure
-  if (typeof _cmSelected !== 'undefined') {
-    _cmSelected.clear();
-    _csModalSelected.forEach(id => _cmSelected.add(id));
-  }
-  closeModal('calling-stat-modal');
-  if (typeof openBulkAction === 'function') openBulkAction();
-}
+// Calling-stat modal is read-only (view + filter only). Bulk actions live
+// exclusively in the Calling Mgmt tab — no selection state needed here.
