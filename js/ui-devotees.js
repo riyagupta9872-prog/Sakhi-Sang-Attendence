@@ -1,5 +1,22 @@
 /* ══ UI-DEVOTEES.JS – Devotee list, form modal, profile modal ══ */
 
+// Count Sundays from a given date up to and including today.
+// Used for the Lifetime Attendance denominator.
+function _sundaysSince(fromDateStr) {
+  const DEFAULT_START = '2026-04-01';
+  const raw = fromDateStr || DEFAULT_START;
+  // parse as local date to avoid UTC-shift
+  const parts = raw.split('-').map(Number);
+  const start = new Date(parts[0], parts[1] - 1, parts[2]);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  if (start > today) return 0;
+  // Advance to first Sunday on or after start
+  const dayOfWeek = start.getDay(); // 0 = Sunday
+  if (dayOfWeek !== 0) start.setDate(start.getDate() + (7 - dayOfWeek));
+  if (start > today) return 0;
+  return Math.floor((today - start) / (7 * 24 * 60 * 60 * 1000)) + 1;
+}
+
 // Fields that contribute to profile completion (both old and new).
 // Boolean attire fields (tilak/kanthi/gopi) have a meaningful 0 default, so excluded.
 function _calcProfileCompletion(d) {
@@ -71,7 +88,7 @@ function renderDevoteeItem(d) {
           ${isBirthdayWeek(d.dob) ? '<i class="fas fa-birthday-cake birthday-icon" title="Birthday this week!"></i>' : ''}
         </div>
         <div class="devotee-meta">${d.mobile || '—'}</div>
-        <div class="devotee-badges">${statusBadge(d.devotee_status)}${d.team_name ? ' ' + teamBadge(d.team_name) : ''}</div>
+        <div class="devotee-badges">${statusBadge(d.devotee_status)}${d.team_name ? ' ' + teamBadge(d.team_name) : ''}${d.reference_by ? `<span style="font-size:.7rem;color:var(--text-muted);margin-left:.3rem"><i class="fas fa-user-plus" style="font-size:.6rem"></i> ${d.reference_by}</span>` : ''}</div>
       </div>
       <div style="display:flex;align-items:center;gap:.5rem">${contactIcons(d.mobile, { altMobile: d.mobile_alt, devoteeId: d.id, name: d.name })}</div>
     </div>`;
@@ -101,8 +118,10 @@ async function openProfileModal(id) {
   try {
     const d = await DB.getDevotee(id);
     document.getElementById('profile-modal-name').textContent = d.name;
+    AppState.currentDevoteeName = d.name;
     const yn = v => v ? '<span class="pf-yes">✓ Yes</span>' : '<span class="pf-no">✗ No</span>';
     const val = v => (v === 0 || v) ? v : '—';
+    const totalSessions = _sundaysSince(d.date_of_joining);
 
     // Hero + completion gauge
     if (heroEl) {
@@ -149,7 +168,7 @@ async function openProfileModal(id) {
           <div class="profile-field"><label>Team Name</label><span>${d.team_name ? teamBadge(d.team_name) : '—'}</span></div>
           <div class="profile-field"><label>Devotee Status</label><span>${statusBadge(d.devotee_status)}</span></div>
           <div class="profile-field"><label>Date of Joining</label><span>${formatDate(d.date_of_joining)}</span></div>
-          <div class="profile-field"><label>Reference By</label><span>${d.reference_by || '—'}</span></div>
+          <div class="profile-field"><label>Reference By</label><span id="pv-ref-by">${d.reference_by || '—'}</span></div>
           <div class="profile-field"><label>Facilitator</label><span>${d.facilitator || '—'}</span></div>
           <div class="profile-field"><label>Calling By</label><span>${d.calling_by || '—'}</span></div>
         </div>
@@ -175,7 +194,9 @@ async function openProfileModal(id) {
         </div>
         <div class="profile-fields">
           <div class="profile-field"><label>Daily Chanting Rounds</label><span style="font-size:1.1rem;font-family:'Cinzel',serif">${val(d.chanting_rounds) || 0}</span></div>
-          <div class="profile-field"><label>Lifetime Attendance</label><span style="color:var(--primary);font-size:1.1rem;font-family:'Cinzel',serif">${d.lifetime_attendance || 0}</span></div>
+          <div class="profile-field"><label>Lifetime Attendance</label>
+            <span style="color:var(--primary);font-size:1.1rem;font-family:'Cinzel',serif">${d.lifetime_attendance || 0}<span style="color:var(--text-muted);font-size:.78rem;font-family:'Nunito',sans-serif"> / ${totalSessions} sessions${!d.date_of_joining ? ' <span title="No joining date — counted from 01 Apr 2026" style="cursor:help;font-size:.7rem">*</span>' : ''}</span></span>
+          </div>
           <div class="profile-field"><label>Reading</label><span>${d.reading ? `<span class="pf-tag">${d.reading}</span>` : '—'}</span></div>
           <div class="profile-field"><label>Hearing</label><span>${d.hearing ? `<span class="pf-tag">${d.hearing}</span>` : '—'}</span></div>
           <div class="profile-field"><label>Tilak</label>${yn(d.tilak)}</div>
@@ -210,7 +231,29 @@ async function openProfileModal(id) {
           <div class="profile-field"><label>Favorable to Devotion</label><span>${d.family_favourable ? `<span class="pf-tag pf-family-${d.family_favourable.toLowerCase().replace(/\s/g,'-')}">${d.family_favourable}</span>` : '—'}</span></div>
           <div class="profile-field full"><label>Hobbies &amp; Interests</label><span>${d.hobbies || '—'}</span></div>
         </div>
+      </div>
+
+      <!-- Referred Devotees panel -->
+      <div class="psec-panel" id="pvpanel-referred">
+        <div class="psec-panel-header" style="background:linear-gradient(135deg,#e8f5e9,#f1f8e9)">
+          <i class="fas fa-user-plus" style="color:var(--brand)"></i> Referred Devotees
+          <span class="psec-note">Devotees who joined through ${d.name}</span>
+        </div>
+        <div id="referred-list-inner" style="padding:.5rem 0">
+          <div class="loading" style="padding:1.5rem"><i class="fas fa-spinner"></i> Loading…</div>
+        </div>
       </div>`;
+
+    // Make Reference By clickable if we can resolve the referrer's ID
+    if (d.reference_by) {
+      DevoteeCache.all().then(all => {
+        const ref = all.find(x => x.name === d.reference_by);
+        const el  = document.getElementById('pv-ref-by');
+        if (ref && el) {
+          el.innerHTML = `<button onclick="openProfileModal('${ref.id}')" style="background:none;border:none;cursor:pointer;color:var(--brand);font-weight:600;padding:0;text-decoration:underline;font-size:inherit">${d.reference_by} <i class="fas fa-external-link-alt" style="font-size:.7rem"></i></button>`;
+        }
+      }).catch(() => {});
+    }
 
     // Action row
     if (actsEl) {
@@ -242,11 +285,15 @@ function switchProfileViewTab(tab, btn) {
     const tabs = modal.querySelectorAll('.psec-tab');
     if (tabs[idx]) tabs[idx].classList.add('active');
   }
+  if (tab === 'referred') loadReferredDevoteesPanel();
 }
 
 function editCurrentDevotee() { closeModal('profile-modal'); openDevoteeFormModal(false, AppState.currentDevoteeId); }
 
-const PROFILE_TABS = ['identity','team','professional','sadhana','family'];
+// PROFILE_TABS drives the view modal (6 tabs including Referred).
+// FORM_TABS drives the edit form (5 tabs — no Referred tab in edit).
+const PROFILE_TABS = ['identity','team','professional','sadhana','family','referred'];
+const FORM_TABS    = ['identity','team','professional','sadhana','family'];
 
 function switchProfileTab(tab, btn) {
   const formModal = document.getElementById('devotee-form-modal');
@@ -257,15 +304,15 @@ function switchProfileTab(tab, btn) {
   if (btn) btn.classList.add('active');
   else {
     const allBtns = formModal.querySelectorAll('.psec-tab');
-    const idx = PROFILE_TABS.indexOf(tab);
+    const idx = FORM_TABS.indexOf(tab);
     if (allBtns[idx]) allBtns[idx].classList.add('active');
   }
-  const idx = PROFILE_TABS.indexOf(tab);
+  const idx = FORM_TABS.indexOf(tab);
   const prevBtn = document.getElementById('psec-prev');
   const nextBtn = document.getElementById('psec-next');
   const saveBtn = document.getElementById('psec-save');
   if (prevBtn) prevBtn.style.display = idx === 0 ? 'none' : '';
-  if (nextBtn) nextBtn.style.display = idx === PROFILE_TABS.length - 1 ? 'none' : '';
+  if (nextBtn) nextBtn.style.display = idx === FORM_TABS.length - 1 ? 'none' : '';
   // Save is available on every tab so the user doesn't have to walk through
   // all 5 tabs to save a partial profile.
   if (saveBtn) saveBtn.style.display = '';
@@ -335,7 +382,21 @@ async function populateEditForm(id) {
     document.getElementById('f-kanthi').value   = d.kanthi || 0;
     document.getElementById('f-gopi').value     = d.gopi_dress || 0;
     if (d.facilitator) { document.getElementById('f-facilitator').value = d.facilitator; const pi = document.querySelector('#picker-facilitator .picker-input'); if(pi){pi.value=d.facilitator;pi.classList.add('has-value');} }
-    if (d.reference_by) { document.getElementById('f-reference').value = d.reference_by; const pi = document.querySelector('#picker-reference .picker-input'); if(pi){pi.value=d.reference_by;pi.classList.add('has-value');} }
+    if (d.reference_by) {
+      document.getElementById('f-reference').value = d.reference_by;
+      const pi = document.querySelector('#picker-reference .picker-input'); if(pi){pi.value=d.reference_by;pi.classList.add('has-value');}
+      // Resolve reference person's ID for the profile link button
+      const linkBtn = document.getElementById('ref-profile-link');
+      if (linkBtn) {
+        linkBtn.style.display = 'none';
+        DevoteeCache.all().then(all => {
+          const ref = all.find(x => x.name === d.reference_by);
+          const idEl = document.getElementById('f-reference-id');
+          if (ref) { if(idEl) idEl.value = ref.id; linkBtn.style.display = ''; }
+          else { if(idEl) idEl.value = ''; }
+        }).catch(() => {});
+      }
+    }
     if (d.calling_by) { document.getElementById('f-calling-by').value = d.calling_by; const pi = document.querySelector('#picker-calling-by .picker-input'); if(pi){pi.value=d.calling_by;pi.classList.add('has-value');} }
     document.getElementById('f-education').value          = d.education || '';
     document.getElementById('f-email').value              = d.email || '';
@@ -475,6 +536,34 @@ async function markNotInterested(id) {
     closeModal('profile-modal');
     loadDevotees();
   } catch (e) { showToast('Failed: ' + (e.message || 'Unknown error'), 'error'); }
+}
+
+async function loadReferredDevoteesPanel() {
+  const inner = document.getElementById('referred-list-inner');
+  if (!inner || inner.dataset.loaded === AppState.currentDevoteeId) return;
+  inner.dataset.loaded = AppState.currentDevoteeId;
+  inner.innerHTML = '<div class="loading" style="padding:1.5rem"><i class="fas fa-spinner"></i> Loading…</div>';
+  try {
+    const name = AppState.currentDevoteeName;
+    const all  = await DevoteeCache.all();
+    const refs = all.filter(d => d.referenceBy === name);
+    if (!refs.length) {
+      inner.innerHTML = '<div class="empty-state" style="padding:1.5rem"><i class="fas fa-user-plus" style="font-size:2rem;opacity:.3"></i><p style="margin-top:.5rem;color:var(--text-muted)">No referred devotees yet</p></div>';
+      return;
+    }
+    inner.innerHTML = refs.map(d => `
+      <div class="devotee-item" onclick="AppState.currentDevoteeId='${d.id}';openProfileModal('${d.id}')" style="cursor:pointer">
+        <div class="devotee-avatar">${initials(d.name)}</div>
+        <div class="devotee-info">
+          <div class="devotee-name">${d.name}</div>
+          <div class="devotee-meta">${d.mobile || '—'}</div>
+          <div class="devotee-badges">${statusBadge(d.devoteeStatus)}${d.teamName ? ' ' + teamBadge(d.teamName) : ''}</div>
+        </div>
+        <i class="fas fa-chevron-right" style="color:var(--text-muted);font-size:.8rem;align-self:center"></i>
+      </div>`).join('');
+  } catch (_) {
+    inner.innerHTML = '<div class="empty-state" style="padding:1rem"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+  }
 }
 
 async function openHistoryModal() {

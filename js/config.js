@@ -56,6 +56,7 @@ const AppState = {
   fromAttendance: false,
   attendanceCandidates: {},
   sessionsCache: {},     // sessionId → session object
+  isAttSevaDev: false,  // extra flag: can access live attendance of all teams (set by superAdmin per user)
   // Auth
   userRole: null,       // 'superAdmin' | 'teamAdmin' | 'serviceDevotee'
   userTeam: null,       // team name for coordinators

@@ -454,7 +454,7 @@ h3 { font-size: .93rem; }
 .session-date-picker { min-width: 148px; font-weight: 700; color: var(--brand); }
 .session-date-picker::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .7; }
 
-.result-count { font-size: .78rem; color: var(--text-muted); margin: -.4rem 0 .7rem .15rem; }
+.result-count { font-size: .95rem; font-weight: 700; color: #111; margin: -.4rem 0 .7rem .15rem; }
 
 /* ════════════════════════════════════════════════════
    BUTTONS
@@ -774,6 +774,17 @@ button.contact-icon { border: none; padding: 0; }
   body { padding-bottom: calc(62px + env(safe-area-inset-bottom, 0)); }
   /* Hide entire top tab nav on mobile — all tabs live in the bottom nav */
   .tab-nav { display: none; }
+  /* Re-show in-panel sub-tabs on mobile — desktop uses the top-nav dropdown
+     but that dropdown is hidden on mobile so sub-tabs must be visible here */
+  #tab-attendance > .att-sub-tabs,
+  #tab-calling > .att-sub-tabs,
+  #tab-books > .att-sub-tabs,
+  #tab-service > .att-sub-tabs,
+  #tab-registration > .att-sub-tabs,
+  #tab-donation > .att-sub-tabs,
+  #tab-calling-mgmt > .att-sub-tabs {
+    display: flex;
+  }
 }
 .dashboard-table .dt-num {
   font-weight: 700;
@@ -1310,8 +1321,8 @@ button.contact-icon { border: none; padding: 0; }
 }
 .attendance-card-info { flex: 1; min-width: 0; }
 .attendance-card-name { font-weight: 700; font-size: .9rem; color: var(--text); }
-.att-mobile { display: flex; align-items: center; gap: .35rem; margin-top: .1rem; }
-.att-mobile-num { font-size: .75rem; font-weight: 700; color: var(--brand); letter-spacing: .02em; }
+.att-mobile { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .35rem; margin-top: .15rem; }
+.att-mobile-num { font-size: .78rem; font-weight: 700; color: var(--brand); letter-spacing: .03em; flex-basis: 100%; }
 .attendance-card-meta { font-size: .74rem; color: var(--text-muted); margin-top: .1rem; }
 
 .present-btn {
@@ -1968,6 +1979,7 @@ thead .sh-freeze { z-index: 7; }
 .psec-tab.psec-sadhana.active      { color: #be123c; border-bottom-color: #e11d48; background: #fff1f2; }
 .psec-tab.psec-family.active       { color: #6d28d9; border-bottom-color: #7c3aed; background: #f5f3ff; }
 .psec-tab.psec-team.active         { color: #166534; border-bottom-color: #16a34a; background: #f0fdf4; }
+.psec-tab.psec-referred.active     { color: #0369a1; border-bottom-color: #0284c7; background: #f0f9ff; }
 
 .psec-panel { display: none; }
 .psec-panel.active { display: block; }

@@ -307,9 +307,8 @@ async function loadAttendanceCandidates() {
   list.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
     let candidates = await DB.getAttendanceCandidates(AppState.currentSessionId, search);
-    // Master filter — narrow candidates by Team if set
-    const team = (typeof getFilterTeam === 'function') ? getFilterTeam() : '';
-    if (team) candidates = candidates.filter(d => d.team_name === team);
+    const isServiceDev = AppState.userRole === 'serviceDevotee';
+    // Only Att. Seva flagged users reach Live attendance — they always see ALL teams.
     AppState.attendanceCandidates = {};
     candidates.forEach(d => { AppState.attendanceCandidates[d.id] = d; });
     if (!candidates.length) {
@@ -318,7 +317,6 @@ async function loadAttendanceCandidates() {
         : '<div class="empty-state"><i class="fas fa-users"></i><p>No candidates for this session</p></div>';
       return;
     }
-    const isServiceDev = AppState.userRole === 'serviceDevotee';
     list.innerHTML = candidates.map((d, idx) => {
       const isPresent = !!d.attendance_id;
       const canEdit   = !isServiceDev || isPresent;
@@ -337,7 +335,7 @@ async function loadAttendanceCandidates() {
               ${d.coming_status === 'Yes' ? '<span class="badge badge-expected" style="font-size:.7rem">Confirmed</span>' : ''}
             </div>
             ${d.mobile ? `<div class="att-mobile" onclick="event.stopPropagation()">${contactIcons(d.mobile)}<span class="att-mobile-num">${d.mobile}</span></div>` : ''}
-            <div class="attendance-card-meta">${d.team_name || ''}${d.calling_by ? ' · Called: ' + d.calling_by : ''}</div>
+            <div class="attendance-card-meta">${d.reference_by ? '<span style="color:var(--brand-mid)">Ref: ' + d.reference_by + '</span> · ' : ''}${d.team_name || ''}${d.calling_by ? ' · Called: ' + d.calling_by : ''}</div>
           </div>
           <div onclick="event.stopPropagation()">
             ${isPresent
@@ -377,3 +375,4 @@ async function undoPresent(devoteeId) {
     showToast('Attendance removed');
   } catch (_) { showToast('Error', 'error'); }
 }
+

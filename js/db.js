@@ -593,7 +593,7 @@ const DB = {
   },
 
   async markNotInterested(id) {
-    const updates = { isNotInterested: true, notInterestedAt: TS(), updatedAt: TS() };
+    const updates = { isNotInterested: true, notInterestedAt: TS(), updatedAt: TS(), teamName: '', callingBy: '' };
     const batch = fdb.batch();
     batch.update(fdb.collection('devotees').doc(id), updates);
     batch.set(fdb.collection('profileChanges').doc(), {
@@ -1183,6 +1183,7 @@ const DB = {
     // Keep callingBy for 'festival' so they reappear during festival sessions
     const updateData = { callingMode: mode || '', updatedAt: TS() };
     if (mode === 'online' || mode === 'not_interested') updateData.callingBy = '';
+    if (mode === 'not_interested') updateData.teamName = '';
     await fdb.collection('devotees').doc(devoteeId).update(updateData);
     await fdb.collection('profileChanges').add({
       devoteeId,

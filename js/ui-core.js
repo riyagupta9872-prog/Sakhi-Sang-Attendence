@@ -38,11 +38,12 @@ auth.onAuthStateChanged(async (user) => {
       }
       return;
     }
-    AppState.userRole     = ud.role;
-    AppState.userTeam     = ud.teamName   || null;
-    AppState.userPosition = ud.position   || null;
-    AppState.userName     = ud.name       || user.email;
-    AppState.profilePic   = ud.profilePic || null;
+    AppState.userRole      = ud.role;
+    AppState.userTeam      = ud.teamName   || null;
+    AppState.userPosition  = ud.position   || null;
+    AppState.userName      = ud.name       || user.email;
+    AppState.profilePic    = ud.profilePic || null;
+    AppState.isAttSevaDev  = !!ud.isAttSevaDev;
     // "Login as Attendance Service Devotee" — when checked at login, override
     // role to serviceDevotee for THIS session only (the user's actual role in
     // Firestore is unchanged). They'll only see the Attendance tab. Stored in
@@ -703,25 +704,27 @@ function renderUserMgmtList() {
 function openUserAction(uid) {
   const u = _umUsers.find(x => x.uid === uid);
   if (!u) return;
-  document.getElementById('ua-user-name').textContent = u.name || u.email || 'User';
-  document.getElementById('ua-user-id').value          = uid;
-  document.getElementById('ua-position').value         = u.position || '';
-  document.getElementById('ua-team').value             = u.teamName || '';
-  document.getElementById('ua-role').value             = u.role     || 'serviceDevotee';
+  document.getElementById('ua-user-name').textContent    = u.name || u.email || 'User';
+  document.getElementById('ua-user-id').value             = uid;
+  document.getElementById('ua-position').value            = u.position || '';
+  document.getElementById('ua-team').value                = u.teamName || '';
+  document.getElementById('ua-role').value                = u.role     || 'serviceDevotee';
+  document.getElementById('ua-att-seva').checked          = !!u.isAttSevaDev;
   openModal('user-action-modal');
 }
 
 async function doSaveUserAction() {
-  const uid      = document.getElementById('ua-user-id').value;
-  const position = document.getElementById('ua-position').value.trim() || null;
-  const teamName = document.getElementById('ua-team').value || null;
-  const role     = document.getElementById('ua-role').value;
+  const uid          = document.getElementById('ua-user-id').value;
+  const position     = document.getElementById('ua-position').value.trim() || null;
+  const teamName     = document.getElementById('ua-team').value || null;
+  const role         = document.getElementById('ua-role').value;
+  const isAttSevaDev = document.getElementById('ua-att-seva').checked;
   if (!uid) return;
   try {
-    await fdb.collection('users').doc(uid).update({ position, teamName, role, updatedAt: TS() });
+    await fdb.collection('users').doc(uid).update({ position, teamName, role, isAttSevaDev, updatedAt: TS() });
     // reflect in local cache
     const u = _umUsers.find(x => x.uid === uid);
-    if (u) { u.position = position; u.teamName = teamName; u.role = role; }
+    if (u) { u.position = position; u.teamName = teamName; u.role = role; u.isAttSevaDev = isAttSevaDev; }
     renderUserMgmtList();
     closeModal('user-action-modal');
     showToast('User updated!', 'success');
@@ -768,40 +771,32 @@ function applyRoleUI() {
     el.style.display = role === 'superAdmin' ? '' : 'none';
   });
 
-  // serviceDevotee = "Attendance Service Devotee" — only sees the Attendance tab
-  // so they can mark their own attendance. All admins (super + team) see Devotees
-  // tab with unrestricted team access; everything else is team-scoped for teamAdmin.
+  // serviceDevotee (Facilitator) gets same tab access as teamAdmin — all team tabs
   const tabs = {
-    dashboard:    ['superAdmin', 'teamAdmin'],
-    devotees:     ['superAdmin', 'teamAdmin'],
-    calling:      ['superAdmin', 'teamAdmin'],
-    attendance:   ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    books:        ['superAdmin', 'teamAdmin'],
-    service:      ['superAdmin', 'teamAdmin'],
-    registration: ['superAdmin', 'teamAdmin'],
-    donation:     ['superAdmin', 'teamAdmin'],
-    care:         ['superAdmin', 'teamAdmin'],
-    events:       ['superAdmin', 'teamAdmin'],
+    dashboard:      ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    devotees:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    calling:        ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    attendance:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    books:          ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    service:        ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    registration:   ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    donation:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    care:           ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    events:         ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     'calling-mgmt': ['superAdmin'],
   };
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const tab = btn.dataset.tab;
     const allowed = tabs[tab]?.includes(role);
     btn.style.display = allowed ? '' : 'none';
-    // If the button is wrapped in a dropdown group, hide the group too so we
-    // don't leave a phantom empty container in the nav.
     const group = btn.closest('.tab-btn-group');
     if (group) group.style.display = allowed ? '' : 'none';
   });
-  // Same gating for the mobile bottom-nav buttons.
   document.querySelectorAll('.bnav-btn').forEach(btn => {
     const tab = btn.dataset.tab;
     btn.style.display = tabs[tab]?.includes(role) ? '' : 'none';
   });
 
-  // If the currently-active panel is one the user can't access, switch to
-  // the first tab they CAN access. Devotees is the HTML default, so non-super-
-  // admins would otherwise land on an empty/forbidden view.
   const activePanel = document.querySelector('.tab-panel.active');
   const activeTab   = activePanel?.id?.replace('tab-', '');
   if (activeTab && !tabs[activeTab]?.includes(role)) {
@@ -810,13 +805,37 @@ function applyRoleUI() {
     if (firstBtn && typeof switchTab === 'function') switchTab(firstAllowed, firstBtn);
   }
 
+  // admin-coordinator-only elements stay role-based (Att. Seva flag is ONLY for live attendance)
   document.querySelectorAll('.admin-coordinator-only').forEach(el => {
     if (!['superAdmin','teamAdmin'].includes(role)) el.style.display = 'none';
   });
 
-  if ((role === 'teamAdmin' || role === 'serviceDevotee') && team) {
+  // Non-superAdmin roles: lock team filter to their team
+  if (role !== 'superAdmin' && team) {
     const ft = document.getElementById('filter-team');
     if (ft) { ft.value = team; ft.disabled = true; }
+  }
+
+  // Live sub-tab: ONLY visible to users with Att. Seva flag.
+  const canSeeLive = !!AppState.isAttSevaDev;
+  const liveSubTabBtn = document.querySelector('#tab-attendance .att-sub-tab[onclick*="\'live\'"]');
+  if (liveSubTabBtn) liveSubTabBtn.style.display = canSeeLive ? '' : 'none';
+  // Only redirect to Reports if the Live panel is actually active right now —
+  // avoid firing loadReports() on app boot when the user isn't even on Attendance.
+  if (!canSeeLive) {
+    const livePanel = document.getElementById('att-panel-live');
+    if (livePanel?.classList.contains('active')) {
+      const reportsBtn = document.querySelector('#tab-attendance .att-sub-tab[onclick*="\'reports\'"]');
+      if (reportsBtn && typeof switchAttSubTab === 'function') switchAttSubTab(reportsBtn, 'reports');
+    } else {
+      // Still flip the panels so Reports is the default when user opens Attendance
+      const reportsPanel = document.getElementById('att-panel-reports');
+      const reportsBtn   = document.querySelector('#tab-attendance .att-sub-tab[onclick*="\'reports\'"]');
+      livePanel?.classList.remove('active');
+      reportsPanel?.classList.add('active');
+      if (liveSubTabBtn) liveSubTabBtn.classList.remove('active');
+      reportsBtn?.classList.add('active');
+    }
   }
 }
 
@@ -846,17 +865,22 @@ async function openAdminPanel() {
             ${teams.map(t => `<option value="${t}"${u.teamName===t?' selected':''}>${t||'No Team'}</option>`).join('')}
           </select>
           <input class="filter-select" id="pos-${u.uid}" placeholder="Position…" value="${u.position||''}" style="width:110px" onchange="updateUserRole('${u.uid}')" onblur="updateUserRole('${u.uid}')" />
+          <label style="display:flex;align-items:center;gap:.35rem;font-size:.75rem;font-weight:600;color:var(--brand);white-space:nowrap;cursor:pointer" title="Gives this person Live Attendance access for all teams">
+            <input type="checkbox" id="attSeva-${u.uid}" ${u.isAttSevaDev ? 'checked' : ''} onchange="updateUserRole('${u.uid}')">
+            Att. Seva
+          </label>
         </div>
       </div>`).join('');
   } catch (_) { container.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load users</p></div>'; }
 }
 
 async function updateUserRole(uid) {
-  const role     = document.getElementById(`role-${uid}`)?.value;
-  const teamName = document.getElementById(`team-${uid}`)?.value || null;
-  const position = document.getElementById(`pos-${uid}`)?.value.trim() || null;
+  const role         = document.getElementById(`role-${uid}`)?.value;
+  const teamName     = document.getElementById(`team-${uid}`)?.value || null;
+  const position     = document.getElementById(`pos-${uid}`)?.value.trim() || null;
+  const isAttSevaDev = document.getElementById(`attSeva-${uid}`)?.checked || false;
   try {
-    await fdb.collection('users').doc(uid).update({ role, teamName, position });
+    await fdb.collection('users').doc(uid).update({ role, teamName, position, isAttSevaDev });
     showToast('User updated!', 'success');
   } catch (_) { showToast('Update failed', 'error'); }
 }
@@ -1434,7 +1458,7 @@ function setupPicker(containerId, hiddenId) {
     dropdown.innerHTML = results.slice(0, 8).map(d => `
       <div class="picker-option" onclick="selectPicker('${containerId}','${hiddenId}','${d.name.replace(/'/g,"\\'")}','${d.id}')">
         <span>${d.name}</span>
-        <span class="picker-team">${d.team_name || ''}</span>
+        <span class="picker-team">${[d.team_name, d.mobile].filter(Boolean).join(' · ')}</span>
       </div>`).join('');
     dropdown.classList.remove('hidden');
   }, 280));
@@ -1453,6 +1477,19 @@ function selectPicker(containerId, hiddenId, name, id) {
   hidden.value = name;
   input.classList.add('has-value');
   dropdown.classList.add('hidden');
+  if (containerId === 'picker-reference') {
+    const idEl = document.getElementById('f-reference-id');
+    if (idEl) idEl.value = id || '';
+    const linkBtn = document.getElementById('ref-profile-link');
+    if (linkBtn) linkBtn.style.display = id ? '' : 'none';
+  }
+}
+
+function openRefProfile() {
+  const id = document.getElementById('f-reference-id')?.value;
+  if (!id) return;
+  closeModal('devotee-form-modal');
+  setTimeout(() => openProfileModal(id), 200);
 }
 
 function setupUserPicker(containerId, hiddenId, getTeam) {
@@ -1506,6 +1543,12 @@ function clearPicker(containerId, hiddenId) {
   container.querySelector('.picker-input').classList.remove('has-value');
   container.querySelector('.picker-dropdown').classList.add('hidden');
   document.getElementById(hiddenId).value = '';
+  if (containerId === 'picker-reference') {
+    const idEl = document.getElementById('f-reference-id');
+    if (idEl) idEl.value = '';
+    const linkBtn = document.getElementById('ref-profile-link');
+    if (linkBtn) linkBtn.style.display = 'none';
+  }
 }
 
 // ── SESSION MANAGEMENT ─────────────────────────────────
@@ -2002,6 +2045,11 @@ function _buildTabMenus() {
 // ── Sub-tab switchers for the collapsed Reports — Attendance / Calling ──
 // Both tabs now host their own [Live | Reports] (or [Calls | Reports]) toggle.
 function switchAttSubTab(btn, sub) {
+  // Live sub-tab is gated to Att. Seva users only
+  if (sub === 'live' && !AppState.isAttSevaDev) {
+    sub = 'reports';
+    btn = document.querySelector('#tab-attendance .att-sub-tab[onclick*="\'reports\'"]') || btn;
+  }
   const tabs = btn?.parentElement;
   if (tabs) tabs.querySelectorAll('.att-sub-tab').forEach(b => b.classList.remove('active'));
   btn?.classList.add('active');

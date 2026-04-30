@@ -148,6 +148,10 @@ async function loadDashboard() {
       );
       // "called" = devotees who have a callingStatus record for this week (actually called)
       // NOT devotees.callingBy which is a static profile assignment, not a weekly action.
+      // callingListCount mirrors the Calling tab filter: callingBy set + not isNotInterested (regardless of callingMode)
+      const callingListCount = allDevotees.filter(d =>
+        d.teamName === team && d.isActive !== false && !d.isNotInterested && d.callingBy && d.callingBy.trim()
+      ).length;
       const called   = members.filter(d => csByDevotee[d.id]);
       const coming   = members.filter(d => csByDevotee[d.id]?.comingStatus === 'Yes');
       const attended = members.filter(d => presentSet.has(d.id));
@@ -158,9 +162,10 @@ async function loadDashboard() {
       const pct      = target > 0 ? Math.round((attended.length / target) * 100) : 0;
       return {
         team,
-        called:   called.length,
-        coming:   coming.length,
-        attended: attended.length,
+        called:           called.length,
+        coming:           coming.length,
+        attended:         attended.length,
+        callingListCount,
         target,
         pct,
         books:    bookByTeam[team]     || 0,
@@ -175,20 +180,21 @@ async function loadDashboard() {
 
     // Grand totals row
     const total = rows.reduce((acc, r) => ({
-      called:   acc.called   + r.called,
-      coming:   acc.coming   + r.coming,
-      attended: acc.attended + r.attended,
-      target:   acc.target   + r.target,
-      books:    acc.books    + r.books,
-      services: acc.services + r.services,
-      regs:     acc.regs     + r.regs,
-      donation: acc.donation + r.donation,
-    }), { called: 0, coming: 0, attended: 0, target: 0, books: 0, services: 0, regs: 0, donation: 0 });
+      called:           acc.called           + r.called,
+      coming:           acc.coming           + r.coming,
+      attended:         acc.attended         + r.attended,
+      callingListCount: acc.callingListCount + r.callingListCount,
+      target:           acc.target           + r.target,
+      books:            acc.books            + r.books,
+      services:         acc.services         + r.services,
+      regs:             acc.regs             + r.regs,
+      donation:         acc.donation         + r.donation,
+    }), { called: 0, coming: 0, attended: 0, callingListCount: 0, target: 0, books: 0, services: 0, regs: 0, donation: 0 });
     const totalPct = total.target > 0 ? Math.round((total.attended / total.target) * 100) : 0;
     const callAccPct = total.coming > 0 ? Math.round((rows.reduce((a, r) => a + r.attended, 0) / total.coming) * 100) : 0;
 
     // ── Update KPI tiles ──
-    _setText('kpi-attended', total.attended);
+    _setText('kpi-attended', total.callingListCount > 0 ? `${total.attended}/${total.callingListCount}` : total.attended);
     _setText('kpi-accuracy', callAccPct + '%');
     _setText('kpi-books',    total.books);
     _setText('kpi-service',  total.services);

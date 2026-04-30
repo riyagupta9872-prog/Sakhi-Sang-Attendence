@@ -86,7 +86,7 @@
           <option value="">Select Team</option>
           <option>Champaklata</option><option>Chitralekha</option><option>Indulekha</option>
           <option>Lalita</option><option>Nilachal</option><option>Other</option>
-          <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Vishakha</option>
+          <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Visakha</option>
         </select>
       </div>
       <button type="submit" class="auth-btn"><i class="fas fa-user-plus"></i> Request Account</button>
@@ -640,6 +640,7 @@
       <div class="panel-header">
         <h2><i class="fas fa-check-circle"></i> Live Attendance</h2>
         <div class="panel-actions">
+
           <span id="session-topic-inline" class="session-topic-inline hidden">
             <i class="fas fa-book-open"></i> <span id="session-topic-text"></span>
           </span>
@@ -901,6 +902,9 @@
       <button class="psec-tab psec-family" onclick="switchProfileViewTab('family',this)">
         <i class="fas fa-home"></i><span>Family</span>
       </button>
+      <button class="psec-tab psec-referred" onclick="switchProfileViewTab('referred',this)">
+        <i class="fas fa-user-plus"></i><span>Referred</span>
+      </button>
     </div>
 
     <div id="profile-modal-content"></div>
@@ -1129,7 +1133,7 @@
               <option value="">Select Team</option>
               <option>Champaklata</option><option>Chitralekha</option><option>Indulekha</option>
               <option>Lalita</option><option>Nilachal</option><option>Other</option>
-              <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Vishakha</option>
+              <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Visakha</option>
             </select>
           </div>
           <div class="form-group">
@@ -1148,11 +1152,17 @@
           </div>
           <div class="form-group full">
             <label>Reference By <span class="req">*</span> <span class="field-hint">(who referred this devotee)</span></label>
-            <div class="devotee-picker" id="picker-reference">
-              <input type="text" class="picker-input" placeholder="Search who referred them…" autocomplete="off">
-              <div class="picker-dropdown hidden"></div>
+            <div style="display:flex;gap:.5rem;align-items:flex-start">
+              <div class="devotee-picker" id="picker-reference" style="flex:1">
+                <input type="text" class="picker-input" placeholder="Search who referred them…" autocomplete="off">
+                <div class="picker-dropdown hidden"></div>
+              </div>
+              <button type="button" id="ref-profile-link" title="Open referrer's profile" style="display:none;flex-shrink:0;margin-top:.3rem;padding:.45rem .6rem;background:var(--brand-subtle);border:1px solid var(--brand-light);border-radius:var(--radius-sm);cursor:pointer;color:var(--brand)" onclick="openRefProfile()">
+                <i class="fas fa-external-link-alt"></i>
+              </button>
             </div>
             <input type="hidden" id="f-reference">
+            <input type="hidden" id="f-reference-id">
           </div>
           <div class="form-group">
             <label>Facilitator <span class="field-hint">(search devotee)</span></label>
@@ -1731,7 +1741,7 @@
           <option value="">No Team</option>
           <option>Champaklata</option><option>Chitralekha</option><option>Indulekha</option>
           <option>Lalita</option><option>Nilachal</option><option>Other</option>
-          <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Vishakha</option>
+          <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Visakha</option>
         </select>
         <div id="edit-profile-team-readonly" class="form-control" style="display:none;background:var(--accent-light);color:var(--text-muted);cursor:default"></div>
         <p id="edit-profile-team-note" style="font-size:.72rem;color:var(--text-muted);margin-top:.25rem;display:none">Contact Super Admin to change your team.</p>
@@ -1781,7 +1791,7 @@
           <option value="">Select Team…</option>
           <option>Champaklata</option><option>Chitralekha</option><option>Indulekha</option>
           <option>Lalita</option><option>Nilachal</option><option>Other</option>
-          <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Vishakha</option>
+          <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Visakha</option>
         </select>
         <button class="btn btn-primary" onclick="doMgmtAction('team_confirm')"><i class="fas fa-check"></i> Confirm Team Change</button>
       </div>
@@ -1841,7 +1851,7 @@
           <option value="">— Select team —</option>
           <option>Champaklata</option><option>Chitralekha</option><option>Indulekha</option>
           <option>Lalita</option><option>Nilachal</option><option>Other</option>
-          <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Vishakha</option>
+          <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Visakha</option>
         </select>
       </div>
       <div class="form-group" id="bulk-callingby-wrap" style="display:none">
@@ -2058,7 +2068,7 @@
           <option value="">No Team</option>
           <option>Champaklata</option><option>Chitralekha</option><option>Indulekha</option>
           <option>Lalita</option><option>Nilachal</option><option>Other</option>
-          <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Vishakha</option>
+          <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Visakha</option>
         </select>
       </div>
       <div class="form-group">
@@ -2068,6 +2078,16 @@
           <option value="teamAdmin">Team Coordinator</option>
           <option value="superAdmin">Super Admin</option>
         </select>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:.6rem .75rem;background:var(--brand-subtle);border:1px solid var(--border);border-radius:var(--radius);gap:.75rem">
+        <div>
+          <div style="font-weight:700;font-size:.85rem;color:var(--brand)"><i class="fas fa-hands-helping"></i> Attendance Seva</div>
+          <div style="font-size:.75rem;color:var(--text-muted);margin-top:.15rem">Can mark live attendance for ALL teams</div>
+        </div>
+        <label class="toggle-switch" style="margin:0" title="Grant live attendance access for all teams">
+          <input type="checkbox" id="ua-att-seva">
+          <span class="toggle-slider"></span>
+        </label>
       </div>
       <div class="form-actions">
         <button type="button" class="btn btn-danger" onclick="doRemoveUser()"><i class="fas fa-trash"></i> Remove User</button>
