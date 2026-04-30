@@ -654,7 +654,12 @@ button.contact-icon { border: none; padding: 0; }
 .cm-mobile-num { font-size: .7rem; color: var(--text-muted); }
 
 /* ── DASHBOARD ──────────────────────────────────────── */
-.dashboard-wrap { overflow-x: auto; margin-top: .5rem; }
+.dashboard-wrap {
+  overflow: auto;
+  max-height: 75vh;
+  margin-top: .5rem;
+  border-radius: var(--radius-sm);
+}
 .dashboard-table {
   width: 100%; border-collapse: collapse;
   font-size: .85rem; background: var(--bg-card);
@@ -1498,7 +1503,7 @@ button.calling-stat:active { transform: translateY(0); }
   border: 1px solid #fcd34d; margin-left: .3rem;
 }
 
-.calling-table-wrap { overflow-x: auto; }
+.calling-table-wrap { overflow: auto; max-height: 75vh; border-radius: var(--radius-sm); }
 .calling-table { width: 100%; border-collapse: collapse; min-width: 800px; }
 .calling-table th {
   background: var(--brand); color: #fff;
@@ -1689,22 +1694,8 @@ thead .sh-freeze { z-index: 7; }
 /* ════════════════════════════════════════════════════
    REPORTS TAB
    ════════════════════════════════════════════════════ */
-.report-table {
-  width: 100%; border-collapse: collapse;
-  background: #fff; border-radius: var(--radius);
-  overflow: hidden; box-shadow: var(--shadow-sm);
-  border: 1px solid var(--border);
-}
-.report-table th {
-  background: var(--brand); color: #fff;
-  font-size: .76rem; font-weight: 700;
-  padding: .65rem 1rem; text-align: left;
-  letter-spacing: .1px;
-}
-.report-table td {
-  padding: .6rem 1rem; border-bottom: 1px solid var(--border-subtle);
-  font-size: .85rem;
-}
+/* (.report-table base, th, td defined later under "Shared report tables".
+   Keep only the rules unique to this section.) */
 .report-table tr:last-child td { border-bottom: none; }
 .report-table tr:hover td { background: var(--gray-50); }
 /* Late-comers table: rows are pre-colored by lateness — keep that color on hover */
@@ -3561,3 +3552,66 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
 }
 .ai-chat-input-row button:hover:not(:disabled) { background: var(--primary-hover); }
 .ai-chat-input-row button:disabled { opacity: .45; cursor: default; }
+
+/* ════════════════════════════════════════════════════
+   STICKY TABLE HEADERS + FIRST COLUMN
+   ════════════════════════════════════════════════════ */
+
+/* Generic scroll wrapper used by inline tables (analytics / home / activities) */
+.table-scroll {
+  overflow: auto;
+  max-height: 75vh;
+  border-radius: var(--radius-sm);
+}
+
+/* ── DASHBOARD TABLE ── */
+/* (First column already sticky at lines 682-700; here we add the sticky header.
+   Use thead-as-sticky so both header rows lock together.) */
+.dashboard-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+.dashboard-table thead th:first-child { z-index: 6; }
+
+/* ── CALLING TABLES ── */
+/* (.calling-table th already has position: sticky; top: 0 — line 1503-1508.
+   Add sticky first column for horizontal scroll.) */
+.calling-table tbody td:first-child {
+  position: sticky;
+  left: 0;
+  background: #fff;
+  z-index: 1;
+  box-shadow: 2px 0 4px rgba(0,0,0,.04);
+}
+.calling-table th:first-child {
+  left: 0;
+  z-index: 3;
+}
+.calling-table tr:hover td:first-child { background: var(--gray-50); }
+.calling-table tr.row-confirmed td:first-child { background: #f0fdf4; }
+.calling-table tr.row-has-reason td:first-child { background: #fff8f8; }
+
+/* ── REPORT TABLES (used in analytics, home, activities) ── */
+.report-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg-subtle);
+}
+.report-table tbody td:first-child {
+  position: sticky;
+  left: 0;
+  background: #fff;
+  z-index: 1;
+}
+.report-table thead th:first-child {
+  z-index: 6;
+  left: 0;
+}
+.report-table tr:hover td:first-child { background: var(--gray-50); }
+.report-table .totals-row td:first-child { background: var(--brand-subtle); }
+.report-table .team-row:hover td:first-child { background: var(--bg-subtle); }
+/* Inner detail tables (nested under team rows) — no sticky needed */
+.inner-table thead th { position: static; }
+.inner-table tbody td:first-child { position: static; background: transparent; }

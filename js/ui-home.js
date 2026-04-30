@@ -240,7 +240,7 @@ async function loadBookDistReport() {
     });
     const teams = Object.keys(teamMap).sort();
     const grand = teams.reduce((s, t) => s + teamMap[t].total, 0);
-    body.innerHTML = `<table class="report-table">
+    body.innerHTML = `<div class="table-scroll"><table class="report-table">
       <thead><tr><th>Team</th><th class="num-th">Books</th></tr></thead>
       <tbody>
         ${teams.map(t => `
@@ -255,7 +255,7 @@ async function loadBookDistReport() {
             </table>
           </td></tr>`).join('')}
         <tr class="totals-row"><td><strong>TOTAL</strong></td><td class="num-cell"><strong>${grand}</strong></td></tr>
-      </tbody></table>`;
+      </tbody></table></div>`;
   } catch (e) {
     body.innerHTML = `<div class="empty-state"><p>Error: ${e.message}</p></div>`;
   }
@@ -314,12 +314,12 @@ async function loadDonationReport() {
     entries.forEach(e => { const t = e.teamName || 'Other'; teamMap[t] = (teamMap[t] || 0) + e.amount; });
     const teams = Object.keys(teamMap).sort();
     const grand = teams.reduce((s, t) => s + teamMap[t], 0);
-    body.innerHTML = `<table class="report-table">
+    body.innerHTML = `<div class="table-scroll"><table class="report-table">
       <thead><tr><th>Team</th><th class="num-th">Amount (₹)</th></tr></thead>
       <tbody>
         ${teams.map(t => `<tr><td><span class="team-badge-sm">${t}</span></td><td class="num-cell">₹${teamMap[t].toLocaleString('en-IN')}</td></tr>`).join('')}
         <tr class="totals-row"><td><strong>TOTAL</strong></td><td class="num-cell"><strong>₹${grand.toLocaleString('en-IN')}</strong></td></tr>
-      </tbody></table>`;
+      </tbody></table></div>`;
   } catch (e) {
     body.innerHTML = `<div class="empty-state"><p>Error: ${e.message}</p></div>`;
   }
@@ -384,7 +384,7 @@ async function loadRegistrationReport() {
     });
     const teams = Object.keys(teamMap).sort();
     const grand = teams.reduce((s, t) => s + teamMap[t].total, 0);
-    body.innerHTML = `<table class="report-table">
+    body.innerHTML = `<div class="table-scroll"><table class="report-table">
       <thead><tr><th>Team</th><th class="num-th">Registrations</th></tr></thead>
       <tbody>
         ${teams.map(t => `
@@ -399,7 +399,7 @@ async function loadRegistrationReport() {
             </table>
           </td></tr>`).join('')}
         <tr class="totals-row"><td><strong>TOTAL</strong></td><td class="num-cell"><strong>${grand}</strong></td></tr>
-      </tbody></table>`;
+      </tbody></table></div>`;
   } catch (e) {
     body.innerHTML = `<div class="empty-state"><p>Error: ${e.message}</p></div>`;
   }
@@ -464,7 +464,7 @@ async function loadServiceReport() {
     });
     const teams = Object.keys(teamMap).sort();
     const grand = teams.reduce((s, t) => s + teamMap[t].total, 0);
-    body.innerHTML = `<table class="report-table">
+    body.innerHTML = `<div class="table-scroll"><table class="report-table">
       <thead><tr><th>Team</th><th class="num-th">Services</th></tr></thead>
       <tbody>
         ${teams.map(t => `
@@ -481,7 +481,7 @@ async function loadServiceReport() {
             </table>
           </td></tr>`).join('')}
         <tr class="totals-row"><td><strong>TOTAL</strong></td><td class="num-cell"><strong>${grand}</strong></td></tr>
-      </tbody></table>`;
+      </tbody></table></div>`;
   } catch (e) {
     body.innerHTML = `<div class="empty-state"><p>Error: ${e.message}</p></div>`;
   }

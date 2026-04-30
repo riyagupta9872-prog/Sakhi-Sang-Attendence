@@ -327,13 +327,13 @@ async function _actLoadRecent(key) {
       return;
     }
     wrap.innerHTML = `
-      <table class="report-table">
+      <div class="table-scroll"><table class="report-table">
         <thead><tr>${cfg.cols.map(c => `<th>${c.label}</th>`).join('')}<th>Team</th></tr></thead>
         <tbody>${list.map(e => `<tr>
           ${cfg.cols.map(c => `<td${c.align ? ` style="text-align:${c.align}"` : ''}>${_actFmt(e[c.key], c.format)}</td>`).join('')}
           <td><span class="team-badge-sm">${e.teamName || '—'}</span></td>
         </tr>`).join('')}</tbody>
-      </table>`;
+      </table></div>`;
   } catch (e) {
     wrap.innerHTML = `<div class="empty-state-sm">Error: ${e.message}</div>`;
   }
@@ -491,7 +491,7 @@ async function _actLoadReport(key) {
     const teams = Object.keys(teamMap).sort();
 
     body.innerHTML = `
-      <table class="report-table">
+      <div class="table-scroll"><table class="report-table">
         <thead><tr><th>Team</th><th class="num-th">${cfg.sumLabel.replace('Total ','')}</th><th class="num-th">Entries</th></tr></thead>
         <tbody>${teams.map(t => `
           <tr class="team-row" onclick="this.nextElementSibling.classList.toggle('hidden')">
@@ -513,7 +513,7 @@ async function _actLoadReport(key) {
             <td class="num-cell"><strong>${entries.length}</strong></td>
           </tr>
         </tbody>
-      </table>`;
+      </table></div>`;
   } catch (e) {
     body.innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
   }

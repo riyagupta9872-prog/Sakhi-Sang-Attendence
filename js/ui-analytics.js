@@ -425,7 +425,7 @@ async function loadNewComersReport() {
         <i class="fas fa-user-plus"></i> ${list.length} new for
         <strong style="color:var(--primary)">${formatDate(sess.session_date)}</strong>
       </div>
-      <div style="overflow-x:auto">
+      <div class="table-scroll">
         <table class="report-table">
           <thead><tr>
             <th>#</th><th>Name</th><th>Source</th><th>Mobile</th><th>Reference</th>
@@ -554,7 +554,7 @@ async function loadAttendanceDetail() {
     if (!records.length) { c.innerHTML = '<div class="empty-state"><i class="fas fa-list"></i><p>No attendance data</p></div>'; return; }
     c.innerHTML = `
       <div style="margin-bottom:.75rem;color:var(--text-muted);font-size:.85rem">${records.length} devotees present</div>
-      <div style="overflow-x:auto">
+      <div class="table-scroll">
         <table class="report-table">
           <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Rounds</th><th>Team</th><th>Calling By</th><th>Type</th></tr></thead>
           <tbody>${records.map((r, i) => `
@@ -580,7 +580,7 @@ async function loadSeriousAnalysis() {
     const data = await DB.getSeriousReport(callingDate, AppState.currentReportSessionId || AppState.currentSessionId);
     const teams    = TEAMS;
     const statuses = ['Most Serious','Serious','Expected to be Serious','New Devotee','Inactive'];
-    c.innerHTML = `<div style="overflow-x:auto"><table class="report-table">
+    c.innerHTML = `<div class="table-scroll"><table class="report-table">
       <thead>
         <tr><th>Team</th>${statuses.map(s => `<th colspan="2" style="text-align:center">${shortStatus(s)}</th>`).join('')}</tr>
         <tr><th></th>${statuses.map(() => '<th>Promised</th><th>Arrived</th>').join('')}</tr>
@@ -604,7 +604,7 @@ async function loadTeamLeaderboard() {
   try {
     const callingDate = await resolveCallingDate(getWeekDate());
     const data = (await DB.getTeamsReport(callingDate, AppState.currentReportSessionId || AppState.currentSessionId)).sort((a, b) => b.percentage - a.percentage);
-    c.innerHTML = `<div style="overflow-x:auto"><table class="report-table">
+    c.innerHTML = `<div class="table-scroll"><table class="report-table">
       <thead><tr><th>Rank</th><th>Team</th><th>Total</th><th>Calling List</th><th>Target</th><th>Present</th><th>Achievement</th></tr></thead>
       <tbody>${data.map((row, i) => {
         const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${i+1}`;
@@ -773,7 +773,7 @@ function openCareDetail(type) {
   }
   content.innerHTML = `
     <div style="margin-bottom:.5rem;color:var(--text-muted);font-size:.82rem">${list.length} devotee${list.length === 1 ? '' : 's'}</div>
-    <div style="overflow-x:auto">
+    <div class="table-scroll">
       <table class="report-table">
         <thead><tr>
           <th>#</th><th>Name</th><th>Mobile</th><th>Reference</th><th>Team</th><th>Calling By</th><th style="text-align:center">C.R.</th>
@@ -1056,7 +1056,7 @@ function _buildMgmtGrid(weekData, devotees) {
       : '<td style="background:#fafafa"></td>';
   }
 
-  let html = `<div style="overflow-x:auto">
+  let html = `<div class="table-scroll">
   <table style="border-collapse:collapse;min-width:600px;width:100%;font-size:.8rem">
     <thead>
       <tr>
@@ -1703,7 +1703,7 @@ function _renderCMWeek() {
       <button class="btn btn-secondary" onclick="_clearCMSelection()"><i class="fas fa-times"></i> Exit Select</button>
     </div>
 
-    <div style="overflow-x:auto">
+    <div class="table-scroll">
     <table style="border-collapse:collapse;min-width:720px;width:100%;font-size:.8rem">
       <thead>
         <tr style="background:#1a5c3a;color:#fff">
@@ -1973,7 +1973,7 @@ async function _renderCMNewComers() {
         <strong style="color:var(--primary)">${formatDate(sessionDate)}</strong>
         <span style="margin-left:.5rem;font-size:.72rem;color:var(--text-light)">(joined or attended fresh)</span>
       </div>
-      <div style="overflow-x:auto">
+      <div class="table-scroll">
         <table class="calling-table">
           <thead><tr>
             <th style="min-width:30px">#</th>
@@ -2378,7 +2378,7 @@ function _renderLateComers() {
 
   const tableHtml = !rows.length
     ? '<div class="empty-state"><i class="fas fa-check-circle" style="color:#16a34a"></i><p>No devotees in this category</p></div>'
-    : `<div style="overflow-x:auto"><table class="report-table late-comers-table" style="width:100%;font-size:.85rem">
+    : `<div class="table-scroll"><table class="report-table late-comers-table" style="width:100%;font-size:.85rem">
         <thead><tr style="background:var(--color-primary,#1A5C3A);color:#fff">
           <th style="padding:.5rem .6rem;text-align:left">#</th>
           <th style="padding:.5rem .6rem;text-align:left">Name</th>
@@ -3018,7 +3018,7 @@ async function _loadIndividualReports() {
       <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:.6rem">
         Total sessions in period: <strong>${totalSessions}</strong> · ${activeDevotees.length} active devotees
       </div>
-      <div style="overflow-x:auto">
+      <div class="table-scroll">
       <table class="report-table" style="width:100%;font-size:.82rem">
         <thead>
           <tr style="background:var(--color-primary,#1A5C3A);color:#fff">

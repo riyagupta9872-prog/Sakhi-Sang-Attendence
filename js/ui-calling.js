@@ -19,7 +19,7 @@ async function loadNotInterestedList() {
       wrap.innerHTML = '<div class="empty-state"><i class="fas fa-ban"></i><p>No devotees marked as Not Interested</p></div>';
       return;
     }
-    wrap.innerHTML = `<table class="calling-table">
+    wrap.innerHTML = `<div class="calling-table-wrap"><table class="calling-table">
       <thead><tr>
         <th>#</th><th>Name</th><th>Mobile</th><th>Team</th>
         <th>Date of Joining</th><th>Moved Not Interested On</th>
@@ -37,116 +37,9 @@ async function loadNotInterestedList() {
         <td>${d.calling_by || '—'}</td>
       </tr>`).join('')}
       </tbody>
-    </table>`;
+    </table></div>`;
   } catch (e) {
     wrap.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
-  }
-}
-
-async function _unusedMgmtStub() {
-  // Management tab is now a top-level tab — see ui-analytics.js loadMgmtTab()
-  const el = document.getElementById('calling-mgmt-content');
-  if (!el) return;
-  el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
-  try {
-    const week = document.getElementById('calling-week').value;
-    if (!week) {
-      el.innerHTML = '<div class="empty-state"><i class="fas fa-calendar-times"></i><p>Set a calling date first (use ⚙️ icon)</p></div>';
-      return;
-    }
-
-    const data = await DB.getCallingMgmtData(week);
-    if (!data.length) {
-      el.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><p>No active calling devotees found</p></div>';
-      return;
-    }
-
-    // Group by team
-    const teamMap = {};
-    data.forEach(d => {
-      const t = d.team_name || 'Unknown';
-      if (!teamMap[t]) teamMap[t] = [];
-      teamMap[t].push(d);
-    });
-
-    function statusChip(status, reason) {
-      if (status === 'Yes') return `<span style="background:#e8f5e9;color:#1b5e20;padding:.1rem .4rem;border-radius:4px;font-size:.75rem;font-weight:600">✓ Yes</span>`;
-      if (reason === 'online_class') return `<span style="background:#e3f2fd;color:#0d47a1;padding:.1rem .4rem;border-radius:4px;font-size:.75rem">💻 Online</span>`;
-      if (reason === 'festival_calling') return `<span style="background:#fff8e1;color:#e65100;padding:.1rem .4rem;border-radius:4px;font-size:.75rem">🌟 Festival</span>`;
-      if (reason === 'not_interested_now') return `<span style="background:#fce4ec;color:#b71c1c;padding:.1rem .4rem;border-radius:4px;font-size:.75rem">✗ Not Int.</span>`;
-      if (reason) return `<span style="background:#fff3e0;color:#bf360c;padding:.1rem .4rem;border-radius:4px;font-size:.75rem">${_reasonLabel(reason)}</span>`;
-      return `<span style="color:var(--text-muted);font-size:.75rem">—</span>`;
-    }
-
-    function historyDots(history) {
-      if (!history || !history.length) return '<span style="color:var(--text-muted);font-size:.72rem">No history</span>';
-      return history.slice(0,4).map(h => {
-        const ok = h.comingStatus === 'Yes';
-        const col = ok ? '#27ae60' : (h.comingStatus || h.callingReason) ? '#e67e22' : '#bbb';
-        const tip = ok ? 'Yes' : (_reasonLabel(h.callingReason) || h.comingStatus || 'Not called');
-        return `<span title="${formatDate(h.weekDate)}: ${tip}" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${col};margin:0 1px"></span>`;
-      }).join('');
-    }
-
-    let html = `<div style="margin-bottom:.75rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
-      <span style="font-size:.82rem;color:var(--text-muted)"><i class="fas fa-info-circle"></i> Last 4 weeks activity dots: <span style="color:#27ae60">●</span> Yes &nbsp;<span style="color:#e67e22">●</span> Called/Reason &nbsp;<span style="color:#bbb">●</span> Not called</span>
-    </div>`;
-
-    TEAMS.forEach(team => {
-      const members = teamMap[team];
-      if (!members) return;
-      let rows = '';
-      members.forEach((d, i) => {
-        const empty = !d.current_status && !d.current_reason;
-        rows += `<tr style="font-size:.82rem${empty ? ';background:#fff8e1' : ''}">
-          <td style="color:var(--text-muted);padding:.4rem .5rem">${i+1}</td>
-          <td style="padding:.4rem .5rem">
-            <div style="font-weight:600">${d.name}</div>
-            <div style="font-size:.72rem;color:var(--text-muted)">${d.mobile || ''}</div>
-          </td>
-          <td style="padding:.4rem .5rem">
-            ${teamBadge(team)}
-            <button onclick="openTeamHistory('${d.id}','${d.name.replace(/'/g,"\\'")}','${team}')" title="Team change history"
-              style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:.8rem;margin-left:.2rem;padding:.1rem .25rem" >
-              <i class="fas fa-pencil-alt"></i>
-            </button>
-          </td>
-          <td style="padding:.4rem .5rem;font-size:.75rem;color:var(--text-muted)">${d.calling_by || '—'}</td>
-          <td style="text-align:center;padding:.4rem .5rem;font-weight:700;color:var(--primary)">${d.lifetime_attendance || 0}</td>
-          <td style="padding:.4rem .5rem">${statusChip(d.current_status, d.current_reason)}</td>
-          <td style="padding:.4rem .5rem">${historyDots(d.history)}</td>
-          <td style="padding:.4rem .5rem">
-            <button onclick="openQuickStatus('${d.id}','${d.name.replace(/'/g,"\\'")}','${week}')"
-              style="font-size:.72rem;padding:.2rem .5rem;background:var(--accent-light);border:1px solid var(--border);border-radius:4px;cursor:pointer;color:var(--primary);font-weight:600;white-space:nowrap">
-              <i class="fas fa-bolt"></i> Quick Update
-            </button>
-          </td>
-        </tr>`;
-      });
-
-      html += `<div class="sr-team-block" style="margin-bottom:1.25rem">
-        <div class="sr-team-banner"><i class="fas fa-users"></i> ${team} <span style="font-size:.8rem;font-weight:400;opacity:.8">(${members.length})</span></div>
-        <div style="overflow-x:auto">
-        <table class="calling-table sr-table" style="margin:0">
-          <thead><tr>
-            <th style="width:32px">#</th>
-            <th style="min-width:140px">Name</th>
-            <th style="min-width:110px">Team</th>
-            <th style="min-width:120px">Calling By</th>
-            <th style="text-align:center;min-width:60px" title="Lifetime Attendance">🕉️ Att.</th>
-            <th style="min-width:110px">This Week</th>
-            <th style="min-width:90px" title="Last 4 weeks">4-Wk Activity</th>
-            <th style="min-width:100px">Action</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table></div>
-      </div>`;
-    });
-
-    el.innerHTML = html;
-  } catch(e) {
-    console.error(e);
-    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
   }
 }
 
@@ -548,10 +441,10 @@ function filterCallingList() {
 function renderCallingList(devotees, locked) {
   const wrap = document.getElementById('calling-list');
   if (!devotees.length) { wrap.innerHTML = '<div class="empty-state"><i class="fas fa-phone-slash"></i><p>No devotees found</p></div>'; return; }
-  wrap.innerHTML = `<table class="calling-table">
+  wrap.innerHTML = `<div class="calling-table-wrap"><table class="calling-table">
     <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>${locked ? 'Status' : '✓ Coming'}</th><th>Reason &amp; Notes</th></tr></thead>
     <tbody>${devotees.map((d, i) => renderCallingRow(d, i + 1, locked)).join('')}</tbody>
-  </table>`;
+  </table></div>`;
 }
 
 function _reasonOptions(selected) {
@@ -891,7 +784,7 @@ async function _loadCallingSummary(week, el) {
     el.innerHTML = `<div style="font-size:.84rem;margin-bottom:.6rem">
       <strong><i class="fas fa-phone-alt"></i> Calling Summary — ${weekLabel}</strong>
     </div>
-    <div style="overflow-x:auto">
+    <div class="table-scroll">
     <table class="calling-table" style="margin:0">
       <thead><tr>
         <th style="min-width:160px">Team / Calling By</th>
@@ -982,7 +875,7 @@ async function _loadAccuracyReport(week, el) {
       <strong><i class="fas fa-user-times"></i> Said Coming But Absent — ${weekLabel}</strong>
       <span style="margin-left:.75rem;font-size:.8rem;color:var(--text-muted)">Click a number to see the list</span>
     </div>
-    <div style="overflow-x:auto">
+    <div class="table-scroll">
     <table class="calling-table" style="margin:0">
       <thead><tr>
         <th style="min-width:160px">Team / Calling By</th>
@@ -1032,7 +925,7 @@ async function openAbsentModal(week, callingBy, team) {
       contentEl.innerHTML = '<p style="text-align:center;color:var(--success)"><i class="fas fa-check-circle"></i> Everyone came!</p>';
       return;
     }
-    contentEl.innerHTML = `<table class="calling-table" style="margin:0">
+    contentEl.innerHTML = `<div class="table-scroll"><table class="calling-table" style="margin:0">
       <thead><tr>
         <th>#</th><th>Name</th><th>Team</th><th>Calling By</th><th>Mobile</th>
       </tr></thead>
@@ -1043,7 +936,7 @@ async function openAbsentModal(week, callingBy, team) {
         <td style="font-size:.82rem;color:var(--text-muted)">${d.callingBy||'—'}</td>
         <td style="font-size:.82rem">${d.mobile||'—'}</td>
       </tr>`).join('')}</tbody>
-    </table>`;
+    </table></div>`;
   } catch (e) {
     contentEl.innerHTML = '<p style="color:var(--danger)">Failed to load list.</p>';
   }
@@ -1224,7 +1117,7 @@ async function loadLateReports() {
         <span class="sr-leg-late"><i class="fas fa-exclamation-circle"></i> After 9 PM</span>
         <span style="color:var(--text-muted);font-size:.78rem"><i class="fas fa-sort-amount-down"></i> Sorted: most late first</span>
       </div>
-      <div style="overflow-x:auto">
+      <div class="table-scroll">
         <table class="calling-table sr-table" style="margin:0;min-width:640px">
           <thead><tr>
             <th style="min-width:36px">#</th>
@@ -1329,7 +1222,7 @@ function _renderCSModal() {
     return;
   }
   el.innerHTML = `
-    <table class="report-table">
+    <div class="table-scroll"><table class="report-table">
       <thead><tr>
         ${isAdmin ? '<th style="width:30px"></th>' : ''}
         <th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th>
@@ -1345,7 +1238,7 @@ function _renderCSModal() {
           <td style="font-size:.82rem">${d.calling_by || '—'}</td>
         </tr>`;
       }).join('')}</tbody>
-    </table>`;
+    </table></div>`;
   _updateCSModalCount();
 }
 
