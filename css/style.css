@@ -769,9 +769,12 @@ button.contact-icon { border: none; padding: 0; }
 }
 #bnav-next { border-right: none; border-left: 1px solid var(--border, #e5e7eb); }
 .bnav-arrow:active { color: var(--brand, #1A5C3A); background: var(--bg-subtle, #f3f4f6); }
-/* Tab buttons — flex: 0 0 20% means 5 visible; use 25% for 4 */
+/* Each button is fixed 68px wide — gives ~4-5 visible on a typical phone
+   and reliable horizontal scrolling. Percentage-based widths shrink
+   unpredictably in mobile overflow containers. */
 .bnav-btn {
-  flex: 0 0 20%;
+  flex: 0 0 68px;
+  min-width: 68px;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: .18rem;
   padding: .5rem .1rem .3rem;
@@ -1513,7 +1516,9 @@ button.calling-stat:active { transform: translateY(0); }
 }
 .sr-table { margin: 0; }
 .sr-admin-row { background: #fefce8; }
-.sr-wk-hdr { text-align: center; min-width: 90px; font-size: .78rem; }
+/* Use .sr-table th.sr-wk-hdr (3-part selector) so it beats the general
+   .calling-table th { text-align:left } rule that would otherwise win. */
+.sr-table th.sr-wk-hdr { text-align: center; min-width: 90px; font-size: .78rem; }
 .sr-cell { text-align: center; font-size: .78rem; white-space: nowrap; padding: .38rem .55rem; }
 .sr-cell.sr-ok   { color: var(--success); }
 .sr-cell.sr-late { color: #dc2626; font-weight: 700; background: #fff7ed; }
@@ -1710,8 +1715,8 @@ button.calling-stat:active { transform: translateY(0); }
 /* Freeze: Sno, Name, Mobile columns stay fixed while sessions scroll */
 .sh-freeze   { position: sticky; z-index: 3; }
 .sh-f0       { left: 0; }
-.sh-f1       { left: var(--sh-sno-w); }
-.sh-f2       { left: calc(var(--sh-sno-w) + var(--sh-name-w)); box-shadow: 2px 0 5px -1px rgba(0,0,0,.10); }
+.sh-f1       { left: var(--sh-sno-w); box-shadow: 2px 0 5px -1px rgba(0,0,0,.10); }
+.sh-f2       { left: calc(var(--sh-sno-w) + var(--sh-name-w)); }
 /* Frozen cells carry the row background so scrolled content behind them
    never shows through — especially critical during horizontal scroll. */
 td.sh-freeze { background: inherit; }
@@ -1764,10 +1769,25 @@ thead .sh-freeze { z-index: 7; }
   border: 1px solid var(--border);
 }
 
-.leaderboard-rank { font-family: 'Cinzel', serif; font-weight: 700; font-size: .98rem; }
+.leaderboard-rank { font-family: 'Cinzel', serif; font-weight: 700; font-size: .98rem; min-width: 52px; width: 52px; }
 .rank-1 { color: #f59e0b; }
 .rank-2 { color: #94a3b8; }
 .rank-3 { color: #c27c0e; }
+
+/* Leaderboard: freeze Rank (1st) + Name (2nd) columns */
+.leaderboard-table thead th:nth-child(2),
+.leaderboard-table tbody td:nth-child(2) {
+  position: sticky;
+  left: 52px;
+  background: #fff;
+  z-index: 2;
+  box-shadow: 2px 0 4px rgba(0,0,0,.07);
+}
+.leaderboard-table thead th:nth-child(2) {
+  z-index: 6;
+  background: var(--bg-subtle);
+}
+.leaderboard-table tr:hover td:nth-child(2) { background: var(--gray-50); }
 .pct-bar-wrap { background: var(--gray-200); border-radius: var(--radius-full); height: 6px; min-width: 80px; }
 .pct-bar {
   background: linear-gradient(90deg, var(--brand), var(--brand-light));

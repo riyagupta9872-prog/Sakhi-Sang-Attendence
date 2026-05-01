@@ -827,9 +827,13 @@ async function _loadAccuracyReport(week, el) {
     }
     const hasSession = report._hasSession;
     const weekLabel = formatDate(week);
+    // Show the Sunday class date in messages, not the Saturday calling date.
+    const sessionD = new Date(week + 'T00:00:00');
+    sessionD.setDate(sessionD.getDate() + 1);
+    const sessionLabel = formatDate(localDateStr(sessionD));
 
     if (!hasSession) {
-      el.innerHTML = `<div class="empty-state"><i class="fas fa-clock"></i><p>Class not yet held for ${weekLabel} — accuracy report available after attendance is marked</p></div>`;
+      el.innerHTML = `<div class="empty-state"><i class="fas fa-clock"></i><p>Class not yet held for ${sessionLabel} — accuracy report available after attendance is marked</p></div>`;
       return;
     }
 
@@ -1076,10 +1080,10 @@ async function loadLateReports() {
       });
     });
 
-    // Sort: most late weeks first; tie → most recent lateness first; tie → name
+    // Sort: least late weeks first; tie → least recent lateness first; tie → name
     rows.sort((a, b) => {
-      if (b.lateCount !== a.lateCount)          return b.lateCount - a.lateCount;
-      if (b.recentLateIdx !== a.recentLateIdx)  return b.recentLateIdx - a.recentLateIdx;
+      if (a.lateCount !== b.lateCount)          return a.lateCount - b.lateCount;
+      if (a.recentLateIdx !== b.recentLateIdx)  return a.recentLateIdx - b.recentLateIdx;
       return a.name.localeCompare(b.name);
     });
 
@@ -1115,12 +1119,12 @@ async function loadLateReports() {
       <div class="sr-legend" style="margin-bottom:.6rem">
         <span class="sr-leg-ok"><i class="fas fa-check-circle"></i> On time</span>
         <span class="sr-leg-late"><i class="fas fa-exclamation-circle"></i> After 9 PM</span>
-        <span style="color:var(--text-muted);font-size:.78rem"><i class="fas fa-sort-amount-down"></i> Sorted: most late first</span>
+        <span style="color:var(--text-muted);font-size:.78rem"><i class="fas fa-sort-amount-up"></i> Sorted: most punctual first</span>
       </div>
       <div class="table-scroll">
         <table class="calling-table sr-table" style="margin:0;min-width:640px">
           <thead><tr>
-            <th style="min-width:36px">#</th>
+            <th style="min-width:36px;text-align:center">#</th>
             <th style="min-width:160px">Name</th>
             <th style="min-width:110px">Team</th>
             ${weekHeaders}

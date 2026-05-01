@@ -603,23 +603,31 @@ async function loadTeamLeaderboard() {
   c.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
   try {
     const callingDate = await resolveCallingDate(getWeekDate());
-    const data = (await DB.getTeamsReport(callingDate, AppState.currentReportSessionId || AppState.currentSessionId)).sort((a, b) => b.percentage - a.percentage);
-    c.innerHTML = `<div class="table-scroll"><table class="report-table">
+    const [data, targetCfg] = await Promise.all([
+      DB.getTeamsReport(callingDate, AppState.currentReportSessionId || AppState.currentSessionId),
+      DB.getAttendanceTargets().catch(() => ({ type: 'class', teams: {} })),
+    ]);
+    data.sort((a, b) => b.percentage - a.percentage);
+    c.innerHTML = `<div class="table-scroll"><table class="report-table leaderboard-table">
       <thead><tr><th>Rank</th><th>Team</th><th>Total</th><th>Calling List</th><th>Target</th><th>Present</th><th>Achievement</th></tr></thead>
       <tbody>${data.map((row, i) => {
         const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${i+1}`;
         const cls   = i===0?'rank-1':i===1?'rank-2':i===2?'rank-3':'';
-        const col   = row.percentage>=100?'var(--success)':row.percentage>=70?'var(--warning)':'var(--danger)';
+        const configTarget = (targetCfg.teams && targetCfg.teams[row.team] > 0)
+          ? targetCfg.teams[row.team]
+          : (targetCfg.global > 0 ? targetCfg.global : row.total);
+        const pct   = configTarget > 0 ? Math.round(row.actualPresent / configTarget * 100) : 0;
+        const col   = pct>=100?'var(--success)':pct>=70?'var(--warning)':'var(--danger)';
         return `<tr>
           <td class="leaderboard-rank ${cls}">${medal}</td>
           <td style="font-weight:700">${row.team}</td>
           <td style="text-align:center">${row.total}</td>
           <td style="text-align:center">${row.callingList}</td>
-          <td style="text-align:center">${row.target}</td>
+          <td style="text-align:center">${configTarget}</td>
           <td style="text-align:center;font-weight:700;color:var(--success)">${row.actualPresent}</td>
           <td><div style="display:flex;align-items:center;gap:.5rem">
-            <div class="pct-bar-wrap"><div class="pct-bar" style="width:${Math.min(row.percentage,100)}%"></div></div>
-            <span style="font-size:.82rem;font-weight:700;color:${col}">${row.percentage}%</span>
+            <div class="pct-bar-wrap"><div class="pct-bar" style="width:${Math.min(pct,100)}%"></div></div>
+            <span style="font-size:.82rem;font-weight:700;color:${col}">${pct}%</span>
           </div></td>
         </tr>`;
       }).join('')}
@@ -1523,8 +1531,9 @@ function _renderCMWeek() {
   const currentWkData = gridData.find(w => w.callingDate === currentWeek) || { csMap: {}, atSet: new Set() };
   const histWkData    = gridData.filter(w => w.callingDate !== currentWeek);
 
+  // Include devotees without callingBy so coordinators can see and assign them.
   const activeDevotees = devotees.filter(d =>
-    d.isActive !== false && d.callingBy && !d.callingMode && !d.isNotInterested
+    d.isActive !== false && !d.callingMode && !d.isNotInterested
   );
 
   function isUncalled(d) {

@@ -797,10 +797,12 @@ const DB = {
 
   async getCallingReport(weekDate) {
     // weekDate is the calling date (Saturday). Derive the session date (Sunday = +1 day).
+    // Use localDateStr() — NOT toISOString() — because toISOString() returns UTC,
+    // which in IST (UTC+5:30) rolls the date back by one day (midnight IST = prior day UTC).
     const sessionDate = (() => {
       const d = new Date(weekDate + 'T00:00:00');
       d.setDate(d.getDate() + 1);
-      return d.toISOString().slice(0, 10);
+      return localDateStr(d);
     })();
     const [raw, snap, usersSnap, submSnap] = await Promise.all([
       DevoteeCache.all(),
