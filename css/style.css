@@ -1531,6 +1531,35 @@ button.calling-stat:active { transform: translateY(0); }
 .sr-table tr.sr-row-l4 td { background: #fda4af; }
 .sr-table tr.sr-row-l4 td { color: #7f1d1d; }
 
+/* Freeze Name column (2nd) — # column (1st) is already frozen via .calling-table rules.
+   Fix # column to 40px so the Name offset is predictable. */
+.sr-table th:first-child,
+.sr-table td:first-child { width: 40px; min-width: 40px; }
+.sr-table thead th:nth-child(2),
+.sr-table tbody td:nth-child(2) {
+  position: sticky;
+  left: 40px;
+  z-index: 2;
+  background: #fff;
+  box-shadow: 2px 0 4px rgba(0,0,0,.08);
+}
+.sr-table thead th:nth-child(2) {
+  z-index: 6;
+  background: var(--brand);
+  box-shadow: 2px 0 4px rgba(0,0,0,.15);
+}
+/* Preserve row highlight colors on frozen # and Name cells */
+.sr-table tr.sr-row-l1 td:nth-child(1),
+.sr-table tr.sr-row-l1 td:nth-child(2) { background: #fff1f2; }
+.sr-table tr.sr-row-l2 td:nth-child(1),
+.sr-table tr.sr-row-l2 td:nth-child(2) { background: #ffe4e6; }
+.sr-table tr.sr-row-l3 td:nth-child(1),
+.sr-table tr.sr-row-l3 td:nth-child(2) { background: #fecdd3; }
+.sr-table tr.sr-row-l4 td:nth-child(1),
+.sr-table tr.sr-row-l4 td:nth-child(2) { background: #fda4af; color: #7f1d1d; }
+.sr-table tr:hover td:nth-child(1),
+.sr-table tr:hover td:nth-child(2) { background: var(--gray-50); }
+
 .badge-tc {
   display: inline-flex; align-items: center; gap: .22rem;
   background: #fefce8; color: #78350f; font-size: .67rem; font-weight: 700;
