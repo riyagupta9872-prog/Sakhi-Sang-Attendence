@@ -2740,9 +2740,9 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
 }
 .sidebar-item.sub i { font-size: .85rem; }
 
-/* Session topic/speaker chip on calling list */
+/* Session topic/speaker chip on calling list — hidden */
 .session-info-chip {
-  display: flex;
+  display: none;
   flex-wrap: wrap;
   gap: .6rem .9rem;
   padding: .65rem .9rem;
