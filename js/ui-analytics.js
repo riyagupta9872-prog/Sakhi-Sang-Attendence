@@ -607,27 +607,32 @@ async function loadTeamLeaderboard() {
       DB.getTeamsReport(callingDate, AppState.currentReportSessionId || AppState.currentSessionId),
       DB.getAttendanceTargets().catch(() => ({ type: 'class', teams: {} })),
     ]);
-    data.sort((a, b) => b.percentage - a.percentage);
+    // Compute configTarget and pct for every row first, then sort by pct
+    const ranked = data.map(row => {
+      const configTarget = (targetCfg.teams && targetCfg.teams[row.team] > 0)
+        ? targetCfg.teams[row.team]
+        : (targetCfg.global > 0 ? targetCfg.global : row.total);
+      const pct = configTarget > 0 ? Math.round(row.actualPresent / configTarget * 100) : 0;
+      return { ...row, configTarget, pct };
+    });
+    ranked.sort((a, b) => b.pct - a.pct || b.actualPresent - a.actualPresent);
+
     c.innerHTML = `<div class="table-scroll"><table class="report-table leaderboard-table">
       <thead><tr><th>Rank</th><th>Team</th><th>Total</th><th>Calling List</th><th>Target</th><th>Present</th><th>Achievement</th></tr></thead>
-      <tbody>${data.map((row, i) => {
+      <tbody>${ranked.map((row, i) => {
         const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${i+1}`;
         const cls   = i===0?'rank-1':i===1?'rank-2':i===2?'rank-3':'';
-        const configTarget = (targetCfg.teams && targetCfg.teams[row.team] > 0)
-          ? targetCfg.teams[row.team]
-          : (targetCfg.global > 0 ? targetCfg.global : row.total);
-        const pct   = configTarget > 0 ? Math.round(row.actualPresent / configTarget * 100) : 0;
-        const col   = pct>=100?'var(--success)':pct>=70?'var(--warning)':'var(--danger)';
+        const col   = row.pct>=100?'var(--success)':row.pct>=70?'var(--warning)':'var(--danger)';
         return `<tr>
           <td class="leaderboard-rank ${cls}">${medal}</td>
           <td style="font-weight:700">${row.team}</td>
           <td style="text-align:center">${row.total}</td>
           <td style="text-align:center">${row.callingList}</td>
-          <td style="text-align:center">${configTarget}</td>
+          <td style="text-align:center">${row.configTarget}</td>
           <td style="text-align:center;font-weight:700;color:var(--success)">${row.actualPresent}</td>
           <td><div style="display:flex;align-items:center;gap:.5rem">
-            <div class="pct-bar-wrap"><div class="pct-bar" style="width:${Math.min(pct,100)}%"></div></div>
-            <span style="font-size:.82rem;font-weight:700;color:${col}">${pct}%</span>
+            <div class="pct-bar-wrap"><div class="pct-bar" style="width:${Math.min(row.pct,100)}%"></div></div>
+            <span style="font-size:.82rem;font-weight:700;color:${col}">${row.pct}%</span>
           </div></td>
         </tr>`;
       }).join('')}
