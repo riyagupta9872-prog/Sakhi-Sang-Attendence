@@ -147,19 +147,12 @@ h3 { font-size: .93rem; }
 
 /* Logo */
 .header-logo { display: flex; align-items: center; gap: .75rem; }
-.om-circle {
+.app-logo-img {
   width: 42px; height: 42px; border-radius: 50%;
-  background: rgba(255,255,255,.15);
-  border: 1.5px solid rgba(255,255,255,.3);
-  display: flex; align-items: center; justify-content: center;
+  object-fit: cover;
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(0,0,0,.15), inset 0 1px 0 rgba(255,255,255,.2);
-}
-.om-symbol {
-  font-size: 1.35rem;
-  color: var(--gold-light);
-  text-shadow: 0 1px 6px rgba(0,0,0,.2);
-  line-height: 1;
+  border: 1.5px solid rgba(255,255,255,.4);
+  box-shadow: 0 2px 8px rgba(0,0,0,.25);
 }
 .header-text h1 {
   color: #fff;

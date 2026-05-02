@@ -1,7 +1,7 @@
 /* ══ SERVICE WORKER – Sakhi Sang ══ */
 // Bump this version string every time you deploy new code.
 // This tells the browser to throw away old cached files and install fresh ones.
-const CACHE = 'sakhi-sang-v179';
+const CACHE = 'sakhi-sang-v180';
 const SHELL = [
   './index.html',
   './js/config.js',
@@ -17,6 +17,8 @@ const SHELL = [
   './js/ui-ai-chat.js',
   './js/xlsx-js-style.bundle.js',
   './css/style.css',
+  './icon-192.png',
+  './icon-512.png',
   './icons/icon.svg',
   'https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito:wght@300;400;500;600;700&display=swap',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css',
