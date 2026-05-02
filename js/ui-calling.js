@@ -214,7 +214,10 @@ async function loadCallingStatus() {
     // populate locally on this tab any more.
 
     renderCallingStats(devotees);
-    if (_callingLocked) {
+    if (AppState.userRole === 'superAdmin') {
+      const bar = document.getElementById('calling-submit-bar');
+      if (bar) bar.innerHTML = '';
+    } else if (_callingLocked) {
       _renderLockedBanner(isHistoryFallback, week, window._beforeCallingDate, isHistoricalView, sessionDate);
     } else {
       _renderCallingSubmitBar(week, mySubmission);

@@ -785,10 +785,10 @@ function applyRoleUI() {
     devotees:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     calling:        ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     attendance:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    books:          ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    service:        ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    registration:   ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    donation:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    books:          ['teamAdmin', 'serviceDevotee'],
+    service:        ['teamAdmin', 'serviceDevotee'],
+    registration:   ['teamAdmin', 'serviceDevotee'],
+    donation:       ['teamAdmin', 'serviceDevotee'],
     care:           ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     events:         ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     'calling-mgmt': ['superAdmin'],
@@ -819,6 +819,12 @@ function applyRoleUI() {
   // admin-coordinator-only elements stay role-based (Att. Seva flag is ONLY for live attendance)
   document.querySelectorAll('.admin-coordinator-only').forEach(el => {
     if (!['superAdmin','teamAdmin'].includes(role)) el.style.display = 'none';
+  });
+
+  // Entry-action buttons (Add Books, Add Donation, etc.) are for coordinators only.
+  // Super admin views reports but never logs entries.
+  document.querySelectorAll('.entry-action').forEach(el => {
+    el.style.display = role === 'superAdmin' ? 'none' : '';
   });
 
   // Non-superAdmin roles: lock team filter to their team
