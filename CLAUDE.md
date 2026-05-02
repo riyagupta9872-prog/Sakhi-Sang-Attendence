@@ -25,11 +25,16 @@ No build step — this is a pure static site. Any HTTP server works (VS Code Liv
 
 ## Architecture
 
-All application logic is split across JS files in [js/](js/), loaded in order via `<script>` tags (no bundler — all global scope):
+All application logic is split across JS files in [js/](js/), loaded in order via `<script>` tags (no bundler — all global scope). **Load order matters** — do not rearrange `<script>` tags in [index.html](index.html):
+1. Firebase SDK (app, firestore, auth)
+2. xlsx-js-style, Chart.js
+3. `config.js` → `db.js` → `excel.js` → `ui-core.js` (dependency chain)
+4. Feature UI files (`ui-devotees.js` … `ui-activities.js`)
+5. `ui-ai-chat.js` (last)
 
 | File | Contents |
 |---|---|
-| [js/config.js](js/config.js) | Firebase init, `AppState`, `TEAMS`, date utils, format helpers, `DevoteeCache` |
+| [js/config.js](js/config.js) | Firebase init, `AppState`, `TEAMS` (10 teams — see below), date utils, format helpers, `DevoteeCache` |
 | [js/db.js](js/db.js) | Full `DB` object — all Firestore operations |
 | [js/excel.js](js/excel.js) | `_xls`, `_xlsSheet`, all export/import functions, `IMPORT_FIELDS` |
 | [js/ui-core.js](js/ui-core.js) | Auth flow, `applyRoleUI`, admin panel, tab switching, pickers, session init |
@@ -39,10 +44,20 @@ All application logic is split across JS files in [js/](js/), loaded in order vi
 | [js/ui-analytics.js](js/ui-analytics.js) | Reports tab, Care tab, Events tab |
 | [js/ui-activities.js](js/ui-activities.js) | Activities tab — Book Distribution, Donations, Registrations, Service sub-tabs |
 | [js/ui-home.js](js/ui-home.js) | Home tab — greeting, quick-entry drawers (Attendance Report, Book Dist, Donation, Registration, Service); shared `_initDevoteePicker(prefix)` pattern used by `bd`, `reg`, `srv` prefixes |
-| [js/ui-ai-chat.js](js/ui-ai-chat.js) | AI chat FAB — natural-language queries over Firestore data, proxied through a Cloudflare Worker (`_AI_PROXY_BASE`) to keep the Gemini API key server-side; model waterfall via `_GEMINI_MODELS` if quota exceeded |
+| [js/ui-ai-chat.js](js/ui-ai-chat.js) | AI chat FAB — natural-language queries over Firestore data, proxied through a Cloudflare Worker (`_AI_PROXY_BASE` = `https://old-truth-f7e0sakhi-ai.riyagupta9872.workers.dev`) to keep the Gemini API key server-side; model waterfall via `_GEMINI_MODELS` (gemini-2.5-flash → flash-lite → 2.0-flash-lite …) if quota exceeded |
 
 - [css/style.css](css/style.css) — all styling
 - [index.html](index.html) — single HTML template with all tab panels
+
+### Teams
+
+`TEAMS` in [js/config.js](js/config.js) is the single source of truth for team names (used in all dropdowns, queries, and exports):
+
+```
+['Champaklata','Chitralekha','Indulekha','Lalita','Nilachal','Other','Rangadevi','Sudevi','Tungavidya','Vishakha']
+```
+
+Note: `Visakha` was renamed to `Vishakha` — a one-time migration in `ui-core.js` handles old docs. Always use the spelling from this array.
 
 ### Global State
 
@@ -88,6 +103,8 @@ Three roles with hardcoded permission gates throughout the UI:
 - `teamAdmin` — same tabs but data scoped to their assigned team
 - `serviceDevotee` — Attendance tab only (mark own attendance)
 
+**Special flag**: `AppState.isAttSevaDev` (set at login) marks a service devotee who logs in via "Login as Attendance Service Devotee" — grants attendance marking across all teams for one session, without promoting the role permanently. Check this flag (not just `userRole`) wherever Attendance tab data is scoped by team.
+
 ### Firestore Collections
 
 | Collection | Purpose |
@@ -108,6 +125,10 @@ Sessions are created on-demand via `DB.getOrCreateSession(sunday)` — there is 
 ### Signup Approval Workflow
 
 New signups land in a `signupRequests` sub-collection as pending. `subscribePendingSignups()` (super admin only) sets up a live Firestore listener and updates a badge count. `approveSignupRequest(id)` creates the `users/{uid}` doc that `onAuthStateChanged` looks for; `rejectSignupRequest(id)` blocks without creating the doc (sign-in shows rejection message). Until a `users/{uid}` doc exists, the user cannot log in.
+
+### Adding a New Activity Type
+
+Activities (Books, Service, Registration, Donation) are driven by `ACTIVITY_CONFIG` in [js/ui-activities.js](js/ui-activities.js). To add a new activity, add one entry to that object — it auto-generates the Log Entry and Reports sub-tabs. Each entry needs: `prefix`, `addFn` (DB write method name), `getFn` (DB read method name), field list, and display labels. No other plumbing is required.
 
 ### Care Tab
 
@@ -178,3 +199,5 @@ To run against a new Firebase project, replace `firebaseConfig` in [js/config.js
 - **`callingMode` field** — devotee docs may carry `callingMode: 'not_interested'` or `callingMode: 'online'`; dashboard aggregation excludes these from the main counts. Don't conflate with `isNotInterested` (which is a status flag); `callingMode` controls how/whether the devotee is counted in stats.
 - **Import batching** — `importDevotees()` in `excel.js` chunks writes in batches of 400 to stay within Firestore batch-write limits. Duplicate detection uses name (case-insensitive) + mobile as the key; same name with different mobile is allowed.
 - **Admin data clearing** — `clearDataForDate(date)`, `clearDataForTeamDate(team, date)`, and `clearAllData()` are super-admin-only destructive operations that batch-delete attendance + calling records and decrement `lifetimeAttendance`. All require explicit confirmation; `clearAllData()` requires double confirmation.
+- **Saturday vs Sunday dates** — session docs use `sessionDate` (Sunday); `callingStatus` docs use `weekDate` (Saturday). The master filter `sessionId` is always a Sunday string. Don't use `sessionId` as a `weekDate` key or vice versa.
+- **Offline persistence assertion errors** — Firestore persistence is enabled with `synchronizeTabs: true`. If two tabs try to initialize Firebase independently, an assertion error can fire. The app handles this by catching the error and reloading the page; don't remove that try/catch in `config.js`.
