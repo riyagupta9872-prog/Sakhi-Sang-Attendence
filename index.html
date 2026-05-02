@@ -80,7 +80,7 @@
           <option value="teamAdmin">Team Admin (Team access)</option>
         </select>
       </div>
-      <div class="auth-field" id="signup-team-field" style="display:none">
+      <div class="auth-field" id="signup-team-field">
         <label>Your Team</label>
         <select id="signup-team">
           <option value="">Select Team</option>
@@ -2055,11 +2055,15 @@
     <input type="hidden" id="ua-user-id">
     <div style="padding:1.25rem;display:flex;flex-direction:column;gap:.75rem">
       <div class="form-group">
-        <label><i class="fas fa-briefcase"></i> Change Position</label>
-        <input type="text" id="ua-position" placeholder="e.g. Facilitator, Coordinator…">
+        <label><i class="fas fa-user-tag"></i> App Role <span style="font-size:.75rem;font-weight:400;color:var(--text-muted)">(controls what tabs they can access)</span></label>
+        <select id="ua-role">
+          <option value="serviceDevotee">Caller / Facilitator</option>
+          <option value="teamAdmin">Team Coordinator</option>
+          <option value="superAdmin">Super Admin</option>
+        </select>
       </div>
       <div class="form-group">
-        <label><i class="fas fa-users"></i> Change Team</label>
+        <label><i class="fas fa-users"></i> Team</label>
         <select id="ua-team">
           <option value="">No Team</option>
           <option>Champaklata</option><option>Chitralekha</option><option>Indulekha</option>
@@ -2068,12 +2072,8 @@
         </select>
       </div>
       <div class="form-group">
-        <label><i class="fas fa-user-tag"></i> Role</label>
-        <select id="ua-role">
-          <option value="serviceDevotee">Caller / Facilitator</option>
-          <option value="teamAdmin">Team Coordinator</option>
-          <option value="superAdmin">Super Admin</option>
-        </select>
+        <label><i class="fas fa-briefcase"></i> Custom Title <span style="font-size:.75rem;font-weight:400;color:var(--text-muted)">(shown on their header badge)</span></label>
+        <input type="text" id="ua-position" placeholder="e.g. Head Caller, Zone Leader, Shiksha Coordinator…">
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;padding:.6rem .75rem;background:var(--brand-subtle);border:1px solid var(--border);border-radius:var(--radius);gap:.75rem">
         <div>

@@ -508,6 +508,19 @@ const DB = {
     });
   },
 
+  // When a coordinator renames themselves, propagate the new name to every
+  // devotee whose callingBy field still holds the old name.
+  async updateCallingByName(oldName, newName) {
+    const snap = await fdb.collection('devotees').where('callingBy', '==', oldName).get();
+    if (!snap.size) return;
+    const BATCH = 400;
+    for (let i = 0; i < snap.docs.length; i += BATCH) {
+      const batch = fdb.batch();
+      snap.docs.slice(i, i + BATCH).forEach(d => batch.update(d.ref, { callingBy: newName }));
+      await batch.commit();
+    }
+  },
+
   /* PERSONAL MEETINGS */
   async getPersonalMeetings() {
     const snap = await fdb.collection('personalMeetings').get();
@@ -740,29 +753,57 @@ const DB = {
 
     if (!fourWeeks.length) return { fourWeeks: [], teamRows: [] };
 
-    // Team admins: teamName → adminName
+    // uid → current name (source of truth for all name resolution)
+    const uidNameMap = {};
+    usersSnap.docs.forEach(d => { if (d.data().name) uidNameMap[d.id] = d.data().name; });
+
+    // Build old-stored-name → current-name alias map from submission docs.
+    // Each submission stores both userId and the userName at submission time,
+    // so if a coordinator renamed themselves we can detect and merge them.
+    const aliasNameMap = {};
+    submSnap.docs.forEach(d => {
+      const { userId, userName } = d.data();
+      if (userId && uidNameMap[userId] && userName && userName !== uidNameMap[userId]) {
+        aliasNameMap[userName] = uidNameMap[userId];
+      }
+    });
+
+    // Resolve any name to its current version
+    const resolveName = (name, userId) => {
+      if (userId && uidNameMap[userId]) return uidNameMap[userId];
+      return aliasNameMap[name] || name;
+    };
+
+    // Team admins: teamName → current adminName
     const teamAdminMap = {};
     usersSnap.docs.forEach(d => {
       const u = d.data();
       if (u.role === 'teamAdmin' && u.teamName && u.name) teamAdminMap[u.teamName] = u.name;
     });
 
-    // Submission map: weekDate → userName → { initialSubmittedAtClient }
+    // Submission map: weekDate → currentName → { initialSubmittedAtClient }
     const submMap = {};
     fourWeeks.forEach(w => { submMap[w] = {}; });
     submSnap.docs.forEach(d => {
-      const { weekDate, userName, teamName, submittedAtClient, initialSubmittedAtClient } = d.data();
+      const { weekDate, userId, userName, teamName, submittedAtClient, initialSubmittedAtClient } = d.data();
       if (!submMap[weekDate]) return;
-      submMap[weekDate][userName] = {
+      const currentName = resolveName(userName, userId);
+      // Keep earliest initial time if two records resolve to the same person
+      const existing = submMap[weekDate][currentName];
+      const incoming = initialSubmittedAtClient || submittedAtClient || null;
+      submMap[weekDate][currentName] = {
         teamName: teamName || '',
-        initial: initialSubmittedAtClient || submittedAtClient || null,
+        initial: existing?.initial && incoming
+          ? (existing.initial < incoming ? existing.initial : incoming)
+          : (existing?.initial || incoming),
       };
     });
 
-    // Coordinator → team from devotees
+    // Coordinator → team from devotees; resolve any stale callingBy names
     const coordTeamMap = {};
     allDevotees.filter(d => d.callingBy && !d.isNotInterested).forEach(d => {
-      if (!coordTeamMap[d.callingBy]) coordTeamMap[d.callingBy] = d.teamName || '';
+      const name = aliasNameMap[d.callingBy] || d.callingBy;
+      if (!coordTeamMap[name]) coordTeamMap[name] = d.teamName || '';
     });
     // Also register team admins themselves
     Object.entries(teamAdminMap).forEach(([team, name]) => {

@@ -92,7 +92,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const roleSelect = document.getElementById('signup-role');
   if (roleSelect) {
     roleSelect.addEventListener('change', () => {
-      document.getElementById('signup-team-field').style.display = roleSelect.value === 'teamAdmin' ? 'flex' : 'none';
+      document.getElementById('signup-team-field').style.display = 'flex';
     });
   }
   document.getElementById('login-form')?.addEventListener('submit', doLogin);
@@ -145,7 +145,7 @@ async function doSignup(e) {
       uid:            cred.user.uid,
       email, name,
       requestedRole:  role,
-      requestedTeam:  role === 'teamAdmin' ? (team || null) : null,
+      requestedTeam:  team || null,
       status:         'pending',
       createdAt:      TS(),
     });
@@ -419,6 +419,9 @@ async function saveEditProfile() {
   errEl.style.display = 'none';
   if (!name) { errEl.textContent = 'Name cannot be empty.'; errEl.style.display = 'block'; return; }
 
+  const oldName = AppState.userName;
+  const nameChanged = name !== oldName;
+
   const updates = { name, position, updatedAt: TS() };
   if (AppState.userRole === 'superAdmin') {
     updates.teamName = document.getElementById('edit-profile-team').value || null;
@@ -427,6 +430,10 @@ async function saveEditProfile() {
 
   try {
     await fdb.collection('users').doc(AppState.userId).update(updates);
+    // Propagate new name to all devotees whose callingBy still holds the old name
+    if (nameChanged && oldName) {
+      DB.updateCallingByName(oldName, name).then(() => DevoteeCache.bust()).catch(() => {});
+    }
     AppState.userName     = name;
     AppState.userPosition = position;
     if (AppState.userRole === 'superAdmin') AppState.userTeam = updates.teamName;
@@ -689,7 +696,8 @@ function renderUserMgmtList() {
   list.innerHTML = filtered.map(u => {
     const roleLabel = u.role === 'superAdmin' ? 'Super Admin'
       : u.role === 'teamAdmin' ? 'Coordinator' : 'Facilitator';
-    const meta = [roleLabel, u.teamName || '', u.position || ''].filter(Boolean).join(' · ');
+    const customTitle = u.position && u.position.toLowerCase() !== roleLabel.toLowerCase() ? u.position : '';
+    const meta = [roleLabel, u.teamName || '', customTitle].filter(Boolean).join(' · ');
     return `<div class="um-row" onclick="openUserAction('${u.uid}')">
       <div class="um-avatar">${initials(u.name || u.email)}</div>
       <div class="um-info">
