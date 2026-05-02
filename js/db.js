@@ -508,6 +508,43 @@ const DB = {
     });
   },
 
+  // One-time migration: rename a team across all collections.
+  // Checks settings/migrations to skip if already done.
+  async migrateTeamNameOnce(oldName, newName) {
+    const migKey = `teamRename_${oldName}_${newName}`;
+    const migDoc = await fdb.collection('settings').doc('migrations').get();
+    if (migDoc.exists && migDoc.data()[migKey]) return; // already done
+
+    const BATCH = 400;
+    const collections = ['devotees','users','callingStatus','callingSubmissions',
+      'attendanceRecords','bookDistributions','services','registrations','donations'];
+
+    for (const col of collections) {
+      try {
+        const snap = await fdb.collection(col).where('teamName','==', oldName).get();
+        for (let i = 0; i < snap.docs.length; i += BATCH) {
+          const batch = fdb.batch();
+          snap.docs.slice(i, i + BATCH).forEach(d => batch.update(d.ref, { teamName: newName }));
+          await batch.commit();
+        }
+      } catch (_) {}
+    }
+
+    // Also fix attendanceTargets settings doc if it has the old team key
+    try {
+      const tDoc = await fdb.collection('settings').doc('attendanceTargets').get();
+      if (tDoc.exists && tDoc.data().teams?.[oldName] !== undefined) {
+        const teams = { ...tDoc.data().teams };
+        teams[newName] = teams[oldName];
+        delete teams[oldName];
+        await fdb.collection('settings').doc('attendanceTargets').update({ teams });
+      }
+    } catch (_) {}
+
+    // Mark as done
+    await fdb.collection('settings').doc('migrations').set({ [migKey]: true }, { merge: true });
+  },
+
   // When a coordinator renames themselves, propagate the new name to every
   // devotee whose callingBy field still holds the old name.
   async updateCallingByName(oldName, newName) {

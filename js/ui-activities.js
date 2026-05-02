@@ -68,7 +68,8 @@ const ACTIVITY_CONFIG = {
 async function loadActivityTab(key) {
   _actBuildLayout(key);
   AppState._actSubTab = AppState._actSubTab || {};
-  const sub = AppState._actSubTab[key] || 'log';
+  const isSuperAdmin = AppState.userRole === 'superAdmin';
+  const sub = AppState._actSubTab[key] || (isSuperAdmin ? 'reports' : 'log');
   _actShowSub(key, sub);
 }
 
@@ -81,15 +82,15 @@ function _actBuildLayout(key) {
       <h2><i class="fas ${cfg.icon}"></i> ${cfg.title}</h2>
     </div>
     <div class="att-sub-tabs">
-      <button class="att-sub-tab active" onclick="switchActivitySubTab('${key}','log',this)">
+      <button class="att-sub-tab entry-action${AppState.userRole === 'superAdmin' ? '" style="display:none' : ''}" onclick="switchActivitySubTab('${key}','log',this)">
         <i class="fas fa-pen"></i> Log Entry
       </button>
-      <button class="att-sub-tab" onclick="switchActivitySubTab('${key}','reports',this)">
+      <button class="att-sub-tab${AppState.userRole === 'superAdmin' ? ' active' : ''}" onclick="switchActivitySubTab('${key}','reports',this)">
         <i class="fas fa-chart-bar"></i> Reports
       </button>
     </div>
-    <div id="act-${key}-log"     class="att-sub-panel active"></div>
-    <div id="act-${key}-reports" class="att-sub-panel"></div>
+    <div id="act-${key}-log"     class="att-sub-panel${AppState.userRole === 'superAdmin' ? '' : ' active'}"></div>
+    <div id="act-${key}-reports" class="att-sub-panel${AppState.userRole === 'superAdmin' ? ' active' : ''}"></div>
   `;
   panel.dataset.built = 'true';
 }

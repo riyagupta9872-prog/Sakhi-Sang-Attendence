@@ -63,7 +63,11 @@ auth.onAuthStateChanged(async (user) => {
     applyRoleUI();
     await initApp();
     // Super admin only: keep a live count of pending sign-up requests.
-    if (AppState.userRole === 'superAdmin') subscribePendingSignups();
+    if (AppState.userRole === 'superAdmin') {
+      subscribePendingSignups();
+      // One-time data migrations — run silently in background
+      DB.migrateTeamNameOnce('Visakha', 'Vishakha').catch(() => {});
+    }
   } catch (e) {
     if (e.code === 'permission-denied') {
       document.getElementById('auth-screen').classList.remove('hidden');
@@ -78,8 +82,29 @@ auth.onAuthStateChanged(async (user) => {
 
 function showAuthScreen() { document.getElementById('auth-screen').classList.remove('hidden'); }
 function hideAuthScreen() { document.getElementById('auth-screen').classList.add('hidden'); }
-function showPendingApprovalScreen() { document.getElementById('pending-approval-screen')?.classList.remove('hidden'); document.getElementById('auth-screen').classList.add('hidden'); }
-function hidePendingApprovalScreen() { document.getElementById('pending-approval-screen')?.classList.add('hidden'); }
+let _pendingApprovalUnsub = null;
+
+function showPendingApprovalScreen() {
+  document.getElementById('pending-approval-screen')?.classList.remove('hidden');
+  document.getElementById('auth-screen').classList.add('hidden');
+  // Watch users/{uid} in real-time — fires the moment super admin approves,
+  // so the user doesn't have to manually refresh to get in.
+  const uid = auth.currentUser?.uid;
+  if (uid && !_pendingApprovalUnsub) {
+    _pendingApprovalUnsub = fdb.collection('users').doc(uid).onSnapshot(doc => {
+      if (doc.exists && doc.data()?.status !== 'rejected') {
+        _pendingApprovalUnsub?.();
+        _pendingApprovalUnsub = null;
+        window.location.reload();
+      }
+    }, () => {});
+  }
+}
+function hidePendingApprovalScreen() {
+  document.getElementById('pending-approval-screen')?.classList.add('hidden');
+  _pendingApprovalUnsub?.();
+  _pendingApprovalUnsub = null;
+}
 
 function switchAuthTab(tab, btn) {
   document.querySelectorAll('.auth-tab').forEach(b => b.classList.remove('active'));
@@ -110,23 +135,50 @@ async function doLogin(e) {
   try {
     await auth.signInWithEmailAndPassword(email, password);
   } catch (ex) {
-    err.textContent = ex.code === 'auth/wrong-password' || ex.code === 'auth/user-not-found'
-      ? 'Invalid email or password' : ex.message;
+    const badCred = ['auth/wrong-password','auth/user-not-found','auth/invalid-credential','auth/invalid-email'];
+    err.textContent = badCred.includes(ex.code) ? 'Invalid email or password' : ex.message;
     err.classList.add('show');
   }
 }
 
+let _signupBusy = false;
+
 async function doSignup(e) {
   e.preventDefault();
-  const err = document.getElementById('signup-error');
+  if (_signupBusy) return;           // block double-tap
+  _signupBusy = true;
+
+  const err    = document.getElementById('signup-error');
+  const btn    = document.querySelector('#signup-form button[type="submit"]');
+  const origTxt = btn?.innerHTML;
   err.classList.remove('show');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending…'; }
+
   const name     = document.getElementById('signup-name').value.trim();
   const email    = document.getElementById('signup-email').value.trim();
   const password = document.getElementById('signup-password').value;
   const role     = document.getElementById('signup-role').value;
   const team     = document.getElementById('signup-team').value;
-  if (password.length < 6) { err.textContent = 'Password must be at least 6 characters'; err.classList.add('show'); return; }
+
+  const _resetBtn = () => {
+    _signupBusy = false;
+    if (btn) { btn.disabled = false; btn.innerHTML = origTxt; }
+  };
+
+  if (password.length < 6) {
+    err.textContent = 'Password must be at least 6 characters';
+    err.classList.add('show');
+    _resetBtn(); return;
+  }
   try {
+    // Check if this email already has a pending signup request to avoid duplicates
+    const dupCheck = await fdb.collection('signupRequests')
+      .where('email', '==', email).where('status', '==', 'pending').limit(1).get();
+    if (!dupCheck.empty) {
+      showPendingApprovalScreen();
+      _resetBtn(); return;
+    }
+
     const cred = await auth.createUserWithEmailAndPassword(email, password);
     await cred.user.updateProfile({ displayName: name });
     // First user EVER bootstraps as approved superAdmin. Everyone else lands
@@ -137,22 +189,23 @@ async function doSignup(e) {
       await fdb.collection('users').doc(cred.user.uid).set({
         email, name, role: 'superAdmin', teamName: null, createdAt: TS()
       });
-      return;  // onAuthStateChanged will pick them up as super admin
+      _resetBtn(); return;  // onAuthStateChanged will pick them up as super admin
     }
-    // Record the request and immediately sign them out — they'll see the
-    // "Awaiting approval" gate on next sign-in.
+    // Record the request — they'll see the "Awaiting approval" gate.
     await fdb.collection('signupRequests').doc(cred.user.uid).set({
-      uid:            cred.user.uid,
+      uid:           cred.user.uid,
       email, name,
-      requestedRole:  role,
-      requestedTeam:  team || null,
-      status:         'pending',
-      createdAt:      TS(),
+      requestedRole: role,
+      requestedTeam: team || null,
+      status:        'pending',
+      createdAt:     TS(),
     });
     showPendingApprovalScreen();
+    _resetBtn();
   } catch (ex) {
     err.textContent = ex.code === 'auth/email-already-in-use' ? 'Email already registered' : ex.message;
     err.classList.add('show');
+    _resetBtn();
   }
 }
 
@@ -785,10 +838,10 @@ function applyRoleUI() {
     devotees:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     calling:        ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     attendance:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    books:          ['teamAdmin', 'serviceDevotee'],
-    service:        ['teamAdmin', 'serviceDevotee'],
-    registration:   ['teamAdmin', 'serviceDevotee'],
-    donation:       ['teamAdmin', 'serviceDevotee'],
+    books:          ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    service:        ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    registration:   ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    donation:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     care:           ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     events:         ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     'calling-mgmt': ['superAdmin'],

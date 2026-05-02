@@ -32,7 +32,9 @@
       "Bash(grep -nB1 'class=\"calling-table\"\\\\|class=\"report-table\"' \"d:/riya personal/RAPP/Sadhana Tracker/Sadhana Tracker- Coordinators Position based based/Sakhi-Sang-Attendence/js/ui-calling.js\")",
       "Bash(grep -nB2 'class=\"calling-table\\\\|class=\"report-table' \"d:/riya personal/RAPP/Sadhana Tracker/Sadhana Tracker- Coordinators Position based based/Sakhi-Sang-Attendence/js/ui-calling.js\")",
       "Bash(grep -nB1 -A6 'att-sub-tabs' \"d:/riya personal/RAPP/Sadhana Tracker/Sadhana Tracker- Coordinators Position based based/Sakhi-Sang-Attendence/index.html\")",
-      "Bash(grep -nB1 \"openMonthlyReports\\\\|openFYReports\\\\|openIndividualReports\\\\|individual-reports-modal\\\\|monthly-reports-modal\\\\|fy-reports-modal\" \"d:/riya personal/RAPP/Sadhana Tracker/Sadhana Tracker- Coordinators Position based based/Sakhi-Sang-Attendence/js/ui-analytics.js\")"
+      "Bash(grep -nB1 \"openMonthlyReports\\\\|openFYReports\\\\|openIndividualReports\\\\|individual-reports-modal\\\\|monthly-reports-modal\\\\|fy-reports-modal\" \"d:/riya personal/RAPP/Sadhana Tracker/Sadhana Tracker- Coordinators Position based based/Sakhi-Sang-Attendence/js/ui-analytics.js\")",
+      "Bash(powershell -Command \"\\(Get-Content 'js/config.js'\\) -replace 'Visakha', 'Vishakha' | Set-Content 'js/config.js'\")",
+      "Bash(powershell -Command \"\\(Get-Content 'index.html'\\) -replace 'Visakha', 'Vishakha' | Set-Content 'index.html'\")"
     ]
   }
 }
