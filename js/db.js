@@ -513,7 +513,7 @@ const DB = {
   async migrateTeamNameOnce(oldName, newName) {
     const migKey = `teamRename_${oldName}_${newName}`;
     const migDoc = await fdb.collection('settings').doc('migrations').get();
-    if (migDoc.exists && migDoc.data()[migKey]) return; // already done
+    if (migDoc.exists && migDoc.data()[migKey]) return false; // already done
 
     const BATCH = 400;
     const collections = ['devotees','users','callingStatus','callingSubmissions',
@@ -543,6 +543,7 @@ const DB = {
 
     // Mark as done
     await fdb.collection('settings').doc('migrations').set({ [migKey]: true }, { merge: true });
+    return true;
   },
 
   // When a coordinator renames themselves, propagate the new name to every

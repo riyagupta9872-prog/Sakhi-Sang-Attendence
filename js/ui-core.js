@@ -65,8 +65,10 @@ auth.onAuthStateChanged(async (user) => {
     // Super admin only: keep a live count of pending sign-up requests.
     if (AppState.userRole === 'superAdmin') {
       subscribePendingSignups();
-      // One-time data migrations — run silently in background
-      DB.migrateTeamNameOnce('Visakha', 'Vishakha').catch(() => {});
+      // One-time data migrations — bust cache after so UI updates immediately
+      DB.migrateTeamNameOnce('Visakha', 'Vishakha').then(migrated => {
+        if (migrated) { DevoteeCache.bust(); if (typeof loadDashboard === 'function') loadDashboard(); }
+      }).catch(() => {});
     }
   } catch (e) {
     if (e.code === 'permission-denied') {
@@ -822,7 +824,7 @@ function applyRoleUI() {
   pill.textContent = role === 'superAdmin' ? 'Super Admin'
     : role === 'teamAdmin' ? (team ? `${team} - Coordinator` : 'Coordinator')
     : (team ? `${team} - ${pos || 'Facilitator'}` : (pos || 'Facilitator'));
-  pill.style.background = role === 'superAdmin' ? 'rgba(201,168,76,.5)' : role === 'teamAdmin' ? 'rgba(82,183,136,.4)' : 'rgba(82,183,136,.25)';
+  pill.style.background = role === 'superAdmin' ? '#fde68a' : role === 'teamAdmin' ? '#fef9c3' : '#fffbeb';
 
   if (role === 'superAdmin') {
     document.getElementById('admin-gear-btn')?.classList.remove('hidden');

@@ -5,27 +5,28 @@
 
 /* ── DESIGN TOKENS ── */
 :root {
-  /* Brand */
-  --brand:         #1a5c3a;
-  --brand-mid:     #2d7a52;
-  --brand-light:   #52b788;
-  --brand-subtle:  #f0fdf4;
+  /* Brand — warm amber/saffron */
+  --brand:         #c8860a;
+  --brand-mid:     #d99b16;
+  --brand-light:   #f0b429;
+  --brand-subtle:  #fffbeb;
 
   /* Backward-compat aliases */
-  --primary:        #1a5c3a;
-  --primary-hover:  #154d30;
-  --primary-light:  #2d7a52;
-  --secondary:      #52b788;
-  --accent:         #95d5b2;
-  --accent-light:   #d8f3dc;
+  --primary:        #c8860a;
+  --primary-hover:  #a86e08;
+  --primary-light:  #d99b16;
+  --secondary:      #f0b429;
+  --accent:         #f5c842;
+  --accent-light:   #fef9c3;
+  --color-primary:  #c8860a;
 
   /* Backgrounds */
-  --bg:             #f9fafb;
+  --bg:             #fffdf5;
   --bg-card:        #ffffff;
-  --bg-subtle:      #f3f4f6;
+  --bg-subtle:      #fef9c3;
 
   /* Text */
-  --text:           #111827;
+  --text:           #1a1a1a;
   --text-muted:     #6b7280;
   --text-light:     #9ca3af;
 
@@ -40,7 +41,7 @@
   --info-light:     #dbeafe;
 
   /* Gold */
-  --gold:           #d97706;
+  --gold:           #c8860a;
   --gold-light:     #fef3c7;
 
   /* Purple */
@@ -48,25 +49,25 @@
   --purple-light:   #ede9fe;
 
   /* Neutral scale */
-  --gray-50:        #f9fafb;
-  --gray-100:       #f3f4f6;
-  --gray-200:       #e5e7eb;
-  --gray-300:       #d1d5db;
+  --gray-50:        #fffdf5;
+  --gray-100:       #fef9c3;
+  --gray-200:       #fde68a;
+  --gray-300:       #fcd34d;
   --gray-500:       #6b7280;
   --gray-700:       #374151;
-  --gray-900:       #111827;
+  --gray-900:       #1a1a1a;
 
   /* Borders */
-  --border:         #e5e7eb;
-  --border-subtle:  #f3f4f6;
+  --border:         #fde68a;
+  --border-subtle:  #fef9c3;
 
-  /* Shadows — multi-layer Tailwind style */
+  /* Shadows */
   --shadow-xs:      0 1px 2px rgba(0,0,0,.05);
-  --shadow-sm:      0 1px 3px rgba(0,0,0,.1), 0 1px 2px rgba(0,0,0,.06);
-  --shadow:         0 4px 6px -1px rgba(0,0,0,.1), 0 2px 4px -1px rgba(0,0,0,.06);
-  --shadow-md:      0 10px 15px -3px rgba(0,0,0,.1), 0 4px 6px -2px rgba(0,0,0,.05);
-  --shadow-lg:      0 20px 25px -5px rgba(0,0,0,.1), 0 10px 10px -5px rgba(0,0,0,.04);
-  --shadow-brand:   0 4px 14px rgba(26,92,58,.25);
+  --shadow-sm:      0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+  --shadow:         0 4px 6px -1px rgba(0,0,0,.08), 0 2px 4px -1px rgba(0,0,0,.04);
+  --shadow-md:      0 10px 15px -3px rgba(0,0,0,.08), 0 4px 6px -2px rgba(0,0,0,.04);
+  --shadow-lg:      0 20px 25px -5px rgba(0,0,0,.08), 0 10px 10px -5px rgba(0,0,0,.03);
+  --shadow-brand:   0 4px 14px rgba(200,134,10,.25);
 
   /* Radii */
   --radius-xs:      4px;
@@ -132,12 +133,12 @@ h3 { font-size: .93rem; }
    HEADER
    ════════════════════════════════════════════════════ */
 .app-header {
-  background: linear-gradient(135deg, #1a5c3a 0%, #1e6b45 55%, #2d7a52 100%);
+  background: linear-gradient(135deg, #ffffff 0%, #fffdf0 55%, #fffbeb 100%);
+  border-bottom: 2px solid #fde68a;
   height: var(--header-h);
-  /* App-shell flex item — never scrolls (no sticky needed). */
   flex: 0 0 var(--header-h);
   z-index: 100;
-  box-shadow: 0 2px 16px rgba(26,92,58,.3);
+  box-shadow: 0 2px 12px rgba(200,134,10,.12);
 }
 .header-content {
   max-width: 1280px; margin: 0 auto;
@@ -151,17 +152,16 @@ h3 { font-size: .93rem; }
   width: 42px; height: 42px; border-radius: 50%;
   object-fit: cover;
   flex-shrink: 0;
-  border: 1.5px solid rgba(255,255,255,.4);
-  box-shadow: 0 2px 8px rgba(0,0,0,.25);
+  border: 1.5px solid #fde68a;
+  box-shadow: 0 2px 8px rgba(200,134,10,.2);
 }
 .header-text h1 {
-  color: #fff;
+  color: #92400e;
   font-size: 1.2rem;
   letter-spacing: .3px;
-  text-shadow: 0 1px 3px rgba(0,0,0,.15);
 }
 .header-text p {
-  color: rgba(255,255,255,.6);
+  color: #a16207;
   font-size: .72rem;
   font-weight: 400;
   letter-spacing: .1px;
@@ -170,11 +170,11 @@ h3 { font-size: .93rem; }
 /* Header right */
 .header-right { display: flex; align-items: center; gap: .65rem; flex-shrink: 0; }
 .header-date {
-  color: rgba(255,255,255,.85);
+  color: #92400e;
   font-size: .78rem;
   display: flex; align-items: center; gap: .4rem;
-  background: rgba(255,255,255,.12);
-  border: 1px solid rgba(255,255,255,.18);
+  background: #fef9c3;
+  border: 1px solid #fde68a;
   border-radius: var(--radius-full);
   padding: .3rem .8rem;
   white-space: nowrap;
@@ -188,7 +188,7 @@ h3 { font-size: .93rem; }
   line-height: 1.25; max-width: 120px;
 }
 .header-user-name {
-  color: rgba(255,255,255,.95);
+  color: #1a1a1a;
   font-size: .78rem; font-weight: 700;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -197,12 +197,12 @@ h3 { font-size: .93rem; }
 
 .header-avatar {
   width: 36px; height: 36px; border-radius: 50%;
-  background: rgba(255,255,255,.2);
-  border: 2px solid rgba(255,255,255,.35);
+  background: #fef9c3;
+  border: 2px solid #fde68a;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; flex-shrink: 0; overflow: hidden;
   transition: border-color .2s, transform .15s, box-shadow .2s;
-  font-size: .75rem; font-weight: 700; color: #fff;
+  font-size: .75rem; font-weight: 700; color: #92400e;
 }
 .header-avatar:hover {
   border-color: var(--gold-light);
@@ -214,37 +214,37 @@ h3 { font-size: .93rem; }
   padding: .12rem .5rem;
   border-radius: var(--radius-full);
   font-size: .67rem; font-weight: 700;
-  background: rgba(255,255,255,.2);
-  border: 1px solid rgba(255,255,255,.25);
-  color: rgba(255,255,255,.95);
+  background: #fef9c3;
+  border: 1px solid #fde68a;
+  color: #92400e;
   white-space: nowrap;
   letter-spacing: .2px;
 }
 
 .btn-logout {
   width: 32px; height: 32px; border-radius: 50%;
-  border: 1.5px solid rgba(255,255,255,.28);
-  background: transparent; color: rgba(255,255,255,.85);
+  border: 1.5px solid #fde68a;
+  background: transparent; color: #92400e;
   font-size: .85rem; cursor: pointer; transition: all .18s;
   display: flex; align-items: center; justify-content: center;
 }
 .btn-logout:hover {
-  background: rgba(255,255,255,.15);
-  border-color: rgba(255,255,255,.5);
-  color: #fff;
+  background: #fef9c3;
+  border-color: #c8860a;
+  color: #c8860a;
 }
 
 .btn-admin-gear {
   width: 32px; height: 32px; border-radius: 50%; border: none;
-  background: rgba(255,255,255,.12);
-  border: 1px solid rgba(255,255,255,.2);
-  color: rgba(255,255,255,.85);
+  background: #fef9c3;
+  border: 1px solid #fde68a;
+  color: #92400e;
   cursor: pointer; font-size: .82rem; transition: all .2s;
   display: flex; align-items: center; justify-content: center;
 }
 .btn-admin-gear:hover {
-  background: rgba(255,255,255,.22);
-  color: #fff;
+  background: #fde68a;
+  color: #92400e;
   transform: rotate(30deg);
 }
 
@@ -2318,7 +2318,7 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
    ════════════════════════════════════════════════════ */
 .auth-screen {
   position: fixed; inset: 0; z-index: 1000;
-  background: linear-gradient(135deg, var(--brand) 0%, #1e6b45 55%, var(--brand-mid) 100%);
+  background: linear-gradient(135deg, #fffbeb 0%, #fef9c3 55%, #fde68a 100%);
   display: flex; align-items: flex-start; justify-content: center;
   padding: 1.5rem; overflow-y: auto;
 }
