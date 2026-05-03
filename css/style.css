@@ -1500,6 +1500,15 @@ button.calling-stat:hover {
 button.calling-stat:active { transform: translateY(0); }
 .calling-stat strong { color: var(--brand); font-size: 1rem; }
 
+/* Accuracy report — absent count button (used in Calling tab + Attendance tab) */
+.acc-absent-btn {
+  background: #fce4ec; color: #c62828; font-weight: 700;
+  border: none; cursor: pointer;
+  padding: .1rem .55rem; border-radius: 4px; font-size: .82rem;
+  transition: background .12s;
+}
+.acc-absent-btn:hover { background: #f8bbd0; }
+
 /* Submission Report */
 .sr-legend { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; font-size: .79rem; margin-bottom: .75rem; }
 .sr-leg-ok   { color: var(--success); font-weight: 600; }

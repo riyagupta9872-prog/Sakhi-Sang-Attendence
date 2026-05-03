@@ -707,6 +707,7 @@
           <button class="sub-tab" onclick="switchSubTab(this,'serious-analysis')"><i class="fas fa-star"></i> Serious</button>
           <button class="sub-tab" onclick="switchSubTab(this,'team-leaderboard')"><i class="fas fa-trophy"></i> Teams</button>
           <button class="sub-tab" onclick="switchSubTab(this,'trends')"><i class="fas fa-chart-line"></i> Trends</button>
+          <button class="sub-tab" onclick="switchSubTab(this,'att-accuracy'); loadAttAccuracyReport()"><i class="fas fa-bullseye"></i> Accuracy</button>
         </div>
         <div id="subtab-attendance-detail" class="sub-panel active">
           <div class="sheet-controls">
@@ -726,6 +727,9 @@
         <div id="subtab-team-leaderboard" class="sub-panel"><div id="team-leaderboard-content"></div></div>
         <div id="subtab-trends" class="sub-panel">
           <div class="chart-container"><canvas id="trends-chart"></canvas></div>
+        </div>
+        <div id="subtab-att-accuracy" class="sub-panel">
+          <div id="att-accuracy-content"></div>
         </div>
       </div>
     </div>

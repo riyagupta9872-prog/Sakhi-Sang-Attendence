@@ -862,10 +862,8 @@ async function _loadAccuracyReport(week, el) {
     teams.forEach(team => {
       const t = report[team];
       grandYes += t.yes; grandAbsent += t.yesNotCame;
-      const teamAbsent = t.yesNotCame;
-      const teamAbsentBtn = teamAbsent > 0
-        ? `<button style="background:#fce4ec;color:#c62828;font-weight:700;border:none;cursor:pointer;padding:.1rem .6rem;border-radius:4px;font-size:.82rem"
-             onclick='openAbsentModal("${week}",null,"${team.replace(/"/g,'&quot;')}")'>${teamAbsent}</button>`
+      const teamAbsentBtn = t.yesNotCame > 0
+        ? `<button class="acc-absent-btn" onclick='openAbsentModal("${week}",null,"${team.replace(/"/g,'&quot;')}")'>${t.yesNotCame}</button>`
         : `<span style="color:var(--text-muted)">0</span>`;
 
       bodyRows += `<tr style="background:var(--accent-light);font-weight:700;font-size:.83rem">
@@ -877,8 +875,7 @@ async function _loadAccuracyReport(week, el) {
 
       Object.entries(t.callers).forEach(([caller, s]) => {
         const absentBtn = s.yesNotCame > 0
-          ? `<button style="background:#fce4ec;color:#c62828;font-weight:700;border:none;cursor:pointer;padding:.1rem .6rem;border-radius:4px;font-size:.82rem"
-               onclick='openAbsentModal("${week}","${caller.replace(/"/g,'&quot;')}","${team.replace(/"/g,'&quot;')}")'>${s.yesNotCame}</button>`
+          ? `<button class="acc-absent-btn" onclick='openAbsentModal("${week}","${caller.replace(/"/g,'&quot;')}","${team.replace(/"/g,'&quot;')}")'>${s.yesNotCame}</button>`
           : `<span style="color:var(--text-muted)">0</span>`;
         bodyRows += `<tr style="font-size:.82rem">
           <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}</td>
@@ -890,8 +887,7 @@ async function _loadAccuracyReport(week, el) {
     });
 
     const grandAbsentBtn = grandAbsent > 0
-      ? `<button style="background:#fce4ec;color:#c62828;font-weight:700;border:none;cursor:pointer;padding:.1rem .6rem;border-radius:4px;font-size:.82rem"
-           onclick='openAbsentModal("${week}",null,null)'>${grandAbsent}</button>`
+      ? `<button class="acc-absent-btn" onclick='openAbsentModal("${week}",null,null)'>${grandAbsent}</button>`
       : `<span>0</span>`;
 
     el.innerHTML = `<div style="font-size:.84rem;margin-bottom:.6rem">
@@ -899,9 +895,9 @@ async function _loadAccuracyReport(week, el) {
       <span style="margin-left:.75rem;font-size:.8rem;color:var(--text-muted)">Click a number to see the list</span>
     </div>
     <div class="table-scroll">
-    <table class="calling-table" style="margin:0">
+    <table class="calling-table cs-report-table" style="margin:0;min-width:360px">
       <thead><tr>
-        <th style="min-width:160px">Team / Calling By</th>
+        <th style="min-width:130px">Team / Calling By</th>
         <th style="text-align:center;color:var(--success)">Said Yes</th>
         <th style="text-align:center;color:var(--success)">Came</th>
         <th style="text-align:center;color:#c62828">Absent</th>

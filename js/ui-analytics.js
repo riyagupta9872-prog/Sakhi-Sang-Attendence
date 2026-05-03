@@ -251,9 +251,9 @@ async function loadDashboard() {
               <td class="dt-num"><button onclick="openDashboardList('attended', '${r.team.replace(/'/g,"\\'")}')">${r.attended}</button></td>
               <td class="dt-num">${r.target}</td>
               <td class="dt-pct ${pctCls(r.pct)}">${r.pct}%</td>
-              <td class="dt-num">${r.books   || '—'}</td>
-              <td class="dt-num">${r.services|| '—'}</td>
-              <td class="dt-num">${r.regs    || '—'}</td>
+              <td class="dt-num">${r.books    > 0 ? `<button onclick="openActivityDetailModal('books','${r.team.replace(/'/g,"\\'")}')"><i class="fas fa-book" style="font-size:.65rem;margin-right:.2rem"></i>${r.books}</button>`    : '—'}</td>
+              <td class="dt-num">${r.services > 0 ? `<button onclick="openActivityDetailModal('service','${r.team.replace(/'/g,"\\'")}')"><i class="fas fa-hands-helping" style="font-size:.65rem;margin-right:.2rem"></i>${r.services}</button>` : '—'}</td>
+              <td class="dt-num">${r.regs     > 0 ? `<button onclick="openActivityDetailModal('regs','${r.team.replace(/'/g,"\\'")}')"><i class="fas fa-clipboard-check" style="font-size:.65rem;margin-right:.2rem"></i>${r.regs}</button>`     : '—'}</td>
               <td class="dt-num">${r.donation > 0 ? r.donation.toLocaleString('en-IN') : '—'}</td>
             </tr>`).join('')}
             <tr>
@@ -263,16 +263,16 @@ async function loadDashboard() {
               <td class="dt-num">${total.attended}</td>
               <td class="dt-num">${total.target}</td>
               <td class="dt-pct ${pctCls(totalPct)}" style="color:${totalPct>=80?'#86efac':totalPct>=50?'#fde68a':'#fca5a5'}">${totalPct}%</td>
-              <td class="dt-num">${total.books    || '—'}</td>
-              <td class="dt-num">${total.services || '—'}</td>
-              <td class="dt-num">${total.regs     || '—'}</td>
+              <td class="dt-num">${total.books    > 0 ? `<button onclick="openActivityDetailModal('books',null)"><i class="fas fa-book" style="font-size:.65rem;margin-right:.2rem"></i>${total.books}</button>`       : '—'}</td>
+              <td class="dt-num">${total.services > 0 ? `<button onclick="openActivityDetailModal('service',null)"><i class="fas fa-hands-helping" style="font-size:.65rem;margin-right:.2rem"></i>${total.services}</button>` : '—'}</td>
+              <td class="dt-num">${total.regs     > 0 ? `<button onclick="openActivityDetailModal('regs',null)"><i class="fas fa-clipboard-check" style="font-size:.65rem;margin-right:.2rem"></i>${total.regs}</button>`     : '—'}</td>
               <td class="dt-num">${total.donation > 0 ? total.donation.toLocaleString('en-IN') : '—'}</td>
             </tr>
           </tbody>
         </table>
       </div>`;
 
-    AppState._dashboard = { rows, sessionId, sessionDate, callingDate, csByDevotee, presentSet, allDevotees };
+    AppState._dashboard = { rows, sessionId, sessionDate, callingDate, csByDevotee, presentSet, allDevotees, books, services, regs, activityStart, activityEnd };
   } catch (e) {
     if (gen !== _dashGen) return;
     console.error('loadDashboard', e);
@@ -315,6 +315,96 @@ function openDashboardList(kind, team) {
     if (typeof openCareDetail === 'function') openCareDetail('_dashboard');
   }
 }
+// Opens a drill-down modal for Books / Service / Registration cells in the
+// Coordinator Performance grid. team = null means "all teams" (grand total row).
+function openActivityDetailModal(type, team) {
+  const dash = AppState._dashboard;
+  if (!dash) return;
+
+  let rawData, title, colLabel, getVal;
+  if (type === 'books') {
+    rawData   = dash.books    || [];
+    title     = (team ? `${team} — ` : '') + 'Books Distributed';
+    colLabel  = 'Qty';
+    getVal    = b => parseInt(b.quantity) || 0;
+  } else if (type === 'service') {
+    rawData   = dash.services || [];
+    title     = (team ? `${team} — ` : '') + 'Services';
+    colLabel  = 'Description';
+    getVal    = s => s.serviceDescription || '—';
+  } else if (type === 'regs') {
+    rawData   = dash.regs     || [];
+    title     = (team ? `${team} — ` : '') + 'Registrations';
+    colLabel  = 'Count';
+    getVal    = r => parseInt(r.count) || 1;
+  } else return;
+
+  const filtered = team ? rawData.filter(x => x.teamName === team) : rawData;
+  // Sort: by team then by devotee name
+  filtered.sort((a, b) => (a.teamName || '').localeCompare(b.teamName || '') || (a.devoteeName || '').localeCompare(b.devoteeName || ''));
+
+  const periodNote = dash.activityStart
+    ? `<span style="font-size:.73rem;color:var(--text-muted);margin-left:.45rem;font-weight:400">${dash.activityStart} → ${dash.activityEnd}</span>`
+    : '';
+
+  const bodyRows = filtered.map((x, i) => {
+    const name = x.devoteeName || '—';
+    const val  = getVal(x);
+    // For service, show description truncated if very long; for numbers bold the value
+    const valCell = type === 'service'
+      ? `<td style="font-size:.78rem;max-width:160px;word-break:break-word">${val}</td>`
+      : `<td style="text-align:center;font-weight:700">${val}</td>`;
+    return `<tr>
+      <td style="color:var(--text-muted);text-align:center;font-size:.75rem">${i + 1}</td>
+      <td style="font-weight:600;font-size:.82rem">${name}</td>
+      <td>${teamBadge(x.teamName || '—')}</td>
+      ${valCell}
+    </tr>`;
+  }).join('');
+
+  // Aggregate total for the footer
+  const grandVal = type === 'service'
+    ? filtered.length + ' entries'
+    : filtered.reduce((s, x) => s + (parseInt(type === 'books' ? x.quantity : x.count) || (type === 'service' ? 1 : 1)), 0);
+
+  // Remove any existing instance, then mount a fresh dynamic modal
+  document.getElementById('_act-detail-modal')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = '_act-detail-modal';
+  overlay.className = 'modal-overlay';
+  overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); } });
+
+  overlay.innerHTML = `
+    <div class="modal-box" style="max-width:520px;width:95vw">
+      <div class="modal-header">
+        <h2 style="font-size:1rem"><i class="fas fa-list-ul"></i> ${title}${periodNote}</h2>
+        <button class="btn-icon close" onclick="document.getElementById('_act-detail-modal')?.remove()">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div style="overflow:auto;max-height:62vh;padding:.25rem .75rem .75rem">
+        <table class="calling-table cs-report-table" style="margin:0;min-width:300px">
+          <thead><tr>
+            <th style="text-align:center;min-width:28px">#</th>
+            <th>Devotee</th>
+            <th>Team</th>
+            <th style="${type !== 'service' ? 'text-align:center' : ''}">${colLabel}</th>
+          </tr></thead>
+          <tbody>
+            ${bodyRows || '<tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--text-muted)">No entries</td></tr>'}
+          </tbody>
+          ${filtered.length > 0 ? `<tfoot><tr style="background:#1a5c3a;color:#fff;font-weight:700;font-size:.82rem">
+            <td colspan="3">Total</td>
+            <td style="${type !== 'service' ? 'text-align:center' : ''}">${grandVal}</td>
+          </tr></tfoot>` : ''}
+        </table>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  history.pushState(null, '', location.href);
+}
+
 let _reportsCategory = 'attendance';
 
 function switchReportsCategory(cat, btn) {
@@ -359,6 +449,7 @@ function loadReports() {
   if (id === 'team-leaderboard')  loadTeamLeaderboard();
   if (id === 'trends')            loadTrends();
   if (id === 'newcomers-report')  loadNewComersReport();
+  if (id === 'att-accuracy')      loadAttAccuracyReport();
 }
 
 // Reports → Attendance Reports → New Comers
@@ -1335,6 +1426,156 @@ async function loadYearlySheet() {
   } catch (e) {
     console.error('loadYearlySheet', e);
     wrap.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+  }
+}
+
+// ══ ATTENDANCE TAB — ACCURACY REPORT ════════════════════════════════════════
+// Shows: per-team and per-caller breakdown of who said Yes vs who actually came.
+// Logic mirrors _loadAccuracyReport() in ui-calling.js but lives in the
+// Attendance tab so users don't need to switch tabs to check calling accuracy.
+
+async function loadAttAccuracyReport() {
+  const el = document.getElementById('att-accuracy-content');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+
+  try {
+    const sessionId = AppState.currentSessionId;
+    if (!sessionId) {
+      el.innerHTML = '<div class="empty-state"><i class="fas fa-calendar-alt"></i><p>No session selected</p></div>';
+      return;
+    }
+
+    // Derive the calling date (Saturday) that corresponds to this session (Sunday).
+    // The session doc only stores sessionDate — callingDate is always sessionDate − 1 day.
+    // Exception: for the currently configured week, settings/callingWeek may store a
+    // custom callingDate (e.g. if calling was done on a non-Saturday). Use that when available.
+    const [sessSnap, cfgSnap] = await Promise.all([
+      fdb.collection('sessions').doc(sessionId).get(),
+      fdb.collection('settings').doc('callingWeek').get(),
+    ]);
+    const sessionDate = sessSnap.exists ? sessSnap.data().sessionDate : sessionId;
+    const cfg = cfgSnap.exists ? cfgSnap.data() : null;
+
+    let callingDate;
+    if (cfg?.sessionDate === sessionDate && cfg.callingDate) {
+      callingDate = cfg.callingDate;
+    } else {
+      // Standard: calling Saturday = session Sunday − 1 day
+      const d = new Date(sessionDate + 'T00:00:00');
+      d.setDate(d.getDate() - 1);
+      callingDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+
+    const report = await DB.getCallingReport(callingDate);
+    const teams = Object.keys(report).filter(k => !k.startsWith('_'));
+
+    if (!teams.length) {
+      el.innerHTML = '<div class="empty-state"><i class="fas fa-chart-bar"></i><p>No calling data for this session</p></div>';
+      return;
+    }
+
+    if (!report._hasSession) {
+      const sd = new Date(sessionDate + 'T00:00:00');
+      const sdLabel = sd.toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' });
+      el.innerHTML = `<div class="empty-state"><i class="fas fa-clock"></i><p>Attendance not yet marked for ${sdLabel}.<br>Accuracy report is available after the session attendance is entered.</p></div>`;
+      return;
+    }
+
+    const weekLabel = new Date(callingDate + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' });
+    let grandYes = 0, grandCame = 0, grandAbsent = 0;
+    let bodyRows = '';
+
+    teams.forEach(team => {
+      const t = report[team];
+      // Skip teams with no calling data at all
+      if (!t.yes && !t.yesAndCame && !t.yesNotCame) return;
+
+      grandYes    += t.yes;
+      grandCame   += t.yesAndCame;
+      grandAbsent += t.yesNotCame;
+
+      const teamAcc = t.yes > 0 ? Math.round(t.yesAndCame / t.yes * 100) : 0;
+      const teamAccStyle = `font-weight:700;color:${teamAcc >= 80 ? 'var(--success)' : teamAcc >= 50 ? '#f57f17' : '#c62828'}`;
+      const teamAbsentCell = t.yesNotCame > 0
+        ? `<button class="acc-absent-btn" onclick='openAbsentModal("${callingDate}",null,"${team.replace(/"/g,'&quot;')}")'>${t.yesNotCame}</button>`
+        : `<span style="color:var(--text-muted)">0</span>`;
+
+      bodyRows += `<tr style="background:var(--accent-light);font-weight:700;font-size:.83rem">
+        <td>${teamBadge(team)}</td>
+        <td style="text-align:center">${t.yes}</td>
+        <td style="text-align:center;color:var(--success)">${t.yesAndCame}</td>
+        <td style="text-align:center">${teamAbsentCell}</td>
+        <td style="${teamAccStyle}">${teamAcc}%</td>
+      </tr>`;
+
+      // Per-caller rows (submitted callers only — unsubmitted have no yesAndCame data)
+      const sortedCallers = Object.entries(t.callers).sort(([,a],[,b]) => {
+        if (a.isCoordinator && !b.isCoordinator) return -1;
+        if (!a.isCoordinator && b.isCoordinator) return 1;
+        return 0;
+      });
+      sortedCallers.forEach(([caller, s]) => {
+        if (!s.submitted) {
+          bodyRows += `<tr style="font-size:.8rem;background:#fff8e1">
+            <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}</td>
+            <td colspan="4" style="color:#c62828;font-size:.78rem"><i class="fas fa-clock"></i> Not Submitted — accuracy unavailable</td>
+          </tr>`;
+          return;
+        }
+        const callerAcc = s.yes > 0 ? Math.round(s.yesAndCame / s.yes * 100) : null;
+        const callerAccStyle = callerAcc === null ? 'color:var(--text-muted)' :
+          `color:${callerAcc >= 80 ? 'var(--success)' : callerAcc >= 50 ? '#f57f17' : '#c62828'}`;
+        const callerAbsentCell = s.yesNotCame > 0
+          ? `<button class="acc-absent-btn" onclick='openAbsentModal("${callingDate}","${caller.replace(/"/g,'&quot;')}","${team.replace(/"/g,'&quot;')}")'>${s.yesNotCame}</button>`
+          : `<span style="color:var(--text-muted)">0</span>`;
+        bodyRows += `<tr style="font-size:.82rem">
+          <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}</td>
+          <td style="text-align:center">${s.yes}</td>
+          <td style="text-align:center;color:var(--success)">${s.yesAndCame}</td>
+          <td style="text-align:center">${callerAbsentCell}</td>
+          <td style="text-align:center;${callerAccStyle}">${callerAcc !== null ? callerAcc + '%' : '—'}</td>
+        </tr>`;
+      });
+    });
+
+    const grandAcc = grandYes > 0 ? Math.round(grandCame / grandYes * 100) : 0;
+    const grandAbsentCell = grandAbsent > 0
+      ? `<button class="acc-absent-btn" onclick='openAbsentModal("${callingDate}",null,null)'>${grandAbsent}</button>`
+      : `<span>0</span>`;
+    const grandAccStyle = `color:${grandAcc >= 80 ? '#a5d6a7' : grandAcc >= 50 ? '#ffe082' : '#ef9a9a'}`;
+
+    el.innerHTML = `
+      <div style="font-size:.84rem;margin-bottom:.55rem">
+        <strong><i class="fas fa-bullseye"></i> Calling Accuracy — ${weekLabel}</strong>
+        <span style="margin-left:.65rem;font-size:.78rem;color:var(--text-muted)">
+          Click an absent count to see who didn't come
+        </span>
+      </div>
+      <div class="table-scroll">
+        <table class="calling-table cs-report-table" style="margin:0;min-width:360px">
+          <thead><tr>
+            <th style="min-width:120px">Team / Calling By</th>
+            <th style="text-align:center;min-width:46px;color:#a5d6a7">Said Yes</th>
+            <th style="text-align:center;min-width:40px;color:#a5d6a7">Came</th>
+            <th style="text-align:center;min-width:46px;color:#ef9a9a">Absent</th>
+            <th style="text-align:center;min-width:52px">Accuracy %</th>
+          </tr></thead>
+          <tbody>
+            ${bodyRows || '<tr><td colspan="5" style="text-align:center;padding:1.5rem;color:var(--text-muted)">No data for this session</td></tr>'}
+            <tr style="background:#1a5c3a;color:#fff;font-weight:700;font-size:.83rem">
+              <td>Grand Total</td>
+              <td style="text-align:center">${grandYes}</td>
+              <td style="text-align:center">${grandCame}</td>
+              <td style="text-align:center">${grandAbsentCell}</td>
+              <td style="text-align:center;${grandAccStyle}">${grandAcc}%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>`;
+  } catch (e) {
+    console.error('loadAttAccuracyReport', e);
+    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load accuracy report</p></div>';
   }
 }
 
