@@ -1591,6 +1591,13 @@ button.calling-stat:active { transform: translateY(0); }
   border-bottom: 1px solid var(--border-subtle);
   vertical-align: middle; font-size: .85rem;
 }
+
+/* Compact overrides for the calling Weekly Report table — makes it
+   fit on mobile without hiding data off-screen to the right. */
+.cs-report-table { min-width: 440px; }
+.cs-report-table th { padding: .38rem .3rem; font-size: .72rem; }
+.cs-report-table td { padding: .3rem .3rem; font-size: .76rem; }
+.cs-report-table td:first-child { white-space: normal; word-break: break-word; max-width: 108px; line-height: 1.25; }
 .calling-table tr:last-child td { border-bottom: none; }
 .calling-table tr:hover td { background: var(--gray-50); }
 .calling-table tr.row-confirmed td { background: #f0fdf4; }

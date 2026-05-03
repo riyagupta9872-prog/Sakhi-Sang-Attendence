@@ -804,17 +804,17 @@ async function _loadCallingSummary(week, el) {
       <strong><i class="fas fa-phone-alt"></i> Calling Summary — ${weekLabel}</strong>
     </div>
     <div class="table-scroll">
-    <table class="calling-table" style="margin:0">
+    <table class="calling-table cs-report-table" style="margin:0;min-width:440px">
       <thead><tr>
-        <th style="min-width:160px">Team / Calling By</th>
-        <th style="min-width:110px">Position</th>
-        <th style="text-align:center">Total</th>
-        <th style="text-align:center">Called</th>
-        <th style="text-align:center;color:#c62828">Not Called</th>
-        <th style="text-align:center;color:var(--success)">Yes</th>
-        <th style="text-align:center;color:#0288d1">Online</th>
-        <th style="text-align:center;color:#f57f17">Festival</th>
-        <th style="text-align:center;color:var(--danger)">Not Interested</th>
+        <th style="min-width:108px">Team / Calling By</th>
+        <th style="min-width:66px">Position</th>
+        <th style="text-align:center;min-width:36px">Total</th>
+        <th style="text-align:center;min-width:38px">Called</th>
+        <th style="text-align:center;min-width:50px;color:#c62828">Not Called</th>
+        <th style="text-align:center;min-width:34px;color:var(--success)">Yes</th>
+        <th style="text-align:center;min-width:38px;color:#0288d1">Online</th>
+        <th style="text-align:center;min-width:38px;color:#f57f17">Festival</th>
+        <th style="text-align:center;min-width:34px;color:var(--danger)">NI</th>
       </tr></thead>
       <tbody>
         ${bodyRows}
