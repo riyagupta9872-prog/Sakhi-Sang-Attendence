@@ -2592,8 +2592,8 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
   align-items: center;
   justify-content: center;
   width: 38px; height: 38px;
-  background: rgba(255,255,255,.1);
-  color: #fff;
+  background: rgba(200,134,10,.08);
+  color: #92400e;
   border: none;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -2601,7 +2601,7 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
   margin-right: .5rem;
   transition: background .15s ease;
 }
-.sidebar-toggle:hover { background: rgba(255,255,255,.22); }
+.sidebar-toggle:hover { background: rgba(200,134,10,.18); }
 .sidebar-toggle { position: relative; }
 .sidebar-badge {
   position: absolute; top: -3px; right: -3px;

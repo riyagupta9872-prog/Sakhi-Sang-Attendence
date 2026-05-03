@@ -384,12 +384,22 @@ const DB = {
     const cfg = cfgSnap.exists ? cfgSnap.data() : null;
     // callingStatus docs use callingDate as weekDate, not sessionDate
     const weekDate = (cfg?.sessionDate === sessionDate) ? (cfg.callingDate || sessionDate) : sessionDate;
-    const [cs, at, allDevotees] = await Promise.all([
+    const [cs, at, allDevotees, submSnap] = await Promise.all([
       fdb.collection('callingStatus').where('weekDate', '==', weekDate).get(),
       fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get(),
       DevoteeCache.all(),
+      fdb.collection('callingSubmissions').where('weekDate', '==', weekDate).get(),
     ]);
-    const confirmed = cs.docs.filter(d => d.data().comingStatus === 'Yes').length;
+    // Only count "Yes" from callers who have submitted — matches the calling report logic
+    // so the attendance "Confirmed" tile and the report "Yes" column show the same number.
+    const submittedCallers = new Set(submSnap.docs.map(d => d.data().userName).filter(Boolean));
+    const devCallerMap = {};
+    allDevotees.forEach(d => { if (d.callingBy) devCallerMap[d.id] = d.callingBy; });
+    const confirmed = cs.docs.filter(d => {
+      if (d.data().comingStatus !== 'Yes') return false;
+      const caller = devCallerMap[d.data().devoteeId];
+      return !caller || submittedCallers.has(caller);
+    }).length;
     const present   = at.size;
     // "New" = anyone marked isNewDevotee on attendance record OR a devotee whose
     // dateOfJoining matches this session date (direct DB additions)
@@ -919,7 +929,7 @@ const DB = {
       const members = active.filter(d => d.teamName === team);
       if (!members.length) return;
       const callers = [...new Set(members.map(d => d.callingBy).filter(Boolean))].sort();
-      result[team] = { total: members.length, ...zeroStats(), callers: {} };
+      result[team] = { total: members.length, ...zeroStats(), callers: {}, unsubmittedTotal: 0 };
       callers.forEach(caller => {
         const sub = members.filter(d => d.callingBy === caller);
         const submitted = submittedCallers.has(caller);
@@ -936,11 +946,15 @@ const DB = {
             else if (cs.callingReason === 'festival_calling') { s.festival++; }
             else if (cs.callingReason === 'not_interested_now') { s.notInterested++; }
           });
+        } else {
+          // Track how many devotees are in unsubmitted lists — they are effectively
+          // unreported and should surface in the "Not Called" count for the team.
+          result[team].unsubmittedTotal += sub.length;
         }
         s.isCoordinator = userRoleMap[caller]?.role === 'teamAdmin';
         s.position = s.isCoordinator ? 'Coordinator' : (userRoleMap[caller]?.position || 'Calling Facilitator');
         result[team].callers[caller] = s;
-        // Roll up to team — only submitted callers contribute to the count
+        // Roll up to team — only submitted callers contribute to the stat counts
         if (submitted) STAT_KEYS.forEach(k => { result[team][k] += s[k]; });
       });
     });

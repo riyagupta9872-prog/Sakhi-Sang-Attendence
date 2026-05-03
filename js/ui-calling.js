@@ -729,19 +729,31 @@ async function _loadCallingSummary(week, el) {
     const weekLabel = formatDate(week);
     let gTotal=0, gCalled=0, gNC=0, gYes=0, gOnline=0, gFestival=0, gNI=0;
     let bodyRows = '';
+    let gUnsubmitted = 0;
 
     teams.forEach((team, ti) => {
       const t = report[team];
-      gTotal += t.total; gCalled += t.called; gNC += t.notCalled;
+      const unsub = t.unsubmittedTotal || 0;
+      // "Effective Not Called" = devotees not recorded by submitted callers
+      //                        + ALL devotees in lists of callers who never submitted
+      const effNC = t.notCalled + unsub;
+      gTotal += t.total; gCalled += t.called; gNC += effNC;
       gYes += t.yes; gOnline += (t.online||0); gFestival += (t.festival||0); gNI += (t.notInterested||0);
+      gUnsubmitted += unsub;
 
       const teamId = 'team-' + ti;
+      // Build "Not Called" cell — show unsubmitted portion separately so the
+      // admin can see at a glance how many are from pending callers.
+      const ncCell = unsub > 0
+        ? `<span style="color:#c62828">${t.notCalled}</span><span style="color:#e65100;font-size:.72rem;margin-left:.2rem" title="${unsub} from unsubmitted callers">+${unsub}⚠</span>`
+        : `<span style="color:#c62828">${t.notCalled}</span>`;
+
       // Team header row — clickable to expand/collapse facilitators
       bodyRows += `<tr class="cs-team-row" data-team-id="${teamId}" style="background:var(--accent-light);font-weight:700;font-size:.83rem;cursor:pointer" onclick="_toggleCSReportTeam('${teamId}', this)">
         <td colspan="2"><i class="fas fa-chevron-right cs-team-chev" style="font-size:.7rem;color:var(--text-muted);margin-right:.4rem"></i>${teamBadge(team)}</td>
         <td style="text-align:center">${t.total}</td>
         <td style="text-align:center">${t.called}</td>
-        <td style="text-align:center;color:#c62828">${t.notCalled}</td>
+        <td style="text-align:center">${ncCell}</td>
         <td style="text-align:center;color:var(--success)">${t.yes}</td>
         <td style="text-align:center;color:#0288d1">${t.online||0}</td>
         <td style="text-align:center;color:#f57f17">${t.festival||0}</td>
@@ -777,12 +789,16 @@ async function _loadCallingSummary(week, el) {
             <td>${posBadge}</td>
             <td style="text-align:center">${s.total}</td>
             <td colspan="6" style="text-align:center;color:#c62828;font-weight:600">
-              <i class="fas fa-clock"></i> Not Submitted — counts excluded from team total
+              <i class="fas fa-clock"></i> Not Submitted — ${s.total} devotees unreported
             </td>
           </tr>`;
         }
       });
     });
+
+    const gcNote = gUnsubmitted > 0
+      ? `<span style="font-size:.72rem;color:#e65100;font-weight:400;margin-left:.4rem">(incl. ${gUnsubmitted} from unsubmitted callers)</span>`
+      : '';
 
     el.innerHTML = `<div style="font-size:.84rem;margin-bottom:.6rem">
       <strong><i class="fas fa-phone-alt"></i> Calling Summary — ${weekLabel}</strong>
@@ -806,7 +822,7 @@ async function _loadCallingSummary(week, el) {
           <td colspan="2">Grand Total</td>
           <td style="text-align:center">${gTotal}</td>
           <td style="text-align:center">${gCalled}</td>
-          <td style="text-align:center">${gNC}</td>
+          <td style="text-align:center">${gNC}${gcNote}</td>
           <td style="text-align:center">${gYes}</td>
           <td style="text-align:center">${gOnline}</td>
           <td style="text-align:center">${gFestival}</td>
