@@ -1099,22 +1099,24 @@ async function loadLateReports() {
     }).join('');
 
     const body = rows.map((r, i) => {
-      const rowCls = r.lateCount >= 4 ? 'sr-row-l4'
-                  : r.lateCount === 3 ? 'sr-row-l3'
-                  : r.lateCount === 2 ? 'sr-row-l2'
-                  : r.lateCount === 1 ? 'sr-row-l1' : '';
+      // Row tint reflects the MOST RECENT week only — avoids misleading pink on
+      // someone who was late historically but submitted on time this week.
+      const lastCell = r.cells[r.cells.length - 1];
+      const rowCls = lastCell?.state === 'late' ? 'sr-row-late-cur' : '';
       const badge = r.isAdmin
         ? `<span class="badge-tc" style="margin-left:.3rem;font-size:.66rem"><i class="fas fa-crown"></i> TC</span>` : '';
+      const lateCellColor = r.lateCount > 0 ? 'var(--danger)' : 'var(--text-muted)';
+      const lateCellBg   = r.lateCount > 2 ? 'background:#fecdd3' : r.lateCount > 0 ? 'background:#fff7ed' : '';
       return `<tr class="${rowCls}">
-        <td style="text-align:center;color:var(--text-muted);font-size:.78rem">${i + 1}</td>
-        <td style="font-weight:600">${r.name}${badge}</td>
+        <td style="text-align:center;color:var(--text-muted)">${i + 1}</td>
+        <td class="sr-name-cell">${r.name}${badge}</td>
         <td>${teamBadge(r.team)}</td>
         ${r.cells.map(c => {
           if (c.state === 'none') return `<td class="sr-cell sr-empty">—</td>`;
           if (c.state === 'late') return `<td class="sr-cell sr-late"><i class="fas fa-exclamation-circle"></i> ${c.text}</td>`;
           return `<td class="sr-cell sr-ok"><i class="fas fa-check-circle"></i> ${c.text}</td>`;
         }).join('')}
-        <td style="text-align:center;font-weight:700;color:${r.lateCount>0 ? 'var(--danger)' : 'var(--text-muted)'}">${r.lateCount}</td>
+        <td style="text-align:center;font-weight:700;color:${lateCellColor};${lateCellBg}">${r.lateCount}</td>
       </tr>`;
     }).join('');
 
@@ -1125,13 +1127,13 @@ async function loadLateReports() {
         <span style="color:var(--text-muted);font-size:.78rem"><i class="fas fa-sort-amount-up"></i> Sorted: most punctual first</span>
       </div>
       <div class="table-scroll">
-        <table class="calling-table sr-table" style="margin:0;min-width:640px">
+        <table class="calling-table sr-table" style="margin:0;min-width:440px">
           <thead><tr>
-            <th style="min-width:36px;text-align:center">#</th>
-            <th style="min-width:160px">Name</th>
-            <th style="min-width:110px">Team</th>
+            <th style="min-width:32px;text-align:center">#</th>
+            <th style="min-width:110px">Name</th>
+            <th style="min-width:68px">Team</th>
             ${weekHeaders}
-            <th style="min-width:60px;text-align:center">Late</th>
+            <th style="min-width:46px;text-align:center">Late</th>
           </tr></thead>
           <tbody>${body || '<tr><td colspan="99" style="text-align:center;padding:1.5rem;color:var(--text-muted)">No data</td></tr>'}</tbody>
         </table>

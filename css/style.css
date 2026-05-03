@@ -1521,30 +1521,39 @@ button.calling-stat:active { transform: translateY(0); }
 }
 
 .sr-table { margin: 0; }
+.sr-table td { padding: .28rem .38rem; font-size: .76rem; }
 .sr-admin-row { background: #fefce8; }
 /* Use .sr-table th.sr-wk-hdr (3-part selector) so it beats the general
    .calling-table th { text-align:left } rule that would otherwise win. */
-.sr-table th.sr-wk-hdr { text-align: center; min-width: 90px; font-size: .78rem; }
-.sr-cell { text-align: center; font-size: .78rem; white-space: nowrap; padding: .38rem .55rem; }
+.sr-table th.sr-wk-hdr { text-align: center; min-width: 78px; font-size: .73rem; }
+.sr-cell { text-align: center; font-size: .75rem; white-space: nowrap; padding: .28rem .38rem; }
 .sr-cell.sr-ok   { color: var(--success); }
 .sr-cell.sr-late { color: #dc2626; font-weight: 700; background: #fff7ed; }
 .sr-cell.sr-empty { color: var(--text-muted); }
 
-/* Lateness severity — darker red = more late weeks */
-.sr-table tr.sr-row-l1 td { background: #fff1f2; }
-.sr-table tr.sr-row-l2 td { background: #ffe4e6; }
-.sr-table tr.sr-row-l3 td { background: #fecdd3; }
-.sr-table tr.sr-row-l4 td { background: #fda4af; }
-.sr-table tr.sr-row-l4 td { color: #7f1d1d; }
+/* Name cell: wraps long names instead of forcing the table wider */
+.sr-name-cell {
+  font-weight: 600;
+  white-space: normal;
+  word-break: break-word;
+  max-width: 110px;
+  line-height: 1.3;
+}
+
+/* Row tint = CURRENT WEEK lateness only (most recent column).
+   Historical late count is visible in the coloured Late cell — no need
+   to tint the whole row for past weeks, which would mislead readers who
+   see a pink row next to a green on-time cell. */
+.sr-table tr.sr-row-late-cur td { background: #fff7ed; }
 
 /* Freeze Name column (2nd) — # column (1st) is already frozen via .calling-table rules.
-   Fix # column to 40px so the Name offset is predictable. */
+   Fix # column to 32px so the Name offset is predictable. */
 .sr-table th:first-child,
-.sr-table td:first-child { width: 40px; min-width: 40px; }
+.sr-table td:first-child { width: 32px; min-width: 32px; }
 .sr-table thead th:nth-child(2),
 .sr-table tbody td:nth-child(2) {
   position: sticky;
-  left: 40px;
+  left: 32px;
   z-index: 2;
   background: #fff;
   box-shadow: 2px 0 4px rgba(0,0,0,.08);
@@ -1554,15 +1563,9 @@ button.calling-stat:active { transform: translateY(0); }
   background: var(--brand);
   box-shadow: 2px 0 4px rgba(0,0,0,.15);
 }
-/* Preserve row highlight colors on frozen # and Name cells */
-.sr-table tr.sr-row-l1 td:nth-child(1),
-.sr-table tr.sr-row-l1 td:nth-child(2) { background: #fff1f2; }
-.sr-table tr.sr-row-l2 td:nth-child(1),
-.sr-table tr.sr-row-l2 td:nth-child(2) { background: #ffe4e6; }
-.sr-table tr.sr-row-l3 td:nth-child(1),
-.sr-table tr.sr-row-l3 td:nth-child(2) { background: #fecdd3; }
-.sr-table tr.sr-row-l4 td:nth-child(1),
-.sr-table tr.sr-row-l4 td:nth-child(2) { background: #fda4af; color: #7f1d1d; }
+/* Preserve late-cur tint on frozen sticky cells */
+.sr-table tr.sr-row-late-cur td:nth-child(1),
+.sr-table tr.sr-row-late-cur td:nth-child(2) { background: #fff7ed; }
 .sr-table tr:hover td:nth-child(1),
 .sr-table tr:hover td:nth-child(2) { background: var(--gray-50); }
 
