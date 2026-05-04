@@ -4,7 +4,28 @@
 const auth = firebase.auth();
 
 auth.onAuthStateChanged(async (user) => {
-  if (!user) { showAuthScreen(); return; }
+  if (!user) {
+    // ── Tear down live Firestore listeners so they don't fire for the next user
+    if (_signupReqUnsub) { _signupReqUnsub(); _signupReqUnsub = null; }
+    _signupReqCache = [];
+
+    // ── Full AppState wipe — prevents role / team / session data leaking to the
+    //    next account that logs in on the same browser tab.
+    Object.assign(AppState, {
+      userRole: null, userTeam: null, userPosition: null,
+      userName: '', userId: null, profilePic: null,
+      isAttSevaDev: false, _sessionExplicit: false,
+      _dashboard: null, _autoSnap: null,
+      callingData: [], attendanceCandidates: {}, sessionsCache: {},
+      filters: { sessionId: null, team: '', callingBy: '', period: 'session', periodAnchor: null },
+    });
+
+    // ── Bust the in-memory devotee cache so the next user re-fetches fresh
+    DevoteeCache.bust();
+
+    showAuthScreen();
+    return;
+  }
   AppState.userId = user.uid;
   try {
     let userDoc = await fdb.collection('users').doc(user.uid).get();
@@ -243,10 +264,13 @@ async function doForgotPassword() {
 
 async function doLogout() {
   if (!confirm('Log out?')) return;
-  // Clear the "Login as Attendance Service Devotee" mode so a normal next
-  // login goes back to the user's actual role.
-  sessionStorage.removeItem('loginAsService');
-  await auth.signOut();
+  sessionStorage.clear(); // wipe all session flags (loginAsService, etc.)
+  await auth.signOut();   // triggers onAuthStateChanged(null) which resets AppState + cache
+  // Hard reload after sign-out: the only guaranteed way to clear ALL module-level
+  // JS state (cache vars in analytics, calling, devotees, etc. across 5 files).
+  // onAuthStateChanged(null) already wiped AppState + DevoteeCache, so the page
+  // that loads will start completely clean.
+  location.reload();
 }
 
 // ── SIGN-UP REQUESTS (super admin) ─────────────────────
@@ -826,12 +850,14 @@ function applyRoleUI() {
     : (team ? `${team} - ${pos || 'Facilitator'}` : (pos || 'Facilitator'));
   pill.style.background = role === 'superAdmin' ? '#fde68a' : role === 'teamAdmin' ? '#fef9c3' : '#fffbeb';
 
-  if (role === 'superAdmin') {
-    document.getElementById('admin-gear-btn')?.classList.remove('hidden');
-    document.getElementById('clear-data-btn')?.classList.remove('hidden');
-  }
+  // Always set both show AND hide — never rely on "was already hidden".
+  // If this runs after an account switch, elements must be explicitly
+  // shown or hidden for the NEW role, not left in the previous role's state.
+  const isSuper = role === 'superAdmin';
+  document.getElementById('admin-gear-btn')?.classList.toggle('hidden', !isSuper);
+  document.getElementById('clear-data-btn')?.classList.toggle('hidden', !isSuper);
   document.querySelectorAll('.super-admin-only').forEach(el => {
-    el.style.display = role === 'superAdmin' ? '' : 'none';
+    el.style.display = isSuper ? '' : 'none';
   });
 
   // serviceDevotee (Facilitator) gets same tab access as teamAdmin — all team tabs
@@ -871,9 +897,12 @@ function applyRoleUI() {
     if (firstBtn && typeof switchTab === 'function') switchTab(firstAllowed, firstBtn);
   }
 
-  // admin-coordinator-only elements stay role-based (Att. Seva flag is ONLY for live attendance)
+  // Both directions: show for admin/coordinator, hide for serviceDevotee.
+  // Without the explicit show branch, switching FROM serviceDevotee TO coordinator
+  // leaves these elements permanently hidden.
+  const isAdminOrCoord = ['superAdmin', 'teamAdmin'].includes(role);
   document.querySelectorAll('.admin-coordinator-only').forEach(el => {
-    if (!['superAdmin','teamAdmin'].includes(role)) el.style.display = 'none';
+    el.style.display = isAdminOrCoord ? '' : 'none';
   });
 
   // Entry-action buttons (Add Books, Add Donation, etc.) are for coordinators only.
