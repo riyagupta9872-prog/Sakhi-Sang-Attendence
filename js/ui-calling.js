@@ -818,8 +818,8 @@ async function _loadCallingSummary(week, el) {
     <div class="table-scroll">
     <table class="calling-table cs-report-table" style="margin:0;min-width:440px">
       <thead><tr>
-        <th style="min-width:108px">Team / Calling By</th>
-        <th style="min-width:66px">Position</th>
+        <th style="min-width:130px">Team / Calling By</th>
+        <th style="min-width:60px">Position</th>
         <th style="text-align:center;min-width:36px">Total</th>
         <th style="text-align:center;min-width:38px">Called</th>
         <th style="text-align:center;min-width:50px;color:#c62828">Not Called</th>
@@ -1349,7 +1349,7 @@ async function loadTeamCallingList() {
     const teamOrder = (typeof TEAMS !== 'undefined') ? TEAMS : Object.keys(teamMap);
     teamOrder.forEach(team => {
       if (!teamMap[team]) return;
-      bodyHtml += `<tr class="ch-team-hdr"><td colspan="7">${(typeof teamBadge === 'function') ? teamBadge(team) : team}</td></tr>`;
+      bodyHtml += `<tr class="ch-team-hdr"><td colspan="99">${(typeof teamBadge === 'function') ? teamBadge(team) : team}</td></tr>`;
       Object.entries(teamMap[team]).sort(([a],[b]) => a.localeCompare(b)).forEach(([caller, devotees]) => {
         const submitted = submittedCallers.has(caller);
         const dot = `<span class="tc-submitted-dot ${submitted ? 'yes' : 'no'}"></span>`;
@@ -1359,7 +1359,7 @@ async function loadTeamCallingList() {
           ? `<span style="font-size:.68rem;background:#e8f5e9;color:#2e7d32;border-radius:3px;padding:.05rem .28rem;margin-left:.3rem">Submitted</span>`
           : '';
         bodyHtml += `<tr class="tc-caller-hdr">
-          <td colspan="7">${dot}<strong>${caller}</strong>${submTag}
+          <td colspan="99">${dot}<strong>${caller}</strong>${submTag}
             <span style="font-size:.72rem;color:var(--text-muted);margin-left:.5rem">${called}/${devotees.length} called · ${yes} coming</span>
           </td>
         </tr>`;
@@ -1376,10 +1376,10 @@ async function loadTeamCallingList() {
         <span style="font-size:.76rem;color:var(--text-muted)">${list.length} devotees · ${submittedCallers.size} callers submitted</span>
       </div>
       <div class="calling-table-wrap">
-        <table class="calling-table">
+        <table class="calling-table tc-table">
           <thead><tr>
-            <th class="cs-num" style="min-width:32px">#</th>
-            <th class="cs-name" style="min-width:140px">Name</th>
+            <th class="cs-num" style="min-width:26px">#</th>
+            <th class="cs-name" style="min-width:120px">Name</th>
             <th>Mobile</th>
             <th style="min-width:80px">Team</th>
             <th style="min-width:100px">Calling By</th>

@@ -608,6 +608,7 @@ h3 { font-size: .93rem; }
   border-radius: var(--radius-full);
   font-size: .7rem; font-weight: 700;
   letter-spacing: .1px;
+  white-space: normal; word-break: break-word;
 }
 .badge-team { background: #dcfce7; color: #15803d; }
 .badge-serious { background: var(--gold-light); color: #92400e; }
@@ -1575,12 +1576,37 @@ button.calling-stat:active { transform: translateY(0); }
 .acc-absent-btn:hover { background: #f8bbd0; }
 
 /* ── Team Calling tab ── */
-.tc-caller-hdr td { background: #f3f4f6; font-weight: 600; font-size: .79rem; padding: .25rem .6rem; border-top: 1px solid var(--border); }
-.tc-submitted-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:.3rem; vertical-align:middle; }
+.tc-caller-hdr td {
+  background: #f3f4f6; font-weight: 600; font-size: .78rem;
+  padding: .22rem .6rem; border-top: 1px solid var(--border);
+  /* Sticky so caller name stays visible while scrolling right */
+  position: sticky; left: 0; z-index: 2;
+}
+.ch-team-hdr td {
+  /* Also sticky left so team badge stays visible */
+  position: sticky; left: 0; z-index: 2;
+}
+.tc-submitted-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:.28rem; vertical-align:middle; }
 .tc-submitted-dot.yes { background: var(--success); }
 .tc-submitted-dot.no  { background: #d1d5db; }
-.tc-name-cell { font-size: .82rem; min-width: 120px; }
+.tc-name-cell { font-size: .8rem; min-width: 110px; }
 .tc-sticky-name { position: sticky; left: 0; z-index: 4; background: var(--brand); }
+
+/* Mobile: hide Team + Calling By columns (shown in group headers already) */
+@media (max-width: 720px) {
+  .tc-table .cs-callingby,
+  .tc-table th:nth-child(5) { display: none; }
+  /* Team column = 4th th/td */
+  .tc-table td:nth-child(4),
+  .tc-table th:nth-child(4) { display: none; }
+  /* Compact rows */
+  .tc-table td { padding: .3rem .45rem; font-size: .78rem; }
+  .tc-table .cs-name { min-width: 110px; }
+  .tc-table .cs-num { width: 26px; min-width: 26px; max-width: 26px; font-size: .75rem; }
+  /* Shrink avatar on mobile */
+  .tc-table .devotee-avatar { width: 24px !important; height: 24px !important; font-size: .6rem !important; }
+  .tc-table td > div[style*="display:flex"] { gap: .25rem !important; }
+}
 
 /* Submission Report */
 .sr-legend { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; font-size: .79rem; margin-bottom: .75rem; }
