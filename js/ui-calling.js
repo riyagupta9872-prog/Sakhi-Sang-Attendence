@@ -445,7 +445,7 @@ function renderCallingList(devotees, locked) {
   const wrap = document.getElementById('calling-list');
   if (!devotees.length) { wrap.innerHTML = '<div class="empty-state"><i class="fas fa-phone-slash"></i><p>No devotees found</p></div>'; return; }
   wrap.innerHTML = `<div class="calling-table-wrap"><table class="calling-table">
-    <thead><tr><th class="cs-num">#</th><th class="cs-name">Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>${locked ? 'Status' : '✓ Coming'}</th><th>Reason &amp; Notes</th></tr></thead>
+    <thead><tr><th class="cs-num">#</th><th class="cs-name">Name</th><th>Mobile</th><th class="cs-team-col">Team</th><th class="cs-callingby">Calling By</th><th>${locked ? 'Status' : '✓ Coming'}</th><th>Reason &amp; Notes</th></tr></thead>
     <tbody>${devotees.map((d, i) => renderCallingRow(d, i + 1, locked)).join('')}</tbody>
   </table></div>`;
 }
@@ -486,7 +486,7 @@ function renderCallingRow(d, i, locked) {
         </div>
       </td>
       <td>${contactIcons(d.mobile)}</td>
-      <td>${teamBadge(d.team_name)}</td>
+      <td class="cs-team-col">${teamBadge(d.team_name)}</td>
       <td class="cs-callingby">${d.calling_by || '—'}</td>
       <td>${statusChip}</td>
       <td><div class="reason-notes-cell">${notesHtml}</div></td>
@@ -1258,7 +1258,7 @@ async function loadCallingHistory() {
       let teamRow = '';
       if (d.teamName !== currentTeam) {
         currentTeam = d.teamName;
-        teamRow = `<tr class="ch-team-hdr"><td colspan="${3 + weeks.length}" style="position:sticky;left:0;z-index:1">${teamBadge(d.teamName)}</td></tr>`;
+        teamRow = `<tr class="ch-team-hdr"><td colspan="${3 + weeks.length}">${teamBadge(d.teamName)}</td></tr>`;
       }
       const cells = d.weeks.map(w => `<td class="ch-cell">${_csCell(w)}</td>`).join('');
       return `${teamRow}<tr class="ch-row">
@@ -1381,8 +1381,8 @@ async function loadTeamCallingList() {
             <th class="cs-num" style="min-width:26px">#</th>
             <th class="cs-name" style="min-width:120px">Name</th>
             <th>Mobile</th>
-            <th style="min-width:80px">Team</th>
-            <th style="min-width:100px">Calling By</th>
+            <th class="cs-team-col" style="min-width:80px">Team</th>
+            <th class="cs-callingby" style="min-width:100px">Calling By</th>
             <th style="min-width:130px">Status</th>
             <th style="min-width:160px">Reason &amp; Notes</th>
           </tr></thead>
