@@ -1,5 +1,15 @@
 /* ══ UI-HOME.JS – Home drawers: Attendance Report, Book Dist, Donation, Registration, Service ══ */
 
+// Returns the session week window: { from: sessionDate (Sunday), to: following Saturday }.
+// Capped at today so we never query future dates.
+function _sessionWeek() {
+  const today = getToday();
+  const from  = AppState.currentSessionId || today;
+  const d = new Date(from + 'T00:00:00'); d.setDate(d.getDate() + 6);
+  const sat = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  return { from, to: sat > today ? today : sat };
+}
+
 // ── HOME INIT ─────────────────────────────────────────
 function loadHome() {
   const greet = document.getElementById('home-greeting');
@@ -213,9 +223,9 @@ async function saveBookDistEntry() {
 }
 
 async function openBookDistReport() {
-  const today = getToday();
-  document.getElementById('bd-rep-from').value = today.slice(0, 7) + '-01';
-  document.getElementById('bd-rep-to').value   = today;
+  const { from, to } = _sessionWeek();
+  document.getElementById('bd-rep-from').value = from;
+  document.getElementById('bd-rep-to').value   = to;
   openModal('home-book-report-modal');
   await loadBookDistReport();
 }
@@ -292,9 +302,9 @@ async function saveDonationEntry() {
 }
 
 async function openDonationReport() {
-  const today = getToday();
-  document.getElementById('don-rep-from').value = today.slice(0, 7) + '-01';
-  document.getElementById('don-rep-to').value   = today;
+  const { from, to } = _sessionWeek();
+  document.getElementById('don-rep-from').value = from;
+  document.getElementById('don-rep-to').value   = to;
   openModal('home-donation-report-modal');
   await loadDonationReport();
 }
@@ -357,9 +367,9 @@ async function saveRegistrationEntry() {
 }
 
 async function openRegistrationReport() {
-  const today = getToday();
-  document.getElementById('reg-rep-from').value = today.slice(0, 7) + '-01';
-  document.getElementById('reg-rep-to').value   = today;
+  const { from, to } = _sessionWeek();
+  document.getElementById('reg-rep-from').value = from;
+  document.getElementById('reg-rep-to').value   = to;
   openModal('home-reg-report-modal');
   await loadRegistrationReport();
 }
@@ -437,9 +447,9 @@ async function saveServiceEntry() {
 }
 
 async function openServiceReport() {
-  const today = getToday();
-  document.getElementById('srv-rep-from').value = today.slice(0, 7) + '-01';
-  document.getElementById('srv-rep-to').value   = today;
+  const { from, to } = _sessionWeek();
+  document.getElementById('srv-rep-from').value = from;
+  document.getElementById('srv-rep-to').value   = to;
   openModal('home-service-report-modal');
   await loadServiceReport();
 }

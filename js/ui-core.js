@@ -1480,10 +1480,11 @@ function _mfbOnFiltersChanged(e) {
   if (tab === 'devotees'     && typeof loadDevotees === 'function')        loadDevotees();
   const _sessionChanged = e?.detail?.before && e.detail.before.sessionId !== AppState.filters.sessionId;
   if (tab === 'calling') {
-    // Reports sub-tab uses the legacy reports refresher; Calls list uses its own.
     if (AppState._callingSubTab === 'reports') {
       _reportsCategory = 'calling';
       if (typeof _refreshAfterFilter === 'function') _refreshAfterFilter();
+    } else if (AppState._callingSubTab === 'history') {
+      loadCallingHistory?.();
     } else if (_sessionChanged) {
       loadCallingStatus?.();
     } else if (typeof filterCallingList === 'function' && AppState.callingData?.length) {
@@ -1835,6 +1836,7 @@ const TAB_VIEWS = {
     { divider: true, label: 'REPORTS' },
     { key: 'weekly',     label: 'Weekly Report',      icon: 'fa-chart-bar' },
     { key: 'submission', label: 'Submission Reports', icon: 'fa-chart-line' },
+    { key: 'history',    label: 'Calling History',    icon: 'fa-history'    },
   ],
   attendance: [
     { key: 'live',      label: 'Live Attendance',  icon: 'fa-check-circle' },
@@ -1845,6 +1847,7 @@ const TAB_VIEWS = {
     { key: 'serious',   label: 'Serious Analysis', icon: 'fa-star' },
     { key: 'teams',     label: 'Team Leaderboard', icon: 'fa-trophy' },
     { key: 'trends',    label: 'Trends',           icon: 'fa-chart-line' },
+    { key: 'accuracy',  label: 'Accuracy',         icon: 'fa-bullseye'   },
   ],
   books:        [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
   service:      [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
@@ -2061,6 +2064,9 @@ async function applyTabView(tab, view) {
     if (view === 'calls') {
       const callsBtn = document.querySelector('#tab-calling .att-sub-tab:nth-child(1)');
       if (callsBtn) switchCallingSubTab(callsBtn, 'calls');
+    } else if (view === 'history') {
+      const histBtn = document.querySelector('#tab-calling .att-sub-tab:nth-child(3)');
+      if (histBtn) switchCallingSubTab(histBtn, 'history');
     } else {
       const reportsBtn = document.querySelector('#tab-calling .att-sub-tab:nth-child(2)');
       if (reportsBtn) switchCallingSubTab(reportsBtn, 'reports');
@@ -2085,13 +2091,15 @@ async function applyTabView(tab, view) {
         serious:    'serious-analysis',
         teams:      'team-leaderboard',
         trends:     'trends',
+        accuracy:   'att-accuracy',
       })[view];
       if (subId) {
         const innerBtn = document.querySelector(`#att-panel-reports .sub-tab[onclick*="'${subId}'"]`);
         if (innerBtn) switchSubTab(innerBtn, subId);
-        if (subId === 'attendance-detail' && typeof loadYearlySheet === 'function') loadYearlySheet();
-        if (subId === 'late-comers'       && typeof loadLateComersReport === 'function') loadLateComersReport();
+        if (subId === 'attendance-detail'  && typeof loadYearlySheet       === 'function') loadYearlySheet();
+        if (subId === 'late-comers'        && typeof loadLateComersReport  === 'function') loadLateComersReport();
         if (subId === 'individual-reports' && typeof _loadIndividualReports === 'function') _loadIndividualReports();
+        if (subId === 'att-accuracy'       && typeof loadAttAccuracyReport  === 'function') loadAttAccuracyReport();
       }
     }
   } else if (['books','service','registration','donation'].includes(tab)) {
@@ -2191,9 +2199,12 @@ function switchCallingSubTab(btn, sub) {
   btn?.classList.add('active');
   document.getElementById('calling-panel-list').classList.toggle('active',    sub === 'calls');
   document.getElementById('calling-panel-reports').classList.toggle('active', sub === 'reports');
+  document.getElementById('calling-panel-history')?.classList.toggle('active', sub === 'history');
   AppState._callingSubTab = sub;
   if (sub === 'calls') {
     loadCallingStatus?.();
+  } else if (sub === 'history') {
+    loadCallingHistory?.();
   } else {
     _reportsCategory = 'calling';
     if (typeof _populateReportWeeks === 'function') _populateReportWeeks().then(() => loadCallingReports?.());

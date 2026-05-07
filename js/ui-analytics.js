@@ -93,14 +93,19 @@ async function loadDashboard() {
       }
     }
 
-    // Activity collections (Books, Services, Registrations, Donations) are
-    // date-stamped per entry. Use a 30-day window ending today (not on the
-    // session date) so entries logged on any day reliably show up — narrower
-    // session-aligned windows accidentally hid logs that lived a few days off.
-    const activityEnd   = today;
-    const activityStart = (() => {
-      const d = new Date(today + 'T00:00:00'); d.setDate(d.getDate() - 30);
+    // Activity window = the 7-day session week: session Sunday → following Saturday.
+    // This matches how coordinators think about their work — books distributed,
+    // services logged, registrations taken are all anchored to the session week.
+    // If no session is resolved, fall back to the current 7-day week ending today.
+    const activityStart = sessionDate || (() => {
+      const d = new Date(today + 'T00:00:00'); d.setDate(d.getDate() - 6);
       return d.toISOString().slice(0, 10);
+    })();
+    const activityEnd = (() => {
+      const d = new Date(activityStart + 'T00:00:00'); d.setDate(d.getDate() + 6);
+      const sat = d.toISOString().slice(0, 10);
+      // Never show a future end date — cap at today
+      return sat > today ? today : sat;
     })();
 
     // Every fetch wrapped via safeQuery (timeout + catch fallback), so one
@@ -213,9 +218,12 @@ async function loadDashboard() {
     const liveLabel = liveSession
       ? new Date(liveSession + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short' })
       : null;
+    const actStartLabel = new Date(activityStart + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short' });
+    const actEndLabel   = new Date(activityEnd   + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short' });
     const subParts = [`<i class="fas fa-clipboard-list" style="font-size:.7rem"></i> Reports for <strong>${sessLabel}</strong>`];
     if (liveLabel) subParts.push(`<i class="fas fa-circle" style="font-size:.45rem;color:#86efac;margin-right:.15rem"></i> Live cycle: <strong>${liveLabel}</strong>`);
     if (filterTeam) subParts.push(`<i class="fas fa-users" style="font-size:.7rem"></i> ${filterTeam}`);
+    subParts.push(`<i class="fas fa-calendar-week" style="font-size:.7rem"></i> Activities: <strong>${actStartLabel} – ${actEndLabel}</strong>`);
     const greetSub = document.getElementById('dash-greet-sub');
     if (greetSub) greetSub.innerHTML = subParts.join(' &nbsp;·&nbsp; ');
     _setText('dash-grid-sub', '');
@@ -1485,7 +1493,9 @@ async function loadAttAccuracyReport() {
       callingDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     }
 
-    const report = await DB.getCallingReport(callingDate);
+    // Pass sessionDate so getCallingReport doesn't have to re-derive it from callingDate+1,
+    // which would be wrong when the calling date is not the standard Saturday before the session.
+    const report = await DB.getCallingReport(callingDate, sessionDate);
     const teams = Object.keys(report).filter(k => !k.startsWith('_'));
 
     if (!teams.length) {
@@ -1795,9 +1805,10 @@ function _renderCMWeek() {
   const currentWkData = gridData.find(w => w.callingDate === currentWeek) || { csMap: {}, atSet: new Set() };
   const histWkData    = gridData.filter(w => w.callingDate !== currentWeek);
 
-  // Include devotees without callingBy so coordinators can see and assign them.
+  // Only show devotees in normal calling mode — exclude online/festival/not_interested
+  // modes since they are managed separately and should not inflate the "Not Called" count.
   const activeDevotees = devotees.filter(d =>
-    d.isActive !== false && !d.callingMode && !d.isNotInterested
+    d.is_active !== false && !d.calling_mode && !d.is_not_interested
   );
 
   function isUncalled(d) {

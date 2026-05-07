@@ -172,6 +172,7 @@ async function openProfileModal(id) {
           <div class="profile-field"><label>Reference By</label><span id="pv-ref-by">${d.reference_by || '—'}</span></div>
           <div class="profile-field"><label>Facilitator</label><span>${d.facilitator || '—'}</span></div>
           <div class="profile-field"><label>Calling By</label><span>${d.calling_by || '—'}</span></div>
+          ${d.remarks ? `<div class="profile-field full"><label><i class="fas fa-sticky-note" style="color:var(--brand);margin-right:.3rem"></i>Remarks</label><span style="white-space:pre-wrap;font-size:.88rem">${d.remarks}</span></div>` : ''}
         </div>
       </div>
 
@@ -362,6 +363,7 @@ function clearDevoteeForm() {
   clearPicker('picker-facilitator', 'f-facilitator');
   clearPicker('picker-reference',   'f-reference');
   clearPicker('picker-calling-by',  'f-calling-by');
+  const fRem = document.getElementById('f-remarks'); if (fRem) fRem.value = '';
   clearFieldError('mobile');
   // Coordinators / facilitators who can only see their own team get that team
   // pre-filled instead of "Other".
@@ -416,6 +418,7 @@ async function populateEditForm(id) {
     _toggleInstrumentField(d.plays_instrument || '');
     const fm = document.getElementById('f-family-members');    if(fm) fm.value = d.family_members || '';
     const fp = document.getElementById('f-family-participants'); if(fp) fp.value = d.family_participants || '';
+    const fr = document.getElementById('f-remarks');            if(fr) fr.value = d.remarks || '';
     clearFieldError('mobile');
   } catch (_) { showToast('Failed to load profile', 'error'); }
 }
@@ -452,6 +455,7 @@ function getFormPayload() {
                             : '',
     wants_kirtan_class:       document.getElementById('f-wants-kirtan').value,
     prior_sessions_attended:  parseInt(document.getElementById('f-prior-sessions')?.value) || 0,
+    remarks:                  (document.getElementById('f-remarks')?.value || '').trim(),
   };
 }
 
