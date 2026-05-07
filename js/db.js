@@ -797,10 +797,11 @@ const DB = {
 
   async getCallingHistory(devoteeId, weeksBefore = 2) {
     const weeks = [];
-    const d = new Date(); const day = d.getDay();
-    d.setDate(d.getDate() - day);
+    // callingStatus uses Saturday as weekDate — snap to the most recent Saturday
+    const d = new Date(); const day = d.getDay(); // 0=Sun … 6=Sat
+    d.setDate(d.getDate() - ((day + 1) % 7)); // step back to Saturday
     for (let i = 0; i < weeksBefore; i++) {
-      weeks.push(d.toISOString().split('T')[0]);
+      weeks.push(localDateStr(d));
       d.setDate(d.getDate() - 7);
     }
     const snaps = await Promise.all(weeks.map(w =>
