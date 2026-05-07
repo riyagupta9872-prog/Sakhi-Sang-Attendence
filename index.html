@@ -543,13 +543,16 @@
     <input type="hidden" id="calling-week">
 
     <div class="att-sub-tabs">
-      <button class="att-sub-tab active" onclick="switchCallingSubTab(this,'calls')">
+      <button id="calling-calls-btn" class="att-sub-tab active" onclick="switchCallingSubTab(this,'calls')">
         <i class="fas fa-phone-alt"></i> Calls
       </button>
-      <button class="att-sub-tab" onclick="switchCallingSubTab(this,'reports')">
+      <button id="calling-team-btn" class="att-sub-tab" onclick="switchCallingSubTab(this,'team-calling')">
+        <i class="fas fa-users"></i> Team Calling
+      </button>
+      <button id="calling-reports-btn" class="att-sub-tab" onclick="switchCallingSubTab(this,'reports')">
         <i class="fas fa-chart-bar"></i> Reports
       </button>
-      <button class="att-sub-tab" onclick="switchCallingSubTab(this,'history')">
+      <button id="calling-history-btn" class="att-sub-tab" onclick="switchCallingSubTab(this,'history')">
         <i class="fas fa-history"></i> Calling History
       </button>
     </div>
@@ -590,6 +593,13 @@
       <div id="calling-stats" class="calling-stats-row"></div>
       <div id="calling-list" class="calling-table-wrap"></div>
       <div id="calling-submit-bar" class="calling-submit-bar"></div>
+    </div>
+
+    <!-- ── TEAM CALLING PANEL ── -->
+    <div id="calling-panel-team" class="att-sub-panel">
+      <div id="calling-panel-team-content">
+        <div class="empty-state"><i class="fas fa-users"></i><p>Loading…</p></div>
+      </div>
     </div>
 
     <!-- ── REPORTS SUB-PANEL (was the standalone Reports tab → calling category) ── -->

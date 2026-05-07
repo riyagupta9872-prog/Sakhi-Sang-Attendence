@@ -897,6 +897,28 @@ function applyRoleUI() {
     if (firstBtn && typeof switchTab === 'function') switchTab(firstAllowed, firstBtn);
   }
 
+  // Calling sub-tab button visibility by role:
+  // "Calls" = personal calling → teamAdmin + serviceDevotee only (superAdmin doesn't do personal calling)
+  // "Team Calling" = oversight view → teamAdmin + superAdmin only
+  document.getElementById('calling-calls-btn')?.classList.toggle('hidden', role === 'superAdmin');
+  document.getElementById('calling-team-btn')?.classList.toggle('hidden', role === 'serviceDevotee');
+
+  // Also update the dropdown menu items for the calling tab
+  ['tab-menu-calling', 'bnav-menu-calling'].forEach(menuId => {
+    const menu = document.getElementById(menuId);
+    if (!menu) return;
+    menu.querySelectorAll('.tab-menu-item').forEach(item => {
+      const view = item.dataset.view;
+      const entry = TAB_VIEWS.calling?.find(it => it.key === view);
+      if (entry?.roles) item.style.display = entry.roles.includes(role) ? '' : 'none';
+    });
+  });
+
+  // superAdmin opens Calling tab → land on Team Calling, not Calls
+  if (role === 'superAdmin' && AppState.currentTab === 'calling') {
+    applyTabView('calling', 'team-calling');
+  }
+
   // Both directions: show for admin/coordinator, hide for serviceDevotee.
   // Without the explicit show branch, switching FROM serviceDevotee TO coordinator
   // leaves these elements permanently hidden.
@@ -1812,10 +1834,11 @@ function switchTab(tab, btn) {
   // applyTabView, so the in-panel sub-tab strips are not needed.
   if (typeof TAB_VIEWS !== 'undefined' && TAB_VIEWS[tab]) {
     if (['books','service','registration','donation'].includes(tab)) loadActivityTab?.(tab);
-    if (tab === 'calling')    loadCallingStatus?.();
     if (tab === 'attendance') loadAttendanceTab?.();
     const lastView = AppState._tabView?.[tab];
-    const defaultView = TAB_VIEWS[tab].find(it => !it.divider)?.key;
+    // superAdmin default on calling tab = team-calling (they have no personal calling list)
+    const roleDefault = (tab === 'calling' && AppState.userRole === 'superAdmin') ? 'team-calling' : null;
+    const defaultView = roleDefault || TAB_VIEWS[tab].find(it => !it.divider && (!it.roles || it.roles.includes(AppState.userRole)))?.key;
     const view = lastView || defaultView;
     if (view) applyTabView(tab, view);
     _pushNavState?.(tab, view);
@@ -1832,11 +1855,12 @@ function switchTab(tab, btn) {
 // opens that view as its own screen and updates the breadcrumb path.
 const TAB_VIEWS = {
   calling: [
-    { key: 'calls',      label: 'Calls',              icon: 'fa-phone-alt' },
+    { key: 'calls',         label: 'Calls',              icon: 'fa-phone-alt', roles: ['teamAdmin','serviceDevotee'] },
+    { key: 'team-calling',  label: 'Team Calling',       icon: 'fa-users',     roles: ['teamAdmin','superAdmin'] },
     { divider: true, label: 'REPORTS' },
-    { key: 'weekly',     label: 'Weekly Report',      icon: 'fa-chart-bar' },
-    { key: 'submission', label: 'Submission Reports', icon: 'fa-chart-line' },
-    { key: 'history',    label: 'Calling History',    icon: 'fa-history'    },
+    { key: 'weekly',        label: 'Weekly Report',      icon: 'fa-chart-bar' },
+    { key: 'submission',    label: 'Submission Reports', icon: 'fa-chart-line' },
+    { key: 'history',       label: 'Calling History',    icon: 'fa-history'   },
   ],
   attendance: [
     { key: 'live',      label: 'Live Attendance',  icon: 'fa-check-circle' },
@@ -2062,14 +2086,17 @@ async function applyTabView(tab, view) {
 
   if (tab === 'calling') {
     if (view === 'calls') {
-      const callsBtn = document.querySelector('#tab-calling .att-sub-tab:nth-child(1)');
-      if (callsBtn) switchCallingSubTab(callsBtn, 'calls');
+      const btn = document.getElementById('calling-calls-btn');
+      if (btn) switchCallingSubTab(btn, 'calls');
+    } else if (view === 'team-calling') {
+      const btn = document.getElementById('calling-team-btn');
+      if (btn) switchCallingSubTab(btn, 'team-calling');
     } else if (view === 'history') {
-      const histBtn = document.querySelector('#tab-calling .att-sub-tab:nth-child(3)');
-      if (histBtn) switchCallingSubTab(histBtn, 'history');
+      const btn = document.getElementById('calling-history-btn');
+      if (btn) switchCallingSubTab(btn, 'history');
     } else {
-      const reportsBtn = document.querySelector('#tab-calling .att-sub-tab:nth-child(2)');
-      if (reportsBtn) switchCallingSubTab(reportsBtn, 'reports');
+      const btn = document.getElementById('calling-reports-btn');
+      if (btn) switchCallingSubTab(btn, 'reports');
       const innerSel = view === 'weekly' ? '#calling-panel-reports .sub-tab:nth-child(1)'
                                           : '#calling-panel-reports .sub-tab:nth-child(2)';
       const innerBtn = document.querySelector(innerSel);
@@ -2144,11 +2171,14 @@ function _buildTabMenus() {
       const menu = document.createElement('div');
       menu.className = 'tab-menu hidden' + (isBnav ? ' tab-menu-bnav' : '');
       menu.id = (isBnav ? 'bnav-menu-' : 'tab-menu-') + tab;
+      const role = AppState?.userRole || '';
       menu.innerHTML = items.map(it => {
         if (it.divider) {
           return `<div class="tab-menu-divider">${it.label || ''}</div>`;
         }
-        return `<button class="tab-menu-item" data-view="${it.key}" onclick="navTabView('${tab}','${it.key}')">
+        // items with a `roles` array are only shown to matching roles
+        const hidden = it.roles && !it.roles.includes(role) ? ' style="display:none"' : '';
+        return `<button class="tab-menu-item" data-view="${it.key}" onclick="navTabView('${tab}','${it.key}')"${hidden}>
           <i class="fas ${it.icon}"></i><span>${it.label}</span>
         </button>`;
       }).join('');
@@ -2197,12 +2227,15 @@ function switchCallingSubTab(btn, sub) {
   const tabs = btn?.parentElement;
   if (tabs) tabs.querySelectorAll('.att-sub-tab').forEach(b => b.classList.remove('active'));
   btn?.classList.add('active');
-  document.getElementById('calling-panel-list').classList.toggle('active',    sub === 'calls');
-  document.getElementById('calling-panel-reports').classList.toggle('active', sub === 'reports');
-  document.getElementById('calling-panel-history')?.classList.toggle('active', sub === 'history');
+  document.getElementById('calling-panel-list')?.classList.toggle('active',       sub === 'calls');
+  document.getElementById('calling-panel-team')?.classList.toggle('active',       sub === 'team-calling');
+  document.getElementById('calling-panel-reports')?.classList.toggle('active',    sub === 'reports');
+  document.getElementById('calling-panel-history')?.classList.toggle('active',    sub === 'history');
   AppState._callingSubTab = sub;
   if (sub === 'calls') {
     loadCallingStatus?.();
+  } else if (sub === 'team-calling') {
+    loadTeamCallingList?.();
   } else if (sub === 'history') {
     loadCallingHistory?.();
   } else {

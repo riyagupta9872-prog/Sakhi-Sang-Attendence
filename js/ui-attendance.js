@@ -72,7 +72,7 @@ function buildSimpleRoster(devotees, teamFilter) {
       <td class="sh-cell sh-center sh-sno sh-freeze sh-f0">${i + 1}</td>
       <td class="sh-cell sh-name sh-freeze sh-f1">${d.name}</td>
       <td class="sh-cell sh-center">${d.mobile || '—'}</td>
-      <td class="sh-cell">${d.referenceBy || ''}</td>
+      <td class="sh-cell sh-ref">${d.referenceBy || ''}</td>
       <td class="sh-cell sh-center">${d.chantingRounds || 0}</td>
       <td class="sh-cell sh-center">${isActive ? '<span class="sh-active">Active</span>' : ''}</td>
       <td class="sh-cell">${d.teamName || ''}</td>
@@ -86,7 +86,7 @@ function buildSimpleRoster(devotees, teamFilter) {
       <th class="sh-header sh-sno sh-freeze sh-f0">Sno</th>
       <th class="sh-header sh-name sh-freeze sh-f1">Name</th>
       <th class="sh-header">Mobile</th>
-      <th class="sh-header">Reference</th>
+      <th class="sh-header sh-ref">Reference</th>
       <th class="sh-header">CR</th>
       <th class="sh-header">Active</th>
       <th class="sh-header">Team</th>
@@ -111,7 +111,7 @@ function buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter, attT
   let h1 = `<th rowspan="2" class="sh-header sh-sno sh-freeze sh-f0">Sno</th>
     <th rowspan="2" class="sh-header sh-name sh-freeze sh-f1">Name</th>
     <th rowspan="2" class="sh-header">Mobile</th>
-    <th rowspan="2" class="sh-header">Reference</th>
+    <th rowspan="2" class="sh-header sh-ref">Reference</th>
     <th rowspan="2" class="sh-header">CR</th>
     <th rowspan="2" class="sh-header">Active</th>
     <th rowspan="2" class="sh-header">Team</th>
@@ -143,7 +143,7 @@ function buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter, attT
     let cells = `<td class="sh-cell sh-center sh-sno sh-freeze sh-f0">${i + 1}</td>
       <td class="sh-cell sh-name sh-freeze sh-f1">${d.name}</td>
       <td class="sh-cell sh-center">${d.mobile || '—'}</td>
-      <td class="sh-cell">${d.referenceBy || ''}</td>
+      <td class="sh-cell sh-ref">${d.referenceBy || ''}</td>
       <td class="sh-cell sh-center">${d.chantingRounds || 0}</td>
       <td class="sh-cell sh-center">${isActive ? '<span class="sh-active">Active</span>' : ''}</td>
       <td class="sh-cell">${d.teamName || ''}</td>

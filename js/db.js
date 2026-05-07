@@ -621,9 +621,8 @@ const DB = {
       }
       return !!(d.callingBy && d.callingBy.trim());
     });
-    if (AppState.userRole !== 'superAdmin') {
-      filtered = filtered.filter(d => d.callingBy === AppState.userName);
-    }
+    // Calls tab is always personal — filter to only this user's assigned devotees
+    filtered = filtered.filter(d => d.callingBy === AppState.userName);
     return filtered.map(d => ({
       ...toSnake(d),
       coming_status:     csMap[d.id]?.comingStatus    || null,
@@ -634,6 +633,48 @@ const DB = {
       updated_at_client: csMap[d.id]?.updatedAtClient || null,
       late_remarks:      csMap[d.id]?.lateRemarks     || null,
     }));
+  },
+
+  // Team Calling tab — all facilitators' calling lists for oversight.
+  // superAdmin: all teams (filtered via master filter bar in UI).
+  // teamAdmin: own team only.
+  async getTeamCallingStatus(weekDate) {
+    const [raw, csSnap, cfgSnap, submSnap] = await Promise.all([
+      DevoteeCache.all(),
+      fdb.collection('callingStatus').where('weekDate', '==', weekDate).get(),
+      fdb.collection('settings').doc('callingWeek').get(),
+      fdb.collection('callingSubmissions').where('weekDate', '==', weekDate).get(),
+    ]);
+    const csMap = {};
+    csSnap.docs.forEach(d => { csMap[d.data().devoteeId] = { id: d.id, ...d.data() }; });
+    const sessionType = cfgSnap.exists ? (cfgSnap.data().sessionType || 'regular') : 'regular';
+    const isFestival  = sessionType === 'festival';
+    const submittedCallers = new Set(submSnap.docs.map(d => d.data().userName).filter(Boolean));
+
+    let filtered = raw.filter(d => {
+      if (d.isNotInterested) return false;
+      if (d.callingMode === 'not_interested') return false;
+      if (d.callingMode === 'online') return false;
+      if (d.callingMode === 'festival') {
+        if (!isFestival) return false;
+        return !!(d.callingBy && d.callingBy.trim());
+      }
+      return !!(d.callingBy && d.callingBy.trim());
+    });
+    // teamAdmin sees only their own team; superAdmin sees all
+    if (AppState.userRole === 'teamAdmin' && AppState.userTeam) {
+      filtered = filtered.filter(d => d.teamName === AppState.userTeam);
+    }
+    const devotees = filtered.map(d => ({
+      ...toSnake(d),
+      coming_status:     csMap[d.id]?.comingStatus    || null,
+      calling_notes:     csMap[d.id]?.callingNotes    || null,
+      calling_reason:    csMap[d.id]?.callingReason   || null,
+      available_from:    csMap[d.id]?.availableFrom   || null,
+      calling_id:        csMap[d.id]?.id              || null,
+      updated_at_client: csMap[d.id]?.updatedAtClient || null,
+    }));
+    return { devotees, submittedCallers };
   },
 
   async getUsersForTeam(team, search = '') {

@@ -542,35 +542,28 @@ async function openCallingHistory(devoteeId, devoteeName) {
       document.getElementById('calling-history-content').innerHTML = '<div class="empty-state"><p>No calling history</p></div>';
     } else {
       document.getElementById('calling-history-content').innerHTML = history.map(h => {
-        // weekDate is the calling date (Saturday). Always display SESSION Sunday date.
-        const sessionDate = (() => {
-          const dd = new Date(h.weekDate + 'T00:00:00');
-          if (dd.getDay() === 6) dd.setDate(dd.getDate() + 1); // Sat → Sun
-          return localDateStr(dd);
-        })();
-        const label = formatDate(sessionDate);
-        const isYes = h.comingStatus === 'Yes';
-        const reason = h.callingReason || '';
+        // Show the calling date (Saturday) exactly as stored — this is when calling happened.
+        const label = formatDate(h.weekDate);
+        const isYes   = h.comingStatus === 'Yes';
+        const reason  = h.callingReason || '';
         const reasonLbl = _reasonLabel(reason);
-        const avail = h.availableFrom ? ` (available from ${formatDate(h.availableFrom)})` : '';
-        const wasCalled = !!(h.comingStatus || reason);
-        const calledBadge = wasCalled
-          ? `<span style="font-size:.69rem;background:#e8f5e9;color:#2e7d32;border-radius:3px;padding:.05rem .28rem;margin-right:.3rem;vertical-align:middle"><i class="fas fa-phone-alt"></i> Called</span>`
-          : '';
+        const avail   = h.availableFrom ? `<div style="font-size:.76rem;color:var(--text-muted);margin-top:.15rem">Available from: ${formatDate(h.availableFrom)}</div>` : '';
+        // Any record (status, reason, OR notes) means calling was attempted
+        const wasCalled = !!(h.comingStatus || reason || h.callingNotes);
         let outcomeHtml;
         if (!wasCalled) {
           outcomeHtml = `<span style="color:var(--text-muted);font-size:.82rem"><i class="fas fa-circle-notch"></i> Not called</span>`;
         } else if (isYes) {
-          outcomeHtml = `${calledBadge}<span style="font-weight:700;color:var(--success)"><i class="fas fa-check-circle"></i> Confirmed Coming</span>`;
+          outcomeHtml = `<span style="font-weight:700;color:var(--success)"><i class="fas fa-check-circle"></i> Confirmed Coming</span>`;
         } else if (reason) {
-          outcomeHtml = `${calledBadge}<span style="font-weight:600;color:#e65100">${reasonLbl}${avail}</span>`;
+          outcomeHtml = `<span style="font-weight:600;color:#e65100">${reasonLbl}</span>`;
         } else {
-          outcomeHtml = `${calledBadge}<span style="color:var(--text-muted)">${h.comingStatus}</span>`;
+          outcomeHtml = '';
         }
         const note = h.callingNotes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-top:.2rem;font-style:italic">"${h.callingNotes}"</div>` : '';
         return `<div style="display:flex;align-items:flex-start;gap:.75rem;padding:.65rem 0;border-bottom:1px solid var(--border-subtle)">
           <div style="min-width:88px;font-size:.8rem;color:var(--text-muted);padding-top:.1rem">${label}</div>
-          <div>${outcomeHtml}${note}</div>
+          <div>${outcomeHtml}${avail}${note}</div>
         </div>`;
       }).join('');
     }
@@ -1225,12 +1218,12 @@ function _csCell(weekEntry) {
   }
   if (cs.callingReason) {
     const lbl = _reasonLabel(cs.callingReason);
-    return `<div class="ch-cell-inner ch-cell-reason"><i class="fas fa-phone-alt"></i> ${lbl}${pencil}${avail}${note}</div>`;
+    return `<div class="ch-cell-inner ch-cell-reason">${lbl}${pencil}${avail}${note}</div>`;
   }
-  // Notes/status added but reason not selected — calling was still done
+  // Notes or status only — show them without any "Called" label
   if (cs.callingNotes || cs.comingStatus) {
-    const label = cs.comingStatus || 'Called';
-    return `<div class="ch-cell-inner ch-cell-reason"><i class="fas fa-phone-alt"></i> ${label}${pencil}${note}</div>`;
+    const label = cs.comingStatus || '';
+    return `<div class="ch-cell-inner ch-cell-reason">${label}${pencil}${note}</div>`;
   }
   return `<div class="ch-cell-inner ch-not-called"><i class="fas fa-circle-notch"></i> Not called</div>`;
 }
@@ -1304,6 +1297,110 @@ async function loadCallingHistory() {
     el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
   }
 }
+
+// ── Team Calling tab — all facilitators grouped by team ──────────────────────
+// superAdmin: sees all teams (master filter bar applies team/caller filter)
+// teamAdmin: sees only their own team's facilitators
+
+async function loadTeamCallingList() {
+  const el = document.getElementById('calling-panel-team-content');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  try {
+    const sessionId = (typeof getFilterSessionId === 'function') ? getFilterSessionId() : null;
+    const weekDate  = sessionId && (typeof resolveCallingDate === 'function')
+      ? await resolveCallingDate(sessionId)
+      : null;
+
+    if (!weekDate) {
+      el.innerHTML = '<div class="empty-state"><i class="fas fa-calendar-alt"></i><p>No session selected</p></div>';
+      return;
+    }
+
+    const teamFilter   = (typeof getFilterTeam      === 'function') ? getFilterTeam()      : '';
+    const callerFilter = (typeof getFilterCallingBy === 'function') ? getFilterCallingBy() : '';
+
+    const { devotees: allDevotees, submittedCallers } = await DB.getTeamCallingStatus(weekDate);
+
+    // Apply master filter bar filters
+    let list = allDevotees;
+    if (teamFilter)   list = list.filter(d => d.team_name   === teamFilter);
+    if (callerFilter) list = list.filter(d => d.calling_by  === callerFilter);
+
+    if (!list.length) {
+      el.innerHTML = '<div class="empty-state"><i class="fas fa-phone-slash"></i><p>No calling data for this week</p></div>';
+      return;
+    }
+
+    // Group: team → caller → devotees
+    const teamMap = {};
+    list.forEach(d => {
+      const team   = d.team_name   || 'Unknown';
+      const caller = d.calling_by  || '—';
+      if (!teamMap[team]) teamMap[team] = {};
+      if (!teamMap[team][caller]) teamMap[team][caller] = [];
+      teamMap[team][caller].push(d);
+    });
+
+    const weekLabel = new Date(weekDate + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' });
+
+    let bodyHtml = '';
+    let rowNum = 0;
+    const teamOrder = (typeof TEAMS !== 'undefined') ? TEAMS : Object.keys(teamMap);
+    teamOrder.forEach(team => {
+      if (!teamMap[team]) return;
+      bodyHtml += `<tr class="ch-team-hdr"><td colspan="7">${(typeof teamBadge === 'function') ? teamBadge(team) : team}</td></tr>`;
+      Object.entries(teamMap[team]).sort(([a],[b]) => a.localeCompare(b)).forEach(([caller, devotees]) => {
+        const submitted = submittedCallers.has(caller);
+        const dot = `<span class="tc-submitted-dot ${submitted ? 'yes' : 'no'}"></span>`;
+        const yes = devotees.filter(d => d.coming_status === 'Yes').length;
+        const called = devotees.filter(d => d.coming_status || d.calling_reason || d.calling_notes).length;
+        const submTag = submitted
+          ? `<span style="font-size:.68rem;background:#e8f5e9;color:#2e7d32;border-radius:3px;padding:.05rem .28rem;margin-left:.3rem">Submitted</span>`
+          : '';
+        bodyHtml += `<tr class="tc-caller-hdr">
+          <td colspan="7">${dot}<strong>${caller}</strong>${submTag}
+            <span style="font-size:.72rem;color:var(--text-muted);margin-left:.5rem">${called}/${devotees.length} called · ${yes} coming</span>
+          </td>
+        </tr>`;
+        // Reuse the exact locked row format from renderCallingRow
+        devotees.sort((a, b) => (a.name || '').localeCompare(b.name || '')).forEach(d => {
+          bodyHtml += renderCallingRow(d, ++rowNum, true);
+        });
+      });
+    });
+
+    el.innerHTML = `
+      <div style="padding:.5rem .75rem .4rem;font-size:.84rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+        <strong><i class="fas fa-users"></i> Team Calling — ${weekLabel}</strong>
+        <span style="font-size:.76rem;color:var(--text-muted)">${list.length} devotees · ${submittedCallers.size} callers submitted</span>
+      </div>
+      <div class="calling-table-wrap">
+        <table class="calling-table">
+          <thead><tr>
+            <th style="min-width:32px">#</th>
+            <th style="min-width:140px">Name</th>
+            <th>Mobile</th>
+            <th style="min-width:80px">Team</th>
+            <th style="min-width:100px">Calling By</th>
+            <th style="min-width:130px">Status</th>
+            <th style="min-width:160px">Reason &amp; Notes</th>
+          </tr></thead>
+          <tbody>${bodyHtml}</tbody>
+        </table>
+      </div>`;
+  } catch (e) {
+    console.error('loadTeamCallingList', e);
+    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+  }
+}
+window.loadTeamCallingList = loadTeamCallingList;
+
+window.addEventListener('filtersChanged', () => {
+  if (AppState.currentTab === 'calling' && AppState._callingSubTab === 'team-calling') {
+    loadTeamCallingList();
+  }
+});
 
 // ── Calling Change History modal ─────────────────────────────────────────────
 // Called from the devotee profile view (Team tab → "Calling Change History" button).
