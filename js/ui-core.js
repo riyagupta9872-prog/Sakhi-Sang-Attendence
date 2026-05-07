@@ -1507,6 +1507,8 @@ function _mfbOnFiltersChanged(e) {
       if (typeof _refreshAfterFilter === 'function') _refreshAfterFilter();
     } else if (AppState._callingSubTab === 'history') {
       loadCallingHistory?.();
+    } else if (AppState._callingSubTab === 'team-calling') {
+      loadTeamCallingList?.();
     } else if (_sessionChanged) {
       loadCallingStatus?.();
     } else if (typeof filterCallingList === 'function' && AppState.callingData?.length) {
