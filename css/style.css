@@ -1604,11 +1604,34 @@ button.calling-stat:active { transform: translateY(0); }
 
 /* ── Global mobile calling table overrides ── */
 @media (max-width: 720px) {
-  /* Smaller base font for all calling tables on mobile */
-  .calling-table td  { font-size: .75rem; padding: .38rem .55rem; }
-  .calling-table th  { font-size: .68rem; padding: .4rem .55rem; }
-  /* Remove forced min-width so hidden columns don't leave dead whitespace */
-  .calling-table     { min-width: 0; }
+  /* Smaller base font + tighter rows for ALL calling tables on mobile */
+  .calling-table      { min-width: 0; }
+  .calling-table td   { font-size: .73rem; padding: .28rem .42rem; }
+  .calling-table th   { font-size: .66rem; padding: .32rem .42rem; }
+
+  /* Stats row — tighter pills */
+  .calling-stats-row  { padding: .4rem; gap: .3rem; margin-bottom: .6rem; }
+  button.calling-stat { padding: .28rem .5rem; font-size: .73rem; gap: .25rem; }
+  .calling-stat strong { font-size: .88rem; }
+
+  /* Devotee name + avatar */
+  .calling-name-link  { font-size: .76rem; }
+  .calling-table .devotee-avatar { width: 24px !important; height: 24px !important; font-size: .58rem !important; }
+  .calling-table td > div[style*="display:flex"] { gap: .22rem !important; }
+
+  /* Coming toggle — compact */
+  .coming-toggle      { font-size: .7rem; padding: .18rem .38rem; gap: .22rem; }
+
+  /* Reason + Notes cells */
+  .reason-notes-cell  { gap: .2rem; min-width: 140px; }
+  .calling-reason-select, .calling-notes-input, .calling-avail-date { font-size: .72rem; padding: .2rem .38rem; }
+
+  /* Calling By column */
+  .cs-callingby       { font-size: .7rem; }
+  .cs-num             { width: 28px; }
+
+  /* Update time */
+  .calling-upd-time   { font-size: .62rem; }
 
   /* Team Calling: hide redundant Team + Calling By columns */
   .tc-table .cs-callingby,
