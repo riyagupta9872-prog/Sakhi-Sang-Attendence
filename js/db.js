@@ -795,22 +795,18 @@ const DB = {
       .sort((a, b) => (b.changedAtISO || b.changedAtClient || '').localeCompare(a.changedAtISO || a.changedAtClient || ''));
   },
 
-  async getCallingHistory(devoteeId, weeksBefore = 2) {
-    const weeks = [];
-    // callingStatus uses Saturday as weekDate — snap to the most recent Saturday
-    const d = new Date(); const day = d.getDay(); // 0=Sun … 6=Sat
-    d.setDate(d.getDate() - ((day + 1) % 7)); // step back to Saturday
-    for (let i = 0; i < weeksBefore; i++) {
-      weeks.push(localDateStr(d));
-      d.setDate(d.getDate() - 7);
-    }
-    const snaps = await Promise.all(weeks.map(w =>
-      fdb.collection('callingStatus').where('devoteeId', '==', devoteeId).where('weekDate', '==', w).limit(1).get()
-    ));
-    return weeks.map((w, i) => {
-      const doc = snaps[i].docs[0];
-      return doc ? { weekDate: w, ...doc.data(), id: doc.id } : { weekDate: w, comingStatus: null };
-    });
+  async getCallingHistory(devoteeId, weeksBefore = 4) {
+    // Fetch ALL callingStatus records for this devotee, sort by weekDate desc,
+    // take the most recent N. This works regardless of whether weekDate is a
+    // Saturday (calling day) or Sunday (session day) — no date-type mismatch.
+    const snap = await fdb.collection('callingStatus')
+      .where('devoteeId', '==', devoteeId)
+      .get();
+    return snap.docs
+      .map(d => ({ weekDate: d.data().weekDate, ...d.data(), id: d.id }))
+      .filter(r => r.weekDate)
+      .sort((a, b) => b.weekDate.localeCompare(a.weekDate))
+      .slice(0, weeksBefore);
   },
 
   async getLateSubmissions(weekDate, afterHour = 21) {

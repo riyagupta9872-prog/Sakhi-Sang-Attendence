@@ -538,23 +538,42 @@ async function openCallingHistory(devoteeId, devoteeName) {
   modal.classList.remove('hidden');
   try {
     const history = await DB.getCallingHistory(devoteeId, 4);
-    document.getElementById('calling-history-content').innerHTML = history.map(h => {
-      const label = formatDate(h.weekDate);
-      const isYes = h.comingStatus === 'Yes';
-      const reason = h.callingReason || '';
-      const reasonLbl = _reasonLabel(reason);
-      const avail = h.availableFrom ? ` (available from ${formatDate(h.availableFrom)})` : '';
-      const statusHtml = isYes
-        ? `<span style="font-weight:700;color:var(--success)"><i class="fas fa-check-circle"></i> Confirmed Coming</span>`
-        : (reason
-            ? `<span style="font-weight:600;color:var(--danger)">${reasonLbl}${avail}</span>`
-            : (h.comingStatus ? `<span style="font-weight:600;color:var(--text-muted)">${h.comingStatus}</span>` : '<span style="color:var(--text-muted)">Not called</span>'));
-      const note = h.callingNotes ? `<div style="font-size:.8rem;color:var(--text-muted);margin-top:.2rem;font-style:italic">"${h.callingNotes}"</div>` : '';
-      return `<div style="display:flex;align-items:flex-start;gap:.75rem;padding:.65rem 0;border-bottom:1px solid var(--border-subtle)">
-        <div style="min-width:80px;font-size:.8rem;color:var(--text-muted)">${label}</div>
-        <div>${statusHtml}${note}</div>
-      </div>`;
-    }).join('') || '<div class="empty-state"><p>No calling history</p></div>';
+    if (!history.length) {
+      document.getElementById('calling-history-content').innerHTML = '<div class="empty-state"><p>No calling history</p></div>';
+    } else {
+      document.getElementById('calling-history-content').innerHTML = history.map(h => {
+        // weekDate is the calling date (Saturday). Always display SESSION Sunday date.
+        const sessionDate = (() => {
+          const dd = new Date(h.weekDate + 'T00:00:00');
+          if (dd.getDay() === 6) dd.setDate(dd.getDate() + 1); // Sat → Sun
+          return localDateStr(dd);
+        })();
+        const label = formatDate(sessionDate);
+        const isYes = h.comingStatus === 'Yes';
+        const reason = h.callingReason || '';
+        const reasonLbl = _reasonLabel(reason);
+        const avail = h.availableFrom ? ` (available from ${formatDate(h.availableFrom)})` : '';
+        const wasCalled = !!(h.comingStatus || reason);
+        const calledBadge = wasCalled
+          ? `<span style="font-size:.69rem;background:#e8f5e9;color:#2e7d32;border-radius:3px;padding:.05rem .28rem;margin-right:.3rem;vertical-align:middle"><i class="fas fa-phone-alt"></i> Called</span>`
+          : '';
+        let outcomeHtml;
+        if (!wasCalled) {
+          outcomeHtml = `<span style="color:var(--text-muted);font-size:.82rem"><i class="fas fa-circle-notch"></i> Not called</span>`;
+        } else if (isYes) {
+          outcomeHtml = `${calledBadge}<span style="font-weight:700;color:var(--success)"><i class="fas fa-check-circle"></i> Confirmed Coming</span>`;
+        } else if (reason) {
+          outcomeHtml = `${calledBadge}<span style="font-weight:600;color:#e65100">${reasonLbl}${avail}</span>`;
+        } else {
+          outcomeHtml = `${calledBadge}<span style="color:var(--text-muted)">${h.comingStatus}</span>`;
+        }
+        const note = h.callingNotes ? `<div style="font-size:.78rem;color:var(--text-muted);margin-top:.2rem;font-style:italic">"${h.callingNotes}"</div>` : '';
+        return `<div style="display:flex;align-items:flex-start;gap:.75rem;padding:.65rem 0;border-bottom:1px solid var(--border-subtle)">
+          <div style="min-width:88px;font-size:.8rem;color:var(--text-muted);padding-top:.1rem">${label}</div>
+          <div>${outcomeHtml}${note}</div>
+        </div>`;
+      }).join('');
+    }
   } catch (_) {
     document.getElementById('calling-history-content').innerHTML = '<div class="empty-state"><p>Failed to load history</p></div>';
   }
@@ -1205,7 +1224,7 @@ function _csCell(weekEntry) {
 }
 
 async function loadCallingHistory() {
-  const el = document.getElementById('calling-history-content');
+  const el = document.getElementById('calling-history-grid-content');
   if (!el) return;
   el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
@@ -1238,7 +1257,7 @@ async function loadCallingHistory() {
       }
       const cells = d.weeks.map(w => `<td class="ch-cell">${_csCell(w)}</td>`).join('');
       return `${teamRow}<tr>
-        <td class="ch-name" onclick="openCallingChangeHistory('${d.id}','${(d.name||'').replace(/'/g,"\\'")}')">
+        <td class="ch-name" onclick="openCallingHistory('${d.id}','${(d.name||'').replace(/'/g,"\\'")}')">
           ${d.name}
         </td>
         <td class="ch-caller" style="font-size:.72rem;color:var(--text-muted)">${d.callingBy || '—'}</td>
