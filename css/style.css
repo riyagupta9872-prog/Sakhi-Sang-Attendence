@@ -1594,10 +1594,7 @@ button.calling-stat:active { transform: translateY(0); }
   /* Sticky so caller name stays visible while scrolling right */
   position: sticky; left: 0; z-index: 2;
 }
-.ch-team-hdr td {
-  /* Also sticky left so team badge stays visible */
-  position: sticky; left: 0; z-index: 2;
-}
+/* .ch-team-hdr td sticky is defined above in the Calling History section (z-index:3) */
 .tc-submitted-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:.28rem; vertical-align:middle; }
 .tc-submitted-dot.yes { background: var(--success); }
 .tc-submitted-dot.no  { background: #d1d5db; }
