@@ -1207,20 +1207,32 @@ const _reasonShort = {
 };
 
 function _csCell(weekEntry) {
+  const pencil = weekEntry.wasEdited
+    ? `<span class="ch-edited" title="Edited after submission">✏</span>`
+    : '';
   if (!weekEntry.cs) {
-    return `<span class="ch-empty">—</span>`;
+    return `<div class="ch-cell-inner ch-not-called"><i class="fas fa-circle-notch"></i> Not called</div>`;
   }
   const cs = weekEntry.cs;
-  const pencil = weekEntry.wasEdited
-    ? `<span class="ch-edited" title="Status was edited after submission">✏</span>`
+  const note = cs.callingNotes
+    ? `<div class="ch-cell-note">"${cs.callingNotes}"</div>`
+    : '';
+  const avail = cs.availableFrom
+    ? `<div class="ch-cell-note">Available from: ${cs.availableFrom}</div>`
     : '';
   if (cs.comingStatus === 'Yes') {
-    return `<span class="ch-yes">✓${pencil}</span>`;
+    return `<div class="ch-cell-inner ch-cell-yes"><i class="fas fa-check-circle"></i> Coming${pencil}${note}</div>`;
   }
   if (cs.callingReason) {
-    return `<span class="ch-reason">${_reasonShort[cs.callingReason] || cs.callingReason}${pencil}</span>`;
+    const lbl = _reasonLabel(cs.callingReason);
+    return `<div class="ch-cell-inner ch-cell-reason"><i class="fas fa-phone-alt"></i> ${lbl}${pencil}${avail}${note}</div>`;
   }
-  return `<span class="ch-empty">—${pencil}</span>`;
+  // Notes/status added but reason not selected — calling was still done
+  if (cs.callingNotes || cs.comingStatus) {
+    const label = cs.comingStatus || 'Called';
+    return `<div class="ch-cell-inner ch-cell-reason"><i class="fas fa-phone-alt"></i> ${label}${pencil}${note}</div>`;
+  }
+  return `<div class="ch-cell-inner ch-not-called"><i class="fas fa-circle-notch"></i> Not called</div>`;
 }
 
 async function loadCallingHistory() {
@@ -1253,14 +1265,14 @@ async function loadCallingHistory() {
       let teamRow = '';
       if (d.teamName !== currentTeam) {
         currentTeam = d.teamName;
-        teamRow = `<tr class="ch-team-hdr"><td colspan="${3 + weeks.length}">${teamBadge(d.teamName)}</td></tr>`;
+        teamRow = `<tr class="ch-team-hdr"><td colspan="${3 + weeks.length}" style="position:sticky;left:0;z-index:1">${teamBadge(d.teamName)}</td></tr>`;
       }
       const cells = d.weeks.map(w => `<td class="ch-cell">${_csCell(w)}</td>`).join('');
-      return `${teamRow}<tr>
-        <td class="ch-name" onclick="openCallingHistory('${d.id}','${(d.name||'').replace(/'/g,"\\'")}')">
+      return `${teamRow}<tr class="ch-row">
+        <td class="ch-name ch-sticky-name" onclick="openCallingHistory('${d.id}','${(d.name||'').replace(/'/g,"\\'")}')">
           ${d.name}
         </td>
-        <td class="ch-caller" style="font-size:.72rem;color:var(--text-muted)">${d.callingBy || '—'}</td>
+        <td class="ch-sticky-caller ch-caller-cell">${d.callingBy || '—'}</td>
         ${cells}
       </tr>`;
     }).join('');
@@ -1277,11 +1289,11 @@ async function loadCallingHistory() {
         <strong><i class="fas fa-history"></i> Last 4 Weeks — Calling History</strong>
         <span>${editLegend}</span>
       </div>
-      <div class="table-scroll" style="max-height:calc(100svh - 220px);overflow:auto">
-        <table class="calling-table ch-table" style="margin:0;min-width:420px">
+      <div class="ch-scroll-wrap">
+        <table class="calling-table ch-table">
           <thead><tr>
-            <th style="min-width:120px">Devotee</th>
-            <th style="min-width:72px">Called By</th>
+            <th class="ch-sticky-name ch-hdr-name">Devotee</th>
+            <th class="ch-sticky-caller ch-hdr-caller">Called By</th>
             ${weekHeaders}
           </tr></thead>
           <tbody>${bodyRows}</tbody>

@@ -1503,18 +1503,54 @@ button.calling-stat:active { transform: translateY(0); }
 /* ── Calling History 4-week grid ─────────────────────────────────────────── */
 .ch-table td, .ch-table th { padding: .28rem .4rem; font-size: .78rem; }
 .ch-table th { font-size: .72rem; }
-.ch-wk-hdr { text-align: center; min-width: 62px; line-height: 1.3; }
+/* ── Calling History Grid ── */
+.ch-scroll-wrap {
+  overflow-x: auto;
+  max-height: calc(100svh - 220px);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ch-table { margin: 0; border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; }
+.ch-table th, .ch-table td { border-bottom: 1px solid var(--border); }
+
+/* Frozen name column */
+.ch-sticky-name {
+  position: sticky; left: 0; z-index: 2;
+  background: #fff; min-width: 130px; max-width: 150px;
+  white-space: normal; word-break: break-word;
+  box-shadow: 2px 0 4px rgba(0,0,0,.06);
+}
+/* Frozen caller column sits right after name */
+.ch-sticky-caller {
+  position: sticky; left: 150px; z-index: 2;
+  background: #fff; min-width: 120px; max-width: 140px;
+  white-space: normal; word-break: break-word;
+  box-shadow: 2px 0 6px rgba(0,0,0,.07);
+}
+/* Header row is sticky top + sticky left */
+.ch-table thead th { position: sticky; top: 0; z-index: 3; background: var(--brand); color: #fff; }
+.ch-hdr-name   { left: 0;    z-index: 4 !important; }
+.ch-hdr-caller { left: 150px; z-index: 4 !important; }
+
+.ch-name { font-weight: 600; cursor: pointer; font-size: .83rem; }
+.ch-name:hover { color: var(--brand); text-decoration: underline; }
+.ch-caller-cell { font-size: .75rem; color: var(--text-muted); }
+
+.ch-wk-hdr { text-align: left; min-width: 150px; max-width: 200px; line-height: 1.3; }
 .ch-sub-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--success); vertical-align: middle; }
 .ch-team-hdr td { background: var(--accent-light); font-weight: 700; padding: .3rem .5rem; }
-.ch-name {
-  font-weight: 600; cursor: pointer; max-width: 130px;
-  white-space: normal; word-break: break-word; line-height: 1.25;
-}
-.ch-name:hover { color: var(--brand); text-decoration: underline; }
-.ch-cell { text-align: center; }
-.ch-yes    { color: var(--success); font-weight: 700; }
-.ch-reason { color: #f57f17; font-size: .72rem; font-weight: 600; }
-.ch-empty  { color: var(--text-muted); }
+.ch-row:hover td { background: #fafaf8; }
+.ch-row:hover .ch-sticky-name,
+.ch-row:hover .ch-sticky-caller { background: #f5f5f0; }
+
+/* Week data cells */
+.ch-cell { vertical-align: top; padding: .35rem .4rem !important; min-width: 150px; max-width: 200px; }
+.ch-cell-inner { font-size: .78rem; line-height: 1.4; padding: .28rem .4rem; border-radius: 5px; white-space: normal; word-break: break-word; }
+.ch-cell-yes    { background: #e8f5e9; color: #2e7d32; font-weight: 700; }
+.ch-cell-reason { background: #fff3e0; color: #e65100; font-weight: 600; }
+.ch-not-called  { color: #bdbdbd; font-size: .76rem; }
+.ch-cell-note   { font-size: .72rem; color: var(--text-muted); font-style: italic; margin-top: .22rem; }
 .ch-edited {
   display: inline-block; font-size: .62rem;
   background: #fef3c7; color: #92400e;
@@ -1522,7 +1558,6 @@ button.calling-stat:active { transform: translateY(0); }
   margin-left: .18rem; vertical-align: super;
   font-style: normal; cursor: default;
 }
-
 /* Accuracy report — absent count button (used in Calling tab + Attendance tab) */
 .acc-absent-btn {
   background: #fce4ec; color: #c62828; font-weight: 700;
