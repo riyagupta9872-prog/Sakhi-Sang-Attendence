@@ -1865,15 +1865,20 @@ function _renderCMWeek() {
     return histWkData.map(w => {
       const cs = w.csMap[devoteeId];
       const at = w.atSet?.has(devoteeId);
-      let col, tip;
-      if      (at)                           { col = '#2e7d32'; tip = 'Attended class'; }
-      else if (cs?.comingStatus === 'Yes')   { col = '#81c784'; tip = 'Said yes — absent'; }
-      else if (cs?.callingReason)            { col = '#e67e22'; tip = _reasonLabel ? _reasonLabel(cs.callingReason) : cs.callingReason; }
-      else if (cs)                           { col = '#bdbdbd'; tip = 'Called / no outcome'; }
-      else                                   { col = '#eeeeee'; tip = 'Not called'; }
-      return `<td style="text-align:center;padding:.3rem .2rem">
-        <span title="${tip}" style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${col};border:1px solid rgba(0,0,0,.08)"></span>
-      </td>`;
+      let chip;
+      if (at) {
+        chip = `<span style="background:#e8f5e9;color:#2e7d32;padding:.1rem .3rem;border-radius:3px;font-size:.68rem;font-weight:700;white-space:nowrap"><i class="fas fa-check"></i> Came</span>`;
+      } else if (cs?.comingStatus === 'Yes') {
+        chip = `<span style="background:#fff9c4;color:#f57f17;padding:.1rem .3rem;border-radius:3px;font-size:.68rem;white-space:nowrap">Yes—Absent</span>`;
+      } else if (cs?.callingReason) {
+        const lbl = _reasonLabel ? _reasonLabel(cs.callingReason) : cs.callingReason;
+        chip = `<span style="background:#fff3e0;color:#e65100;padding:.1rem .3rem;border-radius:3px;font-size:.68rem;white-space:nowrap">${lbl}</span>`;
+      } else if (cs) {
+        chip = `<span style="color:var(--text-muted);font-size:.68rem;white-space:nowrap">Called</span>`;
+      } else {
+        chip = `<span style="color:#bdbdbd;font-size:.68rem;white-space:nowrap">—</span>`;
+      }
+      return `<td style="text-align:left;padding:.3rem .4rem;min-width:80px">${chip}</td>`;
     }).join('');
   }
 
@@ -2007,11 +2012,7 @@ function _renderCMWeek() {
       </thead>
       <tbody>${rows || '<tr><td colspan="99" style="text-align:center;padding:2rem;color:var(--text-muted)">No devotees match these filters</td></tr>'}</tbody>
     </table></div>
-    <div style="margin-top:.5rem;font-size:.72rem;color:var(--text-muted);display:flex;gap:.75rem;flex-wrap:wrap">
-      <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#2e7d32;margin-right:.25rem;vertical-align:middle"></span>Attended</span>
-      <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#81c784;margin-right:.25rem;vertical-align:middle"></span>Said yes — absent</span>
-      <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#e67e22;margin-right:.25rem;vertical-align:middle"></span>Reason given</span>
-      <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#eeeeee;border:1px solid #ddd;margin-right:.25rem;vertical-align:middle"></span>Not called</span>
+    <div style="margin-top:.5rem;font-size:.72rem;color:var(--text-muted)">
       <span style="background:#fffde7;color:#e65100;padding:.1rem .4rem;border-radius:3px">Yellow rows = not called this week</span>
     </div>`;
 

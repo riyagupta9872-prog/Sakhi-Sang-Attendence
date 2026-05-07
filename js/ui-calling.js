@@ -445,7 +445,7 @@ function renderCallingList(devotees, locked) {
   const wrap = document.getElementById('calling-list');
   if (!devotees.length) { wrap.innerHTML = '<div class="empty-state"><i class="fas fa-phone-slash"></i><p>No devotees found</p></div>'; return; }
   wrap.innerHTML = `<div class="calling-table-wrap"><table class="calling-table">
-    <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>${locked ? 'Status' : '✓ Coming'}</th><th>Reason &amp; Notes</th></tr></thead>
+    <thead><tr><th class="cs-num">#</th><th class="cs-name">Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>${locked ? 'Status' : '✓ Coming'}</th><th>Reason &amp; Notes</th></tr></thead>
     <tbody>${devotees.map((d, i) => renderCallingRow(d, i + 1, locked)).join('')}</tbody>
   </table></div>`;
 }
@@ -477,7 +477,7 @@ function renderCallingRow(d, i, locked) {
       : `<span style="color:var(--text-muted);font-size:.75rem">—</span>`;
     return `<tr data-id="${safeId}" class="${isYes ? 'row-confirmed' : (reason ? 'row-has-reason' : '')}">
       <td class="cs-num">${i}</td>
-      <td>
+      <td class="cs-name">
         <div style="display:flex;align-items:center;gap:.4rem">
           <div class="devotee-avatar" style="width:28px;height:28px;font-size:.65rem;flex-shrink:0">${initials(d.name)}</div>
           <span class="calling-name-link" onclick="openCallingHistory('${safeId}','${safeName}')">
@@ -498,7 +498,7 @@ function renderCallingRow(d, i, locked) {
     ? `<span class="calling-upd-time">${new Date(d.updated_at_client).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true})}</span>` : '';
   return `<tr data-id="${safeId}" class="${isYes ? 'row-confirmed' : (reason ? 'row-has-reason' : '')}">
     <td class="cs-num">${i}</td>
-    <td>
+    <td class="cs-name">
       <div style="display:flex;align-items:center;gap:.4rem">
         <div class="devotee-avatar" style="width:28px;height:28px;font-size:.65rem;flex-shrink:0">${initials(d.name)}</div>
         <span class="calling-name-link" onclick="openCallingHistory('${safeId}','${safeName}')">
@@ -1378,8 +1378,8 @@ async function loadTeamCallingList() {
       <div class="calling-table-wrap">
         <table class="calling-table">
           <thead><tr>
-            <th style="min-width:32px">#</th>
-            <th style="min-width:140px">Name</th>
+            <th class="cs-num" style="min-width:32px">#</th>
+            <th class="cs-name" style="min-width:140px">Name</th>
             <th>Mobile</th>
             <th style="min-width:80px">Team</th>
             <th style="min-width:100px">Calling By</th>

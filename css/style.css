@@ -807,8 +807,15 @@ button.contact-icon { border: none; padding: 0; }
   /* Sub-tabs stay hidden on mobile too — bottom-nav dropdowns drive sub-view
      navigation. Inline sub-tabs would duplicate that. */
 
-  /* Bulk-action bar: tab-nav is hidden so only header-h applies as offset */
-  .cm-bulk-bar { top: calc(var(--header-h, 64px) + 8px); }
+  /* Bulk-action bar: fixed at bottom above the mobile bottom-nav (60px) */
+  .cm-bulk-bar {
+    position: fixed;
+    bottom: 68px;
+    left: .75rem; right: .75rem;
+    top: auto;
+    border-radius: var(--radius);
+    margin: 0;
+  }
 
   /* Attendance sheet: ensure sticky thead uses the correct single-container
      scroll context (main-content). Table can be as tall as needed. */
@@ -3784,35 +3791,42 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
   background: var(--brand);
   color: #fff;
 }
-/* Freeze # column */
-.calling-table tbody td:first-child,
-.calling-table thead th:first-child {
+
+/* Freeze # column (cs-num) */
+.calling-table .cs-num {
   position: sticky;
   left: 0;
-  width: 36px; min-width: 36px;
+  width: 36px; min-width: 36px; max-width: 36px;
+  z-index: 3;
   background: #fff;
-  z-index: 2;
 }
-.calling-table thead th:first-child { z-index: 6; background: var(--brand); }
+.calling-table thead .cs-num {
+  z-index: 7;
+  background: var(--brand);
+  top: 0;
+}
 
-/* Freeze Name column (2nd) — offset = width of # column (36px) */
-.calling-table tbody td:nth-child(2),
-.calling-table thead th:nth-child(2) {
+/* Freeze Name column (cs-name) — sits right after cs-num (36px) */
+.calling-table .cs-name {
   position: sticky;
   left: 36px;
+  min-width: 130px;
+  z-index: 3;
   background: #fff;
-  z-index: 2;
-  box-shadow: 2px 0 5px -1px rgba(0,0,0,.10);
-  min-width: 120px;
+  box-shadow: 2px 0 6px -2px rgba(0,0,0,.12);
 }
-.calling-table thead th:nth-child(2) { z-index: 6; background: var(--brand); }
+.calling-table thead .cs-name {
+  z-index: 7;
+  background: var(--brand);
+  top: 0;
+}
 
-.calling-table tr:hover td:first-child,
-.calling-table tr:hover td:nth-child(2)  { background: var(--gray-50); }
-.calling-table tr.row-confirmed td:first-child,
-.calling-table tr.row-confirmed td:nth-child(2) { background: #f0fdf4; }
-.calling-table tr.row-has-reason td:first-child,
-.calling-table tr.row-has-reason td:nth-child(2) { background: #fff8f8; }
+.calling-table tr:hover td.cs-num,
+.calling-table tr:hover td.cs-name  { background: var(--gray-50); }
+.calling-table tr.row-confirmed td.cs-num,
+.calling-table tr.row-confirmed td.cs-name { background: #f0fdf4; }
+.calling-table tr.row-has-reason td.cs-num,
+.calling-table tr.row-has-reason td.cs-name { background: #fff8f8; }
 
 /* ── REPORT TABLES (used in analytics, home, activities) ── */
 .report-table thead th {
@@ -3844,6 +3858,7 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
 .dashboard-wrap,
 .calling-table-wrap,
 .table-scroll,
-.attendance-sheet-wrap {
+.attendance-sheet-wrap,
+.ch-scroll-wrap {
   -webkit-overflow-scrolling: touch;
 }
