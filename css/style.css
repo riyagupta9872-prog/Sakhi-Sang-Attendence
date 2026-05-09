@@ -1540,10 +1540,12 @@ button.calling-stat:active { transform: translateY(0); }
 .ch-name:hover { color: var(--brand); text-decoration: underline; }
 .ch-caller-cell { font-size: .73rem; color: var(--text-muted); }
 
-/* Team sub-header row — z-index 4 ensures it paints above sticky data cells (z-3) */
+/* Team sub-header row — z-index 1 so frozen data cells (z:3) paint OVER it;
+   padding-left pushes text past the frozen # + Name area (~170px) */
 .ch-team-hdr td {
-  background: var(--accent-light); font-weight: 700; padding: .28rem .5rem;
-  position: sticky; left: 0; z-index: 4;
+  background: var(--accent-light); font-weight: 700;
+  padding: .28rem .5rem .28rem 175px;
+  position: sticky; left: 0; z-index: 1;
 }
 .ch-row:hover td { background: #fafaf8; }
 .ch-row:hover .ch-sticky-name,
@@ -1588,12 +1590,12 @@ button.calling-stat:active { transform: translateY(0); }
 .acc-absent-btn:hover { background: #f8bbd0; }
 
 /* ── Team Calling tab ── */
-/* tc-caller-hdr z-index 4: must be above sticky data cells (z-3) so caller name
-   is never painted over when adjacent rows' frozen # and Name cells overlap it */
+/* z-index 1 so frozen data cells (z:3) paint OVER sub-header;
+   padding-left pushes caller name past the frozen # + Name area (~170px) */
 .tc-caller-hdr td {
   background: #f3f4f6; font-weight: 600; font-size: .78rem;
-  padding: .22rem .6rem; border-top: 1px solid var(--border);
-  position: sticky; left: 0; z-index: 4;
+  padding: .22rem .6rem .22rem 175px; border-top: 1px solid var(--border);
+  position: sticky; left: 0; z-index: 1;
 }
 /* .ch-team-hdr td sticky is defined above in the Calling History section (z-index:4) */
 .tc-submitted-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:.28rem; vertical-align:middle; }
@@ -1601,6 +1603,8 @@ button.calling-stat:active { transform: translateY(0); }
 .tc-submitted-dot.no  { background: #d1d5db; }
 .tc-name-cell { font-size: .8rem; min-width: 110px; }
 .tc-sticky-name { position: sticky; left: 0; z-index: 4; background: var(--brand); }
+/* Context line inside name cell: hidden on desktop (Team/CallingBy columns are visible) */
+.tc-row-context { display: none; }
 
 /* ── Global mobile calling table overrides ── */
 @media (max-width: 720px) {
@@ -1633,12 +1637,20 @@ button.calling-stat:active { transform: translateY(0); }
   /* Update time */
   .calling-upd-time   { font-size: .62rem; }
 
-  /* Team Calling: hide redundant Team + Calling By columns */
+  /* Team Calling: hide redundant columns — context shown inline in name cell */
   .tc-table .cs-callingby,
   .tc-table .cs-team-col { display: none; }
+  /* Show inline caller/team context below the devotee name */
+  .tc-table .tc-row-context {
+    display: flex; align-items: center; gap: .2rem; flex-wrap: wrap;
+    font-size: .62rem; color: var(--text-muted); margin-top: .1rem; line-height: 1.2;
+  }
   /* Tighter # column and corrected Name sticky offset */
   .tc-table .cs-num  { width: 26px; min-width: 26px; max-width: 26px; font-size: .72rem; }
-  .tc-table .cs-name { left: 26px; min-width: 95px; max-width: 110px; }
+  .tc-table .cs-name { left: 26px; min-width: 100px; max-width: 130px; }
+  /* Sub-header padding: mobile frozen area = 26px + 100px = 126px */
+  .tc-table .ch-team-hdr td,
+  .tc-table .tc-caller-hdr td { padding-left: 130px; }
   /* Compact row padding */
   .tc-table td       { padding: .26rem .38rem; font-size: .75rem; }
   /* Shrink avatar */
@@ -1725,6 +1737,17 @@ button.calling-stat:active { transform: translateY(0); }
 }
 
 .calling-table-wrap { overflow-x: auto; border-radius: var(--radius-sm); }
+/* Single scroll container for Team Calling — handles both X and Y so thead sticky:top works */
+.tc-table-scroll {
+  overflow: auto;
+  max-height: calc(100svh - 285px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  -webkit-overflow-scrolling: touch;
+}
+@media (max-width: 720px) {
+  .tc-table-scroll { max-height: calc(100svh - 245px); }
+}
 .calling-table { width: 100%; border-collapse: separate; border-spacing: 0; min-width: 800px; }
 .calling-table th {
   background: var(--brand); color: #fff;

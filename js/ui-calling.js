@@ -470,19 +470,26 @@ function renderCallingRow(d, i, locked) {
     } else if (reason) {
       statusChip = `<span style="background:#fff3e0;color:#bf360c;padding:.2rem .6rem;border-radius:4px;font-size:.82rem">${_reasonLabel(reason)}${avail}</span>`;
     } else {
-      statusChip = `<span style="color:var(--text-muted);font-size:.82rem">—</span>`;
+      statusChip = `<span style="color:#bdbdbd;font-size:.78rem"><i class="fas fa-circle-notch"></i> Not called</span>`;
     }
     const notesHtml = d.calling_notes
       ? `<div style="font-size:.75rem;color:var(--text-muted);font-style:italic">"${(d.calling_notes||'').replace(/"/g,'&quot;')}"</div>`
-      : `<span style="color:var(--text-muted);font-size:.75rem">—</span>`;
+      : '';
+    // Context line shown below the name — visible on mobile where caller/team cols are hidden
+    const contextLine = (d.calling_by || d.team_name)
+      ? `<div class="tc-row-context">${d.calling_by ? `<i class="fas fa-headset"></i> ${d.calling_by}` : ''}${d.calling_by && d.team_name ? ' · ' : ''}${d.team_name ? teamBadge(d.team_name) : ''}</div>`
+      : '';
     return `<tr data-id="${safeId}" class="${isYes ? 'row-confirmed' : (reason ? 'row-has-reason' : '')}">
       <td class="cs-num">${i}</td>
       <td class="cs-name">
         <div style="display:flex;align-items:center;gap:.4rem">
           <div class="devotee-avatar" style="width:28px;height:28px;font-size:.65rem;flex-shrink:0">${initials(d.name)}</div>
-          <span class="calling-name-link" onclick="openCallingHistory('${safeId}','${safeName}')">
-            ${d.name}${isBirthdayWeek(d.dob) ? ' <i class="fas fa-birthday-cake" style="color:var(--gold);font-size:.7rem"></i>' : ''}
-          </span>
+          <div>
+            <span class="calling-name-link" onclick="openCallingHistory('${safeId}','${safeName}')">
+              ${d.name}${isBirthdayWeek(d.dob) ? ' <i class="fas fa-birthday-cake" style="color:var(--gold);font-size:.7rem"></i>' : ''}
+            </span>
+            ${contextLine}
+          </div>
         </div>
       </td>
       <td>${contactIcons(d.mobile)}</td>
@@ -1367,13 +1374,13 @@ async function loadTeamCallingList() {
         <strong><i class="fas fa-users"></i> Team Calling — ${weekLabel}</strong>
         <span style="font-size:.76rem;color:var(--text-muted)">${list.length} devotees · ${submittedCallers.size} callers submitted</span>
       </div>
-      <div class="calling-table-wrap">
+      <div class="tc-table-scroll">
         <table class="calling-table tc-table">
           <thead><tr>
             <th class="cs-num" style="min-width:26px">#</th>
             <th class="cs-name" style="min-width:100px">Name</th>
             <th>Mobile</th>
-            <th class="cs-team-col" style="min-width:110px">Team</th>
+            <th class="cs-team-col" style="min-width:130px">Team</th>
             <th class="cs-callingby" style="min-width:110px">Calling By</th>
             <th style="min-width:130px">Status</th>
             <th style="min-width:160px">Reason &amp; Notes</th>
