@@ -1063,9 +1063,25 @@ async function removeEventDevotee(devoteeId) {
 async function exportEventDevotees() {
   if (!AppState.currentEventId) return;
   try {
-    const devotees = await DB.getEventDevotees(AppState.currentEventId);
-    if (!devotees.length) return showToast('No devotees in this event', 'error');
-    const rows = devotees.map(d => ({ Name: d.name, Mobile: d.mobile || '', Team: d.team_name || '' }));
+    const [eventDevotees, allDevotees] = await Promise.all([
+      DB.getEventDevotees(AppState.currentEventId),
+      DevoteeCache.all(),
+    ]);
+    if (!eventDevotees.length) return showToast('No devotees in this event', 'error');
+    const devMap = Object.fromEntries(allDevotees.map(d => [d.id, d]));
+    const rows = eventDevotees.map(d => {
+      const full = devMap[d.devotee_id] || {};
+      return {
+        Name:                d.name,
+        Mobile:              d.mobile || '',
+        Team:                d.team_name || '',
+        'Chanting Rounds':   full.chantingRounds || 0,
+        'Gopi Dress':        full.gopiDress ? 'Yes' : 'No',
+        'Lifetime AT':       full.lifetimeAttendance || 0,
+        'Plays Instrument':  full.playsInstrument || '',
+        'Instrument':        full.instrumentName || '',
+      };
+    });
     downloadExcel(rows, 'event_devotees.xlsx');
   } catch (_) { showToast('Export failed', 'error'); }
 }

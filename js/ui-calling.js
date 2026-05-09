@@ -754,18 +754,15 @@ async function _loadCallingSummary(week, el) {
       gUnsubmitted += unsub;
 
       const teamId = 'team-' + ti;
-      // Build "Not Called" cell — show unsubmitted portion separately so the
-      // admin can see at a glance how many are from pending callers.
-      const ncCell = unsub > 0
-        ? `<span style="color:#c62828">${t.notCalled}</span><span style="color:#e65100;font-size:.72rem;margin-left:.2rem" title="${unsub} from unsubmitted callers">+${unsub}⚠</span>`
-        : `<span style="color:#c62828">${t.notCalled}</span>`;
+      // Not Called = all unrecorded devotees (submitted callers' uncalled + all unsubmitted)
+      const totalNC = effNC;
 
       // Team header row — clickable to expand/collapse facilitators
       bodyRows += `<tr class="cs-team-row" data-team-id="${teamId}" style="background:var(--accent-light);font-weight:700;font-size:.83rem;cursor:pointer" onclick="_toggleCSReportTeam('${teamId}', this)">
-        <td colspan="2"><i class="fas fa-chevron-right cs-team-chev" style="font-size:.7rem;color:var(--text-muted);margin-right:.4rem"></i>${teamBadge(team)}</td>
+        <td><i class="fas fa-chevron-right cs-team-chev" style="font-size:.7rem;color:var(--text-muted);margin-right:.4rem"></i>${teamBadge(team)}</td>
         <td style="text-align:center">${t.total}</td>
         <td style="text-align:center">${t.called}</td>
-        <td style="text-align:center">${ncCell}</td>
+        <td style="text-align:center;color:#c62828">${totalNC}</td>
         <td style="text-align:center;color:var(--success)">${t.yes}</td>
         <td style="text-align:center;color:#0288d1">${t.online||0}</td>
         <td style="text-align:center;color:#f57f17">${t.festival||0}</td>
@@ -779,14 +776,11 @@ async function _loadCallingSummary(week, el) {
       });
       sortedCallers.forEach(([caller, s]) => {
         const posLabel = s.isCoordinator ? 'Coordinator' : (s.position || 'Calling Facilitator');
-        const posBadge = s.isCoordinator
-          ? `<span style="font-size:.68rem;padding:.1rem .35rem;border-radius:.2rem;background:rgba(201,168,76,.2);color:#8B6914;font-weight:600">${posLabel}</span>`
-          : `<span style="font-size:.68rem;padding:.1rem .35rem;border-radius:.2rem;background:rgba(82,183,136,.15);color:var(--primary)">${posLabel}</span>`;
+        const posLine = `<div style="font-size:.65rem;color:var(--text-muted);font-weight:400;margin-top:.1rem">${posLabel}</div>`;
         // Hidden by default — shown when team row is clicked
         if (s.submitted) {
           bodyRows += `<tr class="cs-caller-row cs-caller-${teamId}" style="font-size:.82rem;display:none">
-            <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}</td>
-            <td>${posBadge}</td>
+            <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}${posLine}</td>
             <td style="text-align:center">${s.total}</td>
             <td style="text-align:center">${s.called}</td>
             <td style="text-align:center;color:#c62828">${s.notCalled}</td>
@@ -797,11 +791,10 @@ async function _loadCallingSummary(week, el) {
           </tr>`;
         } else {
           bodyRows += `<tr class="cs-caller-row cs-caller-${teamId}" style="font-size:.82rem;display:none;background:#fff8e1">
-            <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}</td>
-            <td>${posBadge}</td>
+            <td style="padding-left:1.4rem;color:var(--text-muted)">${caller}${posLine}</td>
             <td style="text-align:center">${s.total}</td>
             <td colspan="6" style="text-align:center;color:#c62828;font-weight:600">
-              <i class="fas fa-clock"></i> Not Submitted — ${s.total} devotees unreported
+              <i class="fas fa-clock"></i> Not Submitted
             </td>
           </tr>`;
         }
@@ -816,13 +809,12 @@ async function _loadCallingSummary(week, el) {
       <strong><i class="fas fa-phone-alt"></i> Calling Summary — ${weekLabel}</strong>
     </div>
     <div class="table-scroll">
-    <table class="calling-table cs-report-table" style="margin:0;min-width:440px">
+    <table class="calling-table cs-report-table" style="margin:0;min-width:360px">
       <thead><tr>
-        <th style="min-width:130px">Team / Calling By</th>
-        <th style="min-width:60px">Position</th>
+        <th style="min-width:140px">Team / Calling By</th>
         <th style="text-align:center;min-width:36px">Total</th>
         <th style="text-align:center;min-width:38px">Called</th>
-        <th style="text-align:center;min-width:50px;color:#c62828">Not Called</th>
+        <th style="text-align:center;min-width:46px;color:#c62828">Not Called</th>
         <th style="text-align:center;min-width:34px;color:var(--success)">Yes</th>
         <th style="text-align:center;min-width:38px;color:#0288d1">Online</th>
         <th style="text-align:center;min-width:38px;color:#f57f17">Festival</th>
@@ -830,11 +822,11 @@ async function _loadCallingSummary(week, el) {
       </tr></thead>
       <tbody>
         ${bodyRows}
-        <tr style="background:#1a5c3a;color:#fff;font-weight:700;font-size:.83rem">
-          <td colspan="2">Grand Total</td>
+        <tr style="background:#1a5c3a;color:#fff;font-weight:700;font-size:.83rem;pointer-events:none;user-select:none">
+          <td>Grand Total</td>
           <td style="text-align:center">${gTotal}</td>
           <td style="text-align:center">${gCalled}</td>
-          <td style="text-align:center">${gNC}${gcNote}</td>
+          <td style="text-align:center">${gNC}</td>
           <td style="text-align:center">${gYes}</td>
           <td style="text-align:center">${gOnline}</td>
           <td style="text-align:center">${gFestival}</td>
@@ -1155,7 +1147,7 @@ async function loadLateReports() {
           <thead><tr>
             <th style="min-width:32px;text-align:center">#</th>
             <th style="min-width:110px">Name</th>
-            <th style="min-width:68px">Team</th>
+            <th style="min-width:100px">Team</th>
             ${weekHeaders}
             <th style="min-width:46px;text-align:center">Late</th>
           </tr></thead>
@@ -1379,10 +1371,10 @@ async function loadTeamCallingList() {
         <table class="calling-table tc-table">
           <thead><tr>
             <th class="cs-num" style="min-width:26px">#</th>
-            <th class="cs-name" style="min-width:120px">Name</th>
+            <th class="cs-name" style="min-width:100px">Name</th>
             <th>Mobile</th>
-            <th class="cs-team-col" style="min-width:80px">Team</th>
-            <th class="cs-callingby" style="min-width:100px">Calling By</th>
+            <th class="cs-team-col" style="min-width:110px">Team</th>
+            <th class="cs-callingby" style="min-width:110px">Calling By</th>
             <th style="min-width:130px">Status</th>
             <th style="min-width:160px">Reason &amp; Notes</th>
           </tr></thead>

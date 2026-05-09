@@ -1638,7 +1638,7 @@ button.calling-stat:active { transform: translateY(0); }
   .tc-table .cs-team-col { display: none; }
   /* Tighter # column and corrected Name sticky offset */
   .tc-table .cs-num  { width: 26px; min-width: 26px; max-width: 26px; font-size: .72rem; }
-  .tc-table .cs-name { left: 26px; min-width: 105px; }
+  .tc-table .cs-name { left: 26px; min-width: 95px; max-width: 110px; }
   /* Compact row padding */
   .tc-table td       { padding: .26rem .38rem; font-size: .75rem; }
   /* Shrink avatar */
@@ -2694,7 +2694,7 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
 @media (max-width: 768px) {
   :root { --header-h: 58px; --nav-h: 48px; }
   .header-text h1 { font-size: 1.08rem; }
-  .main-content { padding: 1.1rem .9rem 5.5rem; }
+  .main-content { padding: 1.1rem .9rem 7rem; }
   .attendance-dashboard { grid-template-columns: 1fr 1fr; }
   .attendance-grid { grid-template-columns: 1fr; }
   .form-grid { grid-template-columns: 1fr; }
@@ -2710,7 +2710,7 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
 
 @media (max-width: 480px) {
   :root { --header-h: 54px; --nav-h: 44px; }
-  .main-content { padding: .9rem .55rem 5rem; }
+  .main-content { padding: .9rem .55rem 7rem; }
   .stat-value { font-size: 1.5rem; }
   .modal-box { max-height: 92vh; border-radius: var(--radius); width: calc(100vw - 1.25rem); }
   .modal-header { padding: .85rem .95rem; }
