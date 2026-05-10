@@ -32,6 +32,7 @@ function toSnake(d) {
     facilitator:         d.facilitator || null,
     reference_by:        d.referenceBy || null,
     calling_by:          d.callingBy || null,
+    remarks:             d.remarks || null,
     lifetime_attendance: d.lifetimeAttendance || 0,
     is_active:           d.isActive !== false ? 1 : 0,
     inactivity_flag:     d.inactivityFlag ? 1 : 0,
@@ -77,6 +78,7 @@ function toCamel(f) {
     facilitator:       (f.facilitator || '').trim() || null,
     referenceBy:       (f.reference_by || '').trim() || null,
     callingBy:         (f.calling_by || '').trim() || null,
+    remarks:           (f.remarks || '').trim() || null,
     education:         (f.education || '').trim() || null,
     email:             (f.email || '').trim() || null,
     profession:        (f.profession || '').trim() || null,
@@ -218,6 +220,7 @@ const DB = {
             facilitator:      importCol(row, ['Facilitator','facilitator','Faciltr']) || null,
             referenceBy:      importCol(row, ['Reference','Ref','Reference By','Referred By','Ref-2','ref','Ref 2','reference']) || null,
             callingBy:        importCol(row, ['Calling By','Called By','Caller','Calling by','calling by','CallingBy']) || null,
+            remarks:          importCol(row, ['Remarks','remarks','Notes','notes','Comment','comment']) || null,
             education:        importCol(row, ['Education','education','EDUCATION']) || null,
             email:            importCol(row, ['Email','E-Mail','email','E Mail','e-mail','EMAIL']) || null,
             profession:       importCol(row, ['Profession','Occupation','profession','PROFESSION']) || null,
@@ -552,6 +555,37 @@ const DB = {
     // Mark as done
     await fdb.collection('settings').doc('migrations').set({ [migKey]: true }, { merge: true });
     return true;
+  },
+
+  // On-demand team rename — updates all collections in one go.
+  async renameTeam(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) throw new Error('Invalid team names');
+    const BATCH = 400;
+    const collections = ['devotees','users','callingStatus','callingSubmissions',
+      'attendanceRecords','bookDistributions','services','registrations','donations'];
+    let totalUpdated = 0;
+    for (const col of collections) {
+      try {
+        const snap = await fdb.collection(col).where('teamName', '==', oldName).get();
+        for (let i = 0; i < snap.docs.length; i += BATCH) {
+          const batch = fdb.batch();
+          snap.docs.slice(i, i + BATCH).forEach(d => batch.update(d.ref, { teamName: newName }));
+          await batch.commit();
+          totalUpdated += Math.min(BATCH, snap.docs.length - i);
+        }
+      } catch (_) {}
+    }
+    try {
+      const tDoc = await fdb.collection('settings').doc('attendanceTargets').get();
+      if (tDoc.exists && tDoc.data().teams?.[oldName] !== undefined) {
+        const teams = { ...tDoc.data().teams };
+        teams[newName] = teams[oldName];
+        delete teams[oldName];
+        await fdb.collection('settings').doc('attendanceTargets').update({ teams });
+      }
+    } catch (_) {}
+    DevoteeCache.bust();
+    return totalUpdated;
   },
 
   // When a coordinator renames themselves, propagate the new name to every

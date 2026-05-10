@@ -568,8 +568,8 @@ async function _buildAndDownloadDevoteeWorkbook({ devotees, includeTeamCol, file
     // "Team" since one sheet covers all teams; export hides it since each
     // team has its own sheet).
     const teamMgmtCols = includeTeamCol
-      ? ['Team', 'Facilitator', 'Reference By', 'Calling By']
-      : ['Facilitator', 'Reference By', 'Calling By'];
+      ? ['Team', 'Facilitator', 'Reference By', 'Calling By', 'Remarks']
+      : ['Facilitator', 'Reference By', 'Calling By', 'Remarks'];
 
     const CATS = [
       { label: 'Sr.No.',              cols: 1,                   bg: 'ECEFF1', fg: '37474F', subBg: 'CFD8DC' },
@@ -603,7 +603,7 @@ async function _buildAndDownloadDevoteeWorkbook({ devotees, includeTeamCol, file
     const widthByHeader = {
       'Sr.No.': 6,
       'Name': 24, 'Mobile': 13, 'Alternate Mobile': 14, 'D.O.B': 12, 'Address': 30, 'E-Mail': 26,
-      'Team': 14, 'Facilitator': 22, 'Reference By': 22, 'Calling By': 22,
+      'Team': 14, 'Facilitator': 22, 'Reference By': 22, 'Calling By': 22, 'Remarks': 30,
       'Education': 18, 'Profession': 18,
       'Chanting Rounds': 10, 'Reading': 13, 'Hearing': 13, 'Tilak': 8, 'Kanthi': 8, 'Gopi Dress': 11,
       'Plays Instrument': 13, 'Instrument Name': 18, 'Wants Kirtan Class': 14,
@@ -706,6 +706,7 @@ async function _buildAndDownloadDevoteeWorkbook({ devotees, includeTeamCol, file
         'Facilitator':        { v: d.facilitator || '',      s: dataCell() },
         'Reference By':       { v: d.referenceBy || '',      s: dataCell() },
         'Calling By':         { v: d.callingBy || '',        s: dataCell() },
+        'Remarks':            { v: d.remarks || '',          s: dataCell({ left: true, wrap: true }) },
         'Education':          { v: d.education || '',        s: dataCell({ left: true }) },
         'Profession':         { v: d.profession || '',       s: dataCell({ left: true }) },
         'Chanting Rounds':    { v: d.chantingRounds || 0,    s: dataCell({ bold: true }) },
@@ -985,6 +986,7 @@ async function _buildAndDownloadDevoteeWorkbook({ devotees, includeTeamCol, file
           'Facilitator':       { v: d.facilitator || '',      s: dataCell() },
           'Reference By':      { v: d.referenceBy || '',      s: dataCell() },
           'Calling By':        { v: d.callingBy || '',        s: dataCell() },
+          'Remarks':           { v: d.remarks || '',          s: dataCell({ left: true, wrap: true }) },
           'Education':         { v: d.education || '',        s: dataCell({ left: true }) },
           'Profession':        { v: d.profession || '',       s: dataCell({ left: true }) },
           'Chanting Rounds':   { v: d.chantingRounds || 0,    s: dataCell({ bold: true }) },

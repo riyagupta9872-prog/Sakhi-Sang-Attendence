@@ -2732,6 +2732,33 @@ async function openPersonalMeetings() {
   await _loadPersonalMeetings();
 }
 
+function openTeamRenameModal() {
+  document.getElementById('rename-team-from').value = '';
+  document.getElementById('rename-team-to').value = '';
+  document.getElementById('rename-team-result').innerHTML = '';
+  openModal('team-rename-modal');
+}
+window.openTeamRenameModal = openTeamRenameModal;
+
+async function doTeamRename() {
+  const from = document.getElementById('rename-team-from').value.trim();
+  const to   = document.getElementById('rename-team-to').value.trim();
+  const res  = document.getElementById('rename-team-result');
+  if (!from) { res.innerHTML = '<span style="color:var(--danger)">Please select the current team name.</span>'; return; }
+  if (!to)   { res.innerHTML = '<span style="color:var(--danger)">Please enter the new team name.</span>'; return; }
+  if (from === to) { res.innerHTML = '<span style="color:var(--danger)">Old and new names are the same.</span>'; return; }
+  if (!confirm(`Rename team "${from}" → "${to}" everywhere?\n\nThis updates all devotees, calling records, attendance, and activity logs. This cannot be undone.`)) return;
+  res.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Renaming…';
+  try {
+    const count = await DB.renameTeam(from, to);
+    res.innerHTML = `<span style="color:var(--success)"><i class="fas fa-check-circle"></i> Done — ${count} records updated. Refresh the page to see changes.</span>`;
+    DevoteeCache.bust();
+  } catch (e) {
+    res.innerHTML = `<span style="color:var(--danger)"><i class="fas fa-exclamation-circle"></i> Failed: ${e.message || 'Unknown error'}</span>`;
+  }
+}
+window.doTeamRename = doTeamRename;
+
 async function _loadPersonalMeetings() {
   const body = document.getElementById('personal-meetings-body');
   body.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';

@@ -1,7 +1,7 @@
-/* ══ SERVICE WORKER – Sakhi Sang ══ */
+﻿/* â•â• SERVICE WORKER â€“ Sakhi Sang â•â• */
 // Bump this version string every time you deploy new code.
 // This tells the browser to throw away old cached files and install fresh ones.
-const CACHE = 'sakhi-sang-v228';
+const CACHE = 'sakhi-sang-v229';
 const SHELL = [
   './index.html',
   './js/config.js',
@@ -86,7 +86,7 @@ self.addEventListener('fetch', e => {
   }
 
   // Everything else (fonts, icons, CDN libraries, CSS):
-  // cache-first — these rarely change and benefit from instant loading.
+  // cache-first â€” these rarely change and benefit from instant loading.
   e.respondWith(
     caches.match(e.request).then(cached => {
       if (cached) return cached;

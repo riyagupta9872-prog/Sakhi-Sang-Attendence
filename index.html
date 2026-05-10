@@ -235,6 +235,9 @@
     <button class="sidebar-item super-admin-only" onclick="openPersonalMeetings(); closeSidebar();">
       <i class="fas fa-handshake"></i> <span>Personal Meetings</span>
     </button>
+    <button class="sidebar-item super-admin-only" onclick="openTeamRenameModal(); closeSidebar();">
+      <i class="fas fa-exchange-alt"></i> <span>Rename Team</span>
+    </button>
 
     <div class="sidebar-divider"></div>
 
@@ -1445,6 +1448,37 @@
         </select>
       </div>
       <button class="btn btn-primary" onclick="saveQuickStatus()"><i class="fas fa-save"></i> Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Team Rename Modal -->
+<div id="team-rename-modal" class="modal-overlay hidden">
+  <div class="modal-box" style="max-width:440px">
+    <div class="modal-header">
+      <h2><i class="fas fa-exchange-alt"></i> Rename Team</h2>
+      <button class="btn-icon close" onclick="closeModal('team-rename-modal')"><i class="fas fa-times"></i></button>
+    </div>
+    <div style="padding:1.25rem">
+      <p style="font-size:.86rem;color:var(--text-muted);margin-bottom:1rem">Renames a team everywhere — devotees, calling records, attendance, activities, and all reports. This cannot be undone.</p>
+      <div class="form-group">
+        <label>Current Team Name</label>
+        <select id="rename-team-from" class="filter-select" style="width:100%">
+          <option value="">— Select team to rename —</option>
+          <option>Champaklata</option><option>Chitralekha</option><option>Indulekha</option>
+          <option>Lalita</option><option>Nilachal</option><option>Other</option>
+          <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Vishakha</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-top:.75rem">
+        <label>New Team Name</label>
+        <input type="text" id="rename-team-to" class="filter-select" style="width:100%" placeholder="Enter new name…" autocomplete="off">
+      </div>
+      <div id="rename-team-result" style="margin-top:.75rem;font-size:.84rem"></div>
+    </div>
+    <div class="modal-footer" style="padding:.75rem 1.25rem;display:flex;justify-content:flex-end;gap:.5rem;border-top:1px solid var(--color-border)">
+      <button class="btn btn-ghost" onclick="closeModal('team-rename-modal')">Cancel</button>
+      <button class="btn btn-danger" onclick="doTeamRename()"><i class="fas fa-exchange-alt"></i> Rename Team</button>
     </div>
   </div>
 </div>
