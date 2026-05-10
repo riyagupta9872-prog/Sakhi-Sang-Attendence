@@ -1637,27 +1637,28 @@ button.calling-stat:active { transform: translateY(0); }
   /* Update time */
   .calling-upd-time   { font-size: .62rem; }
 
-  /* Team Calling: hide redundant columns — context shown inline in name cell */
+  /* Team Calling: show all columns on mobile — horizontal scroll handles width */
   .tc-table .cs-callingby,
-  .tc-table .cs-team-col { display: none; }
-  /* Show inline caller/team context below the devotee name */
-  .tc-table .tc-row-context {
-    display: flex; align-items: center; gap: .2rem; flex-wrap: wrap;
-    font-size: .62rem; color: var(--text-muted); margin-top: .1rem; line-height: 1.2;
-  }
+  .tc-table .cs-team-col { display: table-cell; }
+  /* Context line stays hidden — columns are visible */
+  .tc-table .tc-row-context { display: none; }
   /* Tighter # column and corrected Name sticky offset */
-  .tc-table .cs-num  { width: 26px; min-width: 26px; max-width: 26px; font-size: .72rem; }
-  .tc-table .cs-name { left: 26px; min-width: 100px; max-width: 130px; }
-  /* Sub-header padding: mobile frozen area = 26px + 100px = 126px */
+  .tc-table .cs-num  { width: 26px; min-width: 26px; max-width: 26px; font-size: .68rem; }
+  .tc-table .cs-name { left: 26px; min-width: 90px; max-width: 110px; }
+  /* Narrow Team + Calling By columns on mobile */
+  .tc-table .cs-team-col  { min-width: 72px; max-width: 88px; font-size: .64rem; }
+  .tc-table .cs-callingby { min-width: 76px; max-width: 96px; font-size: .64rem; }
+  /* Sub-header padding: frozen area = 26px + 90px = 116px */
   .tc-table .ch-team-hdr td,
-  .tc-table .tc-caller-hdr td { padding-left: 130px; }
+  .tc-table .tc-caller-hdr td { padding-left: 120px; }
   /* Compact row padding */
-  .tc-table td       { padding: .26rem .38rem; font-size: .75rem; }
+  .tc-table td       { padding: .22rem .3rem; font-size: .72rem; }
+  .tc-table th       { font-size: .64rem; padding: .28rem .3rem; }
   /* Shrink avatar */
-  .tc-table .devotee-avatar { width: 24px !important; height: 24px !important; font-size: .59rem !important; }
+  .tc-table .devotee-avatar { width: 22px !important; height: 22px !important; font-size: .56rem !important; }
   /* Tighter status chips */
-  .coming-toggle      { font-size: .72rem; padding: .2rem .45rem; }
-  .calling-reason-select, .calling-notes-input { font-size: .74rem; }
+  .coming-toggle      { font-size: .68rem; padding: .15rem .38rem; }
+  .calling-reason-select, .calling-notes-input { font-size: .7rem; }
 }
 
 /* Submission Report */
@@ -3422,6 +3423,12 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
 .report-table .notcame-cell { color: var(--danger);  font-weight: 600; }
 .report-table .empty-cell,
 .report-table .loading-cell { text-align: center; padding: 2rem; color: var(--text-muted); }
+
+@media (max-width: 720px) {
+  .report-table { font-size: .76rem; }
+  .report-table th { padding: .28rem .38rem; font-size: .67rem; }
+  .report-table td { padding: .3rem .38rem; font-size: .76rem; }
+}
 
 .inner-table {
   width: 100%;
