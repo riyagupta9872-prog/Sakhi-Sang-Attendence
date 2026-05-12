@@ -1452,19 +1452,30 @@ function _fyRangeFor(dateStr) {
 async function loadYearlySheet() {
   const wrap = document.getElementById('yearly-sheet-wrap');
   if (!wrap) return;
-  // Period segment drives the date range. Single Session = just that one session;
-  // Month/Quarter/FY = the full range for aggregation.
   const r = _reportRange();
   const start = r.start, end = r.end;
   const teamFilter = getFilterTeam();
   wrap.innerHTML = '<div class="loading" style="padding:2rem"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
-    const { sessions, devotees, attMap, attTimeMap, csMap } = await DB.getSheetData(start, end);
+    const [sheetData, stats] = await Promise.all([
+      DB.getSheetData(start, end),
+      AppState.currentSessionId
+        ? DB.getSessionStats(AppState.currentSessionId).catch(() => null)
+        : Promise.resolve(null)
+    ]);
+    const { sessions, devotees, attMap, attTimeMap, csMap } = sheetData;
     if (!sessions.length) {
       wrap.innerHTML = `<div class="empty-state"><i class="fas fa-table"></i><p>No sessions in this ${r.period} for ${teamFilter || 'any team'}</p></div>`;
       return;
     }
-    wrap.innerHTML = buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter, attTimeMap);
+    const statsBar = stats ? `
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.65rem">
+        <div class="sh-stat-pill" style="border-left:3px solid var(--brand)"><i class="fas fa-check-double" style="color:var(--brand)"></i><span class="sh-stat-num">${stats.confirmed}</span><span class="sh-stat-lbl">Confirmed</span></div>
+        <div class="sh-stat-pill" style="border-left:3px solid var(--success)"><i class="fas fa-user-check" style="color:var(--success)"></i><span class="sh-stat-num">${stats.present}</span><span class="sh-stat-lbl">Present</span></div>
+        <div class="sh-stat-pill" style="border-left:3px solid var(--gold)"><i class="fas fa-user-plus" style="color:var(--gold)"></i><span class="sh-stat-num">${stats.newDevotees}</span><span class="sh-stat-lbl">New</span></div>
+        <div class="sh-stat-pill" style="border-left:3px solid #6366f1"><i class="fas fa-users" style="color:#6366f1"></i><span class="sh-stat-num">${stats.totalPresent}</span><span class="sh-stat-lbl">Total Present</span></div>
+      </div>` : '';
+    wrap.innerHTML = statsBar + buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter, attTimeMap);
   } catch (e) {
     console.error('loadYearlySheet', e);
     wrap.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';

@@ -1332,6 +1332,16 @@ button.contact-icon { border: none; padding: 0; }
   text-transform: uppercase; letter-spacing: .4px;
 }
 
+/* Compact stat pills — used in Attendance Sheet header */
+.sh-stat-pill {
+  display: flex; align-items: center; gap: .35rem;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: .3rem .65rem;
+  font-size: .76rem;
+}
+.sh-stat-num { font-weight: 700; font-size: .95rem; color: var(--text); }
+.sh-stat-lbl { color: var(--text-muted); font-size: .68rem; }
+
 /* ════════════════════════════════════════════════════
    ATTENDANCE TAB & SUBTABS
    ════════════════════════════════════════════════════ */
