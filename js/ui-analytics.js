@@ -1469,11 +1469,23 @@ async function loadYearlySheet() {
       return;
     }
     const statsBar = stats ? `
-      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.65rem">
-        <div class="sh-stat-pill" style="border-left:3px solid var(--brand)"><i class="fas fa-check-double" style="color:var(--brand)"></i><span class="sh-stat-num">${stats.confirmed}</span><span class="sh-stat-lbl">Confirmed</span></div>
-        <div class="sh-stat-pill" style="border-left:3px solid var(--success)"><i class="fas fa-user-check" style="color:var(--success)"></i><span class="sh-stat-num">${stats.present}</span><span class="sh-stat-lbl">Present</span></div>
-        <div class="sh-stat-pill" style="border-left:3px solid var(--gold)"><i class="fas fa-user-plus" style="color:var(--gold)"></i><span class="sh-stat-num">${stats.newDevotees}</span><span class="sh-stat-lbl">New</span></div>
-        <div class="sh-stat-pill" style="border-left:3px solid #6366f1"><i class="fas fa-users" style="color:#6366f1"></i><span class="sh-stat-num">${stats.totalPresent}</span><span class="sh-stat-lbl">Total Present</span></div>
+      <div class="sh-stats-bar">
+        <div class="sh-stat-pill" style="border-top:3px solid var(--brand)">
+          <span class="sh-stat-num" style="color:var(--brand)">${stats.confirmed}</span>
+          <span class="sh-stat-lbl">Confirmed</span>
+        </div>
+        <div class="sh-stat-pill" style="border-top:3px solid var(--success)">
+          <span class="sh-stat-num" style="color:var(--success)">${stats.present}</span>
+          <span class="sh-stat-lbl">Present</span>
+        </div>
+        <div class="sh-stat-pill" style="border-top:3px solid var(--gold)">
+          <span class="sh-stat-num" style="color:var(--gold)">${stats.newDevotees}</span>
+          <span class="sh-stat-lbl">New</span>
+        </div>
+        <div class="sh-stat-pill" style="border-top:3px solid #6366f1">
+          <span class="sh-stat-num" style="color:#6366f1">${stats.totalPresent}</span>
+          <span class="sh-stat-lbl">Total Present</span>
+        </div>
       </div>` : '';
     wrap.innerHTML = statsBar + buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter, attTimeMap);
   } catch (e) {
