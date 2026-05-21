@@ -866,10 +866,6 @@ function applyRoleUI() {
     devotees:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     calling:        ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     attendance:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    books:          ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    service:        ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    registration:   ['superAdmin', 'teamAdmin', 'serviceDevotee'],
-    donation:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     care:           ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     events:         ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     'calling-mgmt': ['superAdmin'],
@@ -925,12 +921,6 @@ function applyRoleUI() {
   const isAdminOrCoord = ['superAdmin', 'teamAdmin'].includes(role);
   document.querySelectorAll('.admin-coordinator-only').forEach(el => {
     el.style.display = isAdminOrCoord ? '' : 'none';
-  });
-
-  // Entry-action buttons (Add Books, Add Donation, etc.) are for coordinators only.
-  // Super admin views reports but never logs entries.
-  document.querySelectorAll('.entry-action').forEach(el => {
-    el.style.display = role === 'superAdmin' ? 'none' : '';
   });
 
   // Non-superAdmin roles: lock team filter to their team
@@ -1137,7 +1127,6 @@ async function initApp() {
   loadBirthdays();
   initReportsSessionFilter?.();
   initAllPickers();
-  initHomeDevoteePickers?.();
   initSheetYearSelector();
   // Default current tab follows the HTML's active panel.
   if (!AppState.currentTab) {
@@ -1525,13 +1514,6 @@ function _mfbOnFiltersChanged(e) {
   }
   if (tab === 'care'         && typeof loadCareData === 'function')        loadCareData();
   if (tab === 'calling-mgmt' && typeof loadCallingMgmtTab === 'function')  loadCallingMgmtTab();
-  // Activity tabs (Books/Service/Registration/Donation) — when the master
-  // Session changes, reset the Reports From/To to the new week (Sunday → Sat).
-  if (['books','service','registration','donation'].includes(tab)
-      && AppState._actSubTab?.[tab] === 'reports'
-      && typeof _actSyncRangeFromFilters === 'function') {
-    _actSyncRangeFromFilters(tab);
-  }
 }
 
 // ── MOBILE VALIDATION ─────────────────────────────────
@@ -1816,13 +1798,9 @@ function switchTab(tab, btn) {
   }
   // Refresh the team-chip lock UI now that currentTab changed (lock toggles on Devotees tab).
   if (typeof _frRefreshChips === 'function') _frRefreshChips();
-  // Hide the Session chip on tabs where it isn't applicable (activity tabs use
-  // their own From/To pickers, not the session anchor). Keeps the ribbon honest.
+  // Session chip is shown on all active tabs.
   const sessionChipWrap = document.getElementById('fr-chip-session')?.closest('.fr-chip-wrap');
-  if (sessionChipWrap) {
-    const tabsWithoutSession = ['books','service','registration','donation'];
-    sessionChipWrap.style.display = tabsWithoutSession.includes(tab) ? 'none' : '';
-  }
+  if (sessionChipWrap) sessionChipWrap.style.display = '';
   renderBreadcrumb();
   document.getElementById('register-fab')?.classList.toggle('hidden', tab !== 'attendance');
   document.getElementById('add-devotee-fab')?.classList.toggle('hidden', tab !== 'devotees');
@@ -1835,7 +1813,6 @@ function switchTab(tab, btn) {
   // non-divider entry). All the navigation through the tab now flows through
   // applyTabView, so the in-panel sub-tab strips are not needed.
   if (typeof TAB_VIEWS !== 'undefined' && TAB_VIEWS[tab]) {
-    if (['books','service','registration','donation'].includes(tab)) loadActivityTab?.(tab);
     if (tab === 'attendance') loadAttendanceTab?.();
     const lastView = AppState._tabView?.[tab];
     // superAdmin default on calling tab = team-calling (they have no personal calling list)
@@ -1875,10 +1852,6 @@ const TAB_VIEWS = {
     { key: 'trends',    label: 'Trends',           icon: 'fa-chart-line' },
     { key: 'accuracy',  label: 'Accuracy',         icon: 'fa-bullseye'   },
   ],
-  books:        [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
-  service:      [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
-  registration: [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
-  donation:     [{ key:'log', label:'Log Entry', icon:'fa-pen' }, { key:'reports', label:'Reports', icon:'fa-chart-bar' }],
   'calling-mgmt': [
     { key: 'calling',       label: 'Calling List',     icon: 'fa-phone-alt' },
     { key: 'newcomers',     label: 'New Comers',       icon: 'fa-user-plus' },
@@ -2131,10 +2104,6 @@ async function applyTabView(tab, view) {
         if (subId === 'att-accuracy'       && typeof loadAttAccuracyReport  === 'function') loadAttAccuracyReport();
       }
     }
-  } else if (['books','service','registration','donation'].includes(tab)) {
-    const sub = (view === 'log') ? 'log' : 'reports';
-    const btn = document.querySelector(`#tab-${tab} .att-sub-tab:nth-child(${sub === 'log' ? 1 : 2})`);
-    if (typeof switchActivitySubTab === 'function') switchActivitySubTab(tab, sub, btn);
   } else if (tab === 'calling-mgmt') {
     // Map view key → existing calling-mgmt panel button
     const cmBtn = document.querySelector(`#tab-calling-mgmt .att-sub-tab[onclick*="'${view}'"]`);
@@ -2283,10 +2252,6 @@ function renderBreadcrumb() {
     devotees:       'Devotees',
     calling:        'Calling',
     attendance:     'Attendance',
-    books:          'Books',
-    service:        'Service',
-    registration:   'Registration',
-    donation:       'Donation',
     care:           'Care',
     events:         'Events',
     'calling-mgmt': 'Calling Mgmt',

@@ -444,10 +444,88 @@ function filterCallingList() {
 function renderCallingList(devotees, locked) {
   const wrap = document.getElementById('calling-list');
   if (!devotees.length) { wrap.innerHTML = '<div class="empty-state"><i class="fas fa-phone-slash"></i><p>No devotees found</p></div>'; return; }
-  wrap.innerHTML = `<div class="calling-table-wrap"><table class="calling-table">
-    <thead><tr><th class="cs-num">#</th><th class="cs-name">Name</th><th>Mobile</th><th class="cs-team-col">Team</th><th class="cs-callingby">Calling By</th><th>${locked ? 'Status' : '✓ Coming'}</th><th>Reason &amp; Notes</th></tr></thead>
-    <tbody>${devotees.map((d, i) => renderCallingRow(d, i + 1, locked)).join('')}</tbody>
-  </table></div>`;
+  wrap.innerHTML = `<div class="calling-cards">${devotees.map((d, i) => renderCallingCard(d, i + 1, locked)).join('')}</div>`;
+}
+
+function renderCallingCard(d, i, locked) {
+  const isYes   = d.coming_status === 'Yes';
+  const reason  = d.calling_reason || '';
+  const safeId  = d.id;
+  const safeName = (d.name || '').replace(/'/g, "\\'");
+
+  const cardCls = ['calling-card'];
+  if (isYes)   cardCls.push('cc-confirmed');
+  if (reason)  cardCls.push('cc-has-reason');
+
+  const updHtml = d.updated_at_client
+    ? `<span class="cc-upd">Updated: ${new Date(d.updated_at_client).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true})}</span>`
+    : '';
+
+  const header = `
+    <div class="cc-header">
+      <div class="devotee-avatar cc-avatar">${initials(d.name)}</div>
+      <div class="cc-nameblock">
+        <span class="cc-name" onclick="openCallingHistory('${safeId}','${safeName}')">
+          ${d.name}${isBirthdayWeek(d.dob) ? ' <i class="fas fa-birthday-cake" style="color:var(--gold);font-size:.7rem"></i>' : ''}
+        </span>
+        <div class="cc-meta">
+          ${d.team_name ? teamBadge(d.team_name) : ''}
+          ${d.team_name && d.calling_by ? '<span>·</span>' : ''}
+          ${d.calling_by ? `<span>${d.calling_by}</span>` : ''}
+        </div>
+      </div>
+      <div class="cc-contacts">${contactIcons(d.mobile)}</div>
+    </div>`;
+
+  if (locked) {
+    const avail = (_reasonNeedsDate(reason) && d.available_from) ? ` · from ${formatDate(d.available_from)}` : '';
+    let chipHtml;
+    if (isYes) {
+      chipHtml = `<span class="cc-chip cc-chip-yes"><i class="fas fa-check-circle"></i> Coming</span>`;
+    } else if (reason) {
+      chipHtml = `<span class="cc-chip cc-chip-reason">${_reasonLabel(reason)}${avail}</span>`;
+    } else {
+      chipHtml = `<span class="cc-chip cc-chip-none"><i class="fas fa-circle-notch"></i> Not called</span>`;
+    }
+    const noteHtml = d.calling_notes
+      ? `<div class="cc-note-text">"${(d.calling_notes||'').replace(/"/g,'&quot;')}"</div>`
+      : '';
+    return `<div class="${cardCls.join(' ')}" data-id="${safeId}">
+      ${header}
+      ${chipHtml}${noteHtml}
+    </div>`;
+  }
+
+  // More reasons dropdown — excludes did_not_pick (has its own button)
+  const moreReasons = CALLING_REASONS.filter(r => r.value && r.value !== 'did_not_pick');
+  const moreOptions = moreReasons.map(r =>
+    `<option value="${r.value}"${reason === r.value ? ' selected' : ''}>${r.label}</option>`
+  ).join('');
+  const moreLabel = reason && reason !== 'did_not_pick'
+    ? (CALLING_REASONS.find(r => r.value === reason)?.label || reason)
+    : 'More…';
+  const moreHasCls = (reason && reason !== 'did_not_pick') ? ' has-reason' : '';
+
+  return `<div class="${cardCls.join(' ')}" data-id="${safeId}">
+    ${header}
+    <div class="cc-quick">
+      <button class="cc-qbtn cc-yes${isYes ? ' active' : ''}" onclick="toggleComing('${safeId}', this)" title="${isYes ? 'Unmark confirmed' : 'Mark as confirmed coming'}">
+        <i class="fas fa-check-circle"></i> Yes
+      </button>
+      <button class="cc-qbtn cc-nopick${reason === 'did_not_pick' ? ' active' : ''}" onclick="quickReason('${safeId}','did_not_pick',this)" title="Did not pick call">
+        <i class="fas fa-phone-slash"></i> No Pick
+      </button>
+      <button class="cc-qbtn cc-retry" onclick="quickRetry('${safeId}',this)" title="Reset — mark as not yet called">
+        <i class="fas fa-undo"></i> Retry
+      </button>
+      <select class="cc-more-select${moreHasCls}" onchange="onReasonChange('${safeId}',this)">
+        <option value="">${moreLabel}</option>
+        ${moreOptions}
+      </select>
+    </div>
+    <textarea class="cc-notes" placeholder="Add notes…" onchange="updateCallingNotes('${safeId}',this.value)">${(d.calling_notes||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+    ${updHtml}
+  </div>`;
 }
 
 function _reasonOptions(selected) {
@@ -597,17 +675,67 @@ async function toggleComing(devoteeId, btn) {
     btn.innerHTML = isNowYes
       ? '<i class="fas fa-check-circle"></i> Coming'
       : '<i class="fas fa-circle"></i> Mark Yes';
-    row.className = isNowYes ? 'row-confirmed' : '';
+    if (row) row.className = isNowYes ? 'row-confirmed' : '';
 
-    if (isNowYes) {
+    if (isNowYes && row) {
       const sel = row.querySelector('.calling-reason-select');
       if (sel) { sel.value = ''; sel.classList.remove('has-reason'); }
       const datePicker = row.querySelector('.calling-avail-date');
       if (datePicker) datePicker.style.display = 'none';
     }
+
+    // Card updates
+    const card = btn.closest('.calling-card');
+    if (card) {
+      card.classList.toggle('cc-confirmed', isNowYes);
+      card.classList.remove('cc-has-reason');
+      card.querySelectorAll('.cc-qbtn').forEach(b => b.classList.remove('active'));
+      if (isNowYes) btn.classList.add('active');
+      const sel = card.querySelector('.cc-more-select');
+      if (sel) { sel.value = ''; sel.classList.remove('has-reason'); }
+    }
+
     renderCallingStats(AppState.callingData);
   } catch (_) { showToast('Update failed', 'error'); }
 }
+
+async function quickReason(devoteeId, reason, btn) {
+  const week = resolveCallingDate(getFilterSessionId());
+  const d = AppState.callingData.find(x => x.id === devoteeId);
+  try {
+    await DB.updateCallingStatus(devoteeId, await week, { coming_status: '', calling_reason: reason, calling_notes: d?.calling_notes || '' });
+    if (d) { d.coming_status = ''; d.calling_reason = reason; }
+    const card = btn.closest('.calling-card');
+    if (card) {
+      card.classList.remove('cc-confirmed');
+      card.classList.toggle('cc-has-reason', !!reason);
+      card.querySelectorAll('.cc-qbtn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const sel = card.querySelector('.cc-more-select');
+      if (sel) { sel.value = ''; sel.classList.remove('has-reason'); }
+    }
+    renderCallingStats(AppState.callingData);
+  } catch(e) { showToast('Save failed', 'error'); }
+}
+window.quickReason = quickReason;
+
+async function quickRetry(devoteeId, btn) {
+  const week = resolveCallingDate(getFilterSessionId());
+  const d = AppState.callingData.find(x => x.id === devoteeId);
+  try {
+    await DB.updateCallingStatus(devoteeId, await week, { coming_status: '', calling_reason: '', calling_notes: d?.calling_notes || '' });
+    if (d) { d.coming_status = ''; d.calling_reason = ''; }
+    const card = btn.closest('.calling-card');
+    if (card) {
+      card.classList.remove('cc-confirmed', 'cc-has-reason');
+      card.querySelectorAll('.cc-qbtn').forEach(b => b.classList.remove('active'));
+      const sel = card.querySelector('.cc-more-select');
+      if (sel) { sel.value = ''; sel.classList.remove('has-reason'); }
+    }
+    renderCallingStats(AppState.callingData);
+  } catch(e) { showToast('Save failed', 'error'); }
+}
+window.quickRetry = quickRetry;
 
 function onReasonChange(devoteeId, sel) {
   if (_callingLocked) return;
@@ -633,7 +761,7 @@ function onReasonChange(devoteeId, sel) {
       toggleBtn.className = 'coming-toggle';
       toggleBtn.innerHTML = '<i class="fas fa-circle"></i> Mark Yes';
     }
-    row.className = 'row-has-reason';
+    if (row) row.className = 'row-has-reason';
     if (d) d.coming_status = '';
   }
 
@@ -644,6 +772,18 @@ function onReasonChange(devoteeId, sel) {
   }
 
   _saveCallingReason(devoteeId, reason, notesInput?.value || '', datePicker?.value || null);
+
+  // Card updates
+  const card = sel.closest('.calling-card');
+  if (card) {
+    card.classList.remove('cc-confirmed');
+    card.classList.toggle('cc-has-reason', !!reason);
+    card.querySelectorAll('.cc-qbtn').forEach(b => b.classList.remove('active'));
+    sel.classList.toggle('has-reason', !!reason);
+    if (reason === 'did_not_pick') {
+      card.querySelector('.cc-nopick')?.classList.add('active');
+    }
+  }
 }
 
 async function updateAvailableFrom(devoteeId, date) {

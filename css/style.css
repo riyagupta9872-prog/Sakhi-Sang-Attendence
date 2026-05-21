@@ -1625,6 +1625,62 @@ button.calling-stat:active { transform: translateY(0); }
 /* Context line inside name cell: hidden on desktop (Team/CallingBy columns are visible) */
 .tc-row-context { display: none; }
 
+/* ── CALLING CARDS (Calls tab mobile-first redesign) ── */
+.calling-cards { display: flex; flex-direction: column; gap: .55rem; padding: .25rem 0; }
+.calling-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border);
+  border-radius: var(--radius);
+  padding: .65rem .75rem;
+  transition: border-color .15s;
+}
+.calling-card.cc-confirmed  { border-left-color: var(--success); background: #f0fdf4; }
+.calling-card.cc-has-reason { border-left-color: var(--gold);    background: #fffdf0; }
+.cc-header { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; }
+.cc-avatar  { width: 34px; height: 34px; font-size: .7rem; flex-shrink: 0; }
+.cc-nameblock { flex: 1; min-width: 0; overflow: hidden; }
+.cc-name {
+  font-weight: 600; font-size: .88rem; color: var(--brand);
+  cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: block;
+}
+.cc-name:hover { text-decoration: underline; }
+.cc-meta { font-size: .7rem; color: var(--text-muted); margin-top: .08rem; display: flex; align-items: center; gap: .3rem; flex-wrap: wrap; }
+.cc-contacts { display: flex; gap: .3rem; flex-shrink: 0; }
+.cc-quick { display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: .4rem; align-items: center; }
+.cc-qbtn {
+  border: 1.5px solid var(--border); background: #fff;
+  border-radius: var(--radius-full); padding: .26rem .65rem;
+  font-size: .75rem; font-weight: 600; cursor: pointer;
+  display: inline-flex; align-items: center; gap: .28rem;
+  transition: all .14s; white-space: nowrap;
+}
+.cc-qbtn:active { transform: scale(.96); }
+.cc-yes.active   { background: #e8f5e9; color: #1b5e20; border-color: var(--success); }
+.cc-nopick.active{ background: #fce4ec; color: #b71c1c; border-color: #ef9a9a; }
+.cc-retry        { color: var(--text-muted); font-size: .73rem; }
+.cc-more-select  {
+  border: 1.5px solid var(--border); border-radius: var(--radius-full);
+  padding: .26rem .55rem; font-size: .74rem; background: #fff;
+  cursor: pointer; max-width: 130px; height: 30px;
+}
+.cc-more-select.has-reason { border-color: var(--gold); background: #fffbeb; color: #92400e; font-weight: 600; }
+.cc-notes {
+  width: 100%; box-sizing: border-box; margin-top: .1rem;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: .3rem .55rem; font-size: .78rem; font-family: inherit;
+  background: #fafafa;
+}
+.cc-notes:focus { outline: none; border-color: var(--brand-light); background: #fff; }
+.cc-upd { font-size: .64rem; color: var(--text-muted); margin-top: .22rem; display: block; }
+/* Locked card status chips */
+.cc-chip { display: inline-flex; align-items: center; gap: .3rem; padding: .2rem .55rem; border-radius: 4px; font-size: .8rem; margin-top: .25rem; }
+.cc-chip-yes  { background: #e8f5e9; color: #1b5e20; font-weight: 700; }
+.cc-chip-reason{ background: #fff3e0; color: #bf360c; font-weight: 600; }
+.cc-chip-none { color: #bdbdbd; font-size: .76rem; }
+.cc-note-text { font-size: .73rem; color: var(--text-muted); font-style: italic; margin-top: .18rem; }
+
 /* ── Global mobile calling table overrides ── */
 @media (max-width: 720px) {
   /* Smaller base font + tighter rows for ALL calling tables on mobile */

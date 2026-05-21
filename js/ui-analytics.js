@@ -2,10 +2,9 @@
 
 // ── DASHBOARD TAB ─────────────────────────────────────
 // Report-only dashboard: KPI tile strip + cross-team Coordinator grid.
-// Pulls live data from every collection (attendance, calling, books, services,
-// registrations, donations) for the selected Session in the filter ribbon.
-// All KPIs and grid cells respect the master Team chip — locking to one team
-// shows just that team's row + KPIs for that team's data.
+// Pulls live data from attendance and calling collections for the selected
+// Session in the filter ribbon. All KPIs and grid cells respect the master
+// Team chip — locking to one team shows just that team's row + KPIs.
 // Generation counter: each call gets a unique ID. Before writing to DOM,
 // a call checks if it's still the latest — if not, a newer call superseded it.
 let _dashGen = 0;
@@ -110,7 +109,7 @@ async function loadDashboard() {
 
     // Every fetch wrapped via safeQuery (timeout + catch fallback), so one
     // failing/hung query never blocks the rest of the Dashboard from rendering.
-    const [allDevotees, csSnap, atSnap, books, services, regs, donations, targetCfg] = await Promise.all([
+    const [allDevotees, csSnap, atSnap, targetCfg] = await Promise.all([
       safeQuery(DevoteeCache.all(), []),
       callingDate
         ? safeQuery(fdb.collection('callingStatus').where('weekDate', '==', callingDate).get(), { docs: [] })
@@ -118,10 +117,6 @@ async function loadDashboard() {
       sessionId
         ? safeQuery(fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get(), { docs: [] })
         : Promise.resolve({ docs: [] }),
-      safeQuery(DB.getBookDistributions({ startDate: activityStart, endDate: activityEnd }), []),
-      safeQuery(DB.getServices(         { startDate: activityStart, endDate: activityEnd }), []),
-      safeQuery(DB.getRegistrations(    { startDate: activityStart, endDate: activityEnd }), []),
-      safeQuery(DB.getDonations(        { startDate: activityStart, endDate: activityEnd }), []),
       safeQuery(DB.getAttendanceTargets(), { type: 'class', teams: {} }),
     ]);
 
@@ -136,11 +131,6 @@ async function loadDashboard() {
     const filterTeam = (typeof getFilterTeam === 'function') ? getFilterTeam() : '';
     const teamsToShow = filterTeam ? [filterTeam] : TEAMS;
 
-    // Per-team activity buckets
-    const bookByTeam     = {}; books.forEach(b => { bookByTeam[b.teamName] = (bookByTeam[b.teamName] || 0) + (parseInt(b.quantity) || 0); });
-    const serviceByTeam  = {}; services.forEach(s => { serviceByTeam[s.teamName] = (serviceByTeam[s.teamName] || 0) + 1; });
-    const regByTeam      = {}; regs.forEach(r => { regByTeam[r.teamName] = (regByTeam[r.teamName] || 0) + (parseInt(r.count) || 1); });
-    const donationByTeam = {}; donations.forEach(d => { donationByTeam[d.teamName] = (donationByTeam[d.teamName] || 0) + (parseFloat(d.amount) || 0); });
 
     // Per-team aggregation
     const rows = teamsToShow.map(team => {
@@ -173,10 +163,6 @@ async function loadDashboard() {
         callingListCount,
         target,
         pct,
-        books:    bookByTeam[team]     || 0,
-        services: serviceByTeam[team]  || 0,
-        regs:     regByTeam[team]      || 0,
-        donation: donationByTeam[team] || 0,
         comingIds:   coming.map(d => d.id),
         attendedIds: attended.map(d => d.id),
         calledIds:   called.map(d => d.id),
@@ -190,21 +176,13 @@ async function loadDashboard() {
       attended:         acc.attended         + r.attended,
       callingListCount: acc.callingListCount + r.callingListCount,
       target:           acc.target           + r.target,
-      books:            acc.books            + r.books,
-      services:         acc.services         + r.services,
-      regs:             acc.regs             + r.regs,
-      donation:         acc.donation         + r.donation,
-    }), { called: 0, coming: 0, attended: 0, callingListCount: 0, target: 0, books: 0, services: 0, regs: 0, donation: 0 });
+    }), { called: 0, coming: 0, attended: 0, callingListCount: 0, target: 0 });
     const totalPct = total.target > 0 ? Math.round((total.attended / total.target) * 100) : 0;
     const callAccPct = total.coming > 0 ? Math.round((rows.reduce((a, r) => a + r.attended, 0) / total.coming) * 100) : 0;
 
     // ── Update KPI tiles ──
     _setText('kpi-attended', total.callingListCount > 0 ? `${total.attended}/${total.callingListCount}` : total.attended);
     _setText('kpi-accuracy', callAccPct + '%');
-    _setText('kpi-books',    total.books);
-    _setText('kpi-service',  total.services);
-    _setText('kpi-reg',      total.regs);
-    _setText('kpi-donation', total.donation > 0 ? '₹' + total.donation.toLocaleString('en-IN') : '0');
 
     // ── Update greeting subline + grid sub-caption ──
     // Make the past-vs-live distinction visible at a glance: the report
@@ -238,10 +216,6 @@ async function loadDashboard() {
             <tr>
               <th rowspan="2">Team</th>
               <th colspan="5">Attendance</th>
-              <th rowspan="2">Books</th>
-              <th rowspan="2">Service</th>
-              <th rowspan="2">Reg.</th>
-              <th rowspan="2">Donation ₹</th>
             </tr>
             <tr class="dt-sub">
               <th>Called</th>
@@ -259,10 +233,6 @@ async function loadDashboard() {
               <td class="dt-num"><button onclick="openDashboardList('attended', '${r.team.replace(/'/g,"\\'")}')">${r.attended}</button></td>
               <td class="dt-num">${r.target}</td>
               <td class="dt-pct ${pctCls(r.pct)}">${r.pct}%</td>
-              <td class="dt-num">${r.books    > 0 ? `<button onclick="openActivityDetailModal('books','${r.team.replace(/'/g,"\\'")}')"><i class="fas fa-book" style="font-size:.65rem;margin-right:.2rem"></i>${r.books}</button>`    : '—'}</td>
-              <td class="dt-num">${r.services > 0 ? `<button onclick="openActivityDetailModal('service','${r.team.replace(/'/g,"\\'")}')"><i class="fas fa-hands-helping" style="font-size:.65rem;margin-right:.2rem"></i>${r.services}</button>` : '—'}</td>
-              <td class="dt-num">${r.regs     > 0 ? `<button onclick="openActivityDetailModal('regs','${r.team.replace(/'/g,"\\'")}')"><i class="fas fa-clipboard-check" style="font-size:.65rem;margin-right:.2rem"></i>${r.regs}</button>`     : '—'}</td>
-              <td class="dt-num">${r.donation > 0 ? `<button onclick="openActivityDetailModal('donation','${r.team.replace(/'/g,"\\'")}')"><i class="fas fa-hand-holding-usd" style="font-size:.65rem;margin-right:.2rem"></i>₹${r.donation.toLocaleString('en-IN')}</button>` : '—'}</td>
             </tr>`).join('')}
             <tr>
               <td class="dt-team">Grand Total</td>
@@ -271,16 +241,12 @@ async function loadDashboard() {
               <td class="dt-num">${total.attended}</td>
               <td class="dt-num">${total.target}</td>
               <td class="dt-pct ${pctCls(totalPct)}" style="color:${totalPct>=80?'#86efac':totalPct>=50?'#fde68a':'#fca5a5'}">${totalPct}%</td>
-              <td class="dt-num">${total.books    > 0 ? `<button onclick="openActivityDetailModal('books',null)"><i class="fas fa-book" style="font-size:.65rem;margin-right:.2rem"></i>${total.books}</button>`       : '—'}</td>
-              <td class="dt-num">${total.services > 0 ? `<button onclick="openActivityDetailModal('service',null)"><i class="fas fa-hands-helping" style="font-size:.65rem;margin-right:.2rem"></i>${total.services}</button>` : '—'}</td>
-              <td class="dt-num">${total.regs     > 0 ? `<button onclick="openActivityDetailModal('regs',null)"><i class="fas fa-clipboard-check" style="font-size:.65rem;margin-right:.2rem"></i>${total.regs}</button>`     : '—'}</td>
-              <td class="dt-num">${total.donation > 0 ? `<button onclick="openActivityDetailModal('donation',null)"><i class="fas fa-hand-holding-usd" style="font-size:.65rem;margin-right:.2rem"></i>₹${total.donation.toLocaleString('en-IN')}</button>` : '—'}</td>
             </tr>
           </tbody>
         </table>
       </div>`;
 
-    AppState._dashboard = { rows, sessionId, sessionDate, callingDate, csByDevotee, presentSet, allDevotees, books, services, regs, donations, activityStart, activityEnd };
+    AppState._dashboard = { rows, sessionId, sessionDate, callingDate, csByDevotee, presentSet, allDevotees };
   } catch (e) {
     if (gen !== _dashGen) return;
     console.error('loadDashboard', e);
@@ -323,114 +289,6 @@ function openDashboardList(kind, team) {
     if (typeof openCareDetail === 'function') openCareDetail('_dashboard');
   }
 }
-// Opens a drill-down modal for Books / Service / Registration cells in the
-// Coordinator Performance grid. team = null means "all teams" (grand total row).
-function openActivityDetailModal(type, team) {
-  const dash = AppState._dashboard;
-  if (!dash) return;
-
-  let rawData, title, colLabel, getVal;
-  if (type === 'books') {
-    rawData   = dash.books    || [];
-    title     = (team ? `${team} — ` : '') + 'Books Distributed';
-    colLabel  = 'Qty';
-    getVal    = b => parseInt(b.quantity) || 0;
-  } else if (type === 'service') {
-    rawData   = dash.services || [];
-    title     = (team ? `${team} — ` : '') + 'Services';
-    colLabel  = 'Description';
-    getVal    = s => s.serviceDescription || '—';
-  } else if (type === 'regs') {
-    rawData   = dash.regs     || [];
-    title     = (team ? `${team} — ` : '') + 'Registrations';
-    colLabel  = 'Count';
-    getVal    = r => parseInt(r.count) || 1;
-  } else if (type === 'donation') {
-    rawData   = dash.donations || [];
-    title     = (team ? `${team} — ` : '') + 'Donations';
-    colLabel  = 'Amount (₹)';
-    getVal    = d => parseFloat(d.amount) || 0;
-  } else return;
-
-  const filtered = team ? rawData.filter(x => x.teamName === team) : rawData;
-  // Sort: by team then by devotee name
-  filtered.sort((a, b) => (a.teamName || '').localeCompare(b.teamName || '') || (a.devoteeName || '').localeCompare(b.devoteeName || ''));
-
-  const periodNote = dash.activityStart
-    ? `<span style="font-size:.73rem;color:var(--text-muted);margin-left:.45rem;font-weight:400">${dash.activityStart} → ${dash.activityEnd}</span>`
-    : '';
-
-  const isDonation = type === 'donation';
-
-  const bodyRows = filtered.map((x, i) => {
-    const val = getVal(x);
-    if (isDonation) {
-      return `<tr>
-        <td style="color:var(--text-muted);text-align:center;font-size:.75rem">${i + 1}</td>
-        <td>${teamBadge(x.teamName || '—')}</td>
-        <td style="text-align:center;font-weight:700">₹${(parseFloat(x.amount)||0).toLocaleString('en-IN')}</td>
-        <td style="font-size:.78rem;color:var(--text-muted)">${x.note || '—'}</td>
-        <td style="font-size:.75rem;color:var(--text-muted)">${x.date || ''}</td>
-      </tr>`;
-    }
-    const name = x.devoteeName || '—';
-    const valCell = type === 'service'
-      ? `<td style="font-size:.78rem;max-width:160px;word-break:break-word">${val}</td>`
-      : `<td style="text-align:center;font-weight:700">${val}</td>`;
-    return `<tr>
-      <td style="color:var(--text-muted);text-align:center;font-size:.75rem">${i + 1}</td>
-      <td style="font-weight:600;font-size:.82rem">${name}</td>
-      <td>${teamBadge(x.teamName || '—')}</td>
-      ${valCell}
-    </tr>`;
-  }).join('');
-
-  // Aggregate total for the footer
-  const grandVal = isDonation
-    ? '₹' + filtered.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0).toLocaleString('en-IN')
-    : type === 'service'
-      ? filtered.length + ' entries'
-      : filtered.reduce((s, x) => s + (parseInt(type === 'books' ? x.quantity : x.count) || 1), 0);
-
-  // Remove any existing instance, then mount a fresh dynamic modal
-  document.getElementById('_act-detail-modal')?.remove();
-  const overlay = document.createElement('div');
-  overlay.id = '_act-detail-modal';
-  overlay.className = 'modal-overlay';
-  overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); } });
-
-  overlay.innerHTML = `
-    <div class="modal-box" style="max-width:520px;width:95vw">
-      <div class="modal-header">
-        <h2 style="font-size:1rem"><i class="fas fa-list-ul"></i> ${title}${periodNote}</h2>
-        <button class="btn-icon close" onclick="document.getElementById('_act-detail-modal')?.remove()">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-      <div style="overflow:auto;max-height:62vh;padding:.25rem .75rem .75rem">
-        <table class="calling-table cs-report-table" style="margin:0;min-width:300px">
-          <thead><tr>
-            <th style="text-align:center;min-width:28px">#</th>
-            ${isDonation
-              ? `<th>Team</th><th style="text-align:center">Amount</th><th>Note</th><th>Date</th>`
-              : `<th>Devotee</th><th>Team</th><th style="${type !== 'service' ? 'text-align:center' : ''}">${colLabel}</th>`}
-          </tr></thead>
-          <tbody>
-            ${bodyRows || '<tr><td colspan="4" style="text-align:center;padding:1.5rem;color:var(--text-muted)">No entries</td></tr>'}
-          </tbody>
-          ${filtered.length > 0 ? `<tfoot><tr style="background:#1a5c3a;color:#fff;font-weight:700;font-size:.82rem">
-            <td colspan="${isDonation ? 2 : 3}">Total</td>
-            <td style="text-align:center">${grandVal}</td>
-            ${isDonation ? '<td colspan="2"></td>' : ''}
-          </tr></tfoot>` : ''}
-        </table>
-      </div>
-    </div>`;
-
-  document.body.appendChild(overlay);
-  history.pushState(null, '', location.href);
-}
-
 let _reportsCategory = 'attendance';
 
 function switchReportsCategory(cat, btn) {
