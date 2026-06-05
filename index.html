@@ -107,6 +107,11 @@
       Super Admin will review your request shortly. You'll be able to log in once approved.<br><br>
       If urgent, please contact your coordinator directly.
     </div>
+    <div id="pending-id-box" style="background:#f8fafc;border:1px solid var(--color-border);border-radius:var(--radius-xs);padding:.6rem .75rem;font-size:.74rem;color:var(--text-muted);margin-bottom:.75rem">
+      <div style="font-weight:600;color:#475569;margin-bottom:.25rem"><i class="fas fa-id-badge"></i> Share this with Super Admin if your request doesn't show up:</div>
+      <div style="word-break:break-all"><strong>Email:</strong> <span id="pending-email">—</span></div>
+      <div style="word-break:break-all"><strong>UID:</strong> <code id="pending-uid" style="font-family:monospace;font-size:.7rem">—</code></div>
+    </div>
     <button class="btn btn-secondary" style="width:100%" onclick="doLogout()"><i class="fas fa-sign-out-alt"></i> Logout</button>
   </div>
 </div>
@@ -125,7 +130,7 @@
 </div>
 
 <!-- ══════════ BIRTHDAY POPUP ══════════ -->
-<div id="birthday-popup" class="modal-overlay hidden">
+<div id="birthday-popup" class="modal-overlay modal-centered hidden">
   <div class="modal-box birthday-modal">
     <div class="birthday-header">
       <div class="birthday-icon-wrap"><i class="fas fa-birthday-cake"></i></div>
@@ -212,6 +217,22 @@
       </div>
     </div>
 
+    <!-- Devotee Management group (Import / Export — moved out of the Devotees tab) -->
+    <div class="sidebar-group admin-coordinator-only">
+      <button class="sidebar-group-header" onclick="toggleSidebarGroup(this)">
+        <i class="fas fa-users-cog"></i> <span>Devotee Management</span>
+        <i class="fas fa-chevron-down sidebar-chevron"></i>
+      </button>
+      <div class="sidebar-group-body">
+        <button class="sidebar-item sub" onclick="openImportModal(); closeSidebar();">
+          <i class="fas fa-file-excel"></i> <span>Import from Excel</span>
+        </button>
+        <button class="sidebar-item sub" onclick="exportDevoteeDatabase(); closeSidebar();">
+          <i class="fas fa-database"></i> <span>Export Database</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Reports group -->
     <div class="sidebar-group super-admin-only">
       <button class="sidebar-group-header" onclick="toggleSidebarGroup(this)">
@@ -231,13 +252,26 @@
       </div>
     </div>
 
-    <!-- Standalone shortcut: opens its own card view -->
-    <button class="sidebar-item super-admin-only" onclick="openPersonalMeetings(); closeSidebar();">
-      <i class="fas fa-handshake"></i> <span>Personal Meetings</span>
-    </button>
     <button class="sidebar-item super-admin-only" onclick="openTeamRenameModal(); closeSidebar();">
       <i class="fas fa-exchange-alt"></i> <span>Rename Team</span>
     </button>
+
+    <div class="sidebar-divider"></div>
+
+    <!-- App Storage widget — superAdmin only -->
+    <div class="sidebar-storage super-admin-only" id="sidebar-storage-widget">
+      <div class="sidebar-storage-header">
+        <span><i class="fas fa-database"></i> App Storage</span>
+        <button class="sidebar-storage-refresh" id="storage-refresh-btn"
+                onclick="refreshStorageStats()" title="Recalculate">
+          <i class="fas fa-sync-alt" id="storage-refresh-icon"></i>
+        </button>
+      </div>
+      <div id="sidebar-storage-body" class="sidebar-storage-idle">
+        <i class="fas fa-database" style="opacity:.4"></i>
+        Tap ↺ to calculate
+      </div>
+    </div>
 
     <div class="sidebar-divider"></div>
 
@@ -257,20 +291,21 @@
 <!-- ══════════ TAB NAV ══════════ -->
 <nav class="tab-nav">
   <button class="tab-btn active" data-tab="dashboard" onclick="switchTab('dashboard', this)">
-    <i class="fas fa-home"></i><span>Dashboard</span>
-  </button>
-  <button class="tab-btn" data-tab="devotees" onclick="switchTab('devotees', this)">
-    <i class="fas fa-users"></i><span>Devotees</span>
+    <i class="fas fa-home"></i><span>Home</span>
   </button>
   <button class="tab-btn" data-tab="calling" onclick="switchTab('calling', this)">
     <i class="fas fa-phone-alt"></i><span>Calling</span>
   </button>
+  <button class="tab-btn" data-tab="meetings" onclick="switchTab('meetings', this)">
+    <i class="fas fa-link"></i><span>Connecting</span>
+  </button>
   <button class="tab-btn" data-tab="attendance" onclick="switchTab('attendance', this)">
     <i class="fas fa-check-circle"></i><span>Attendance</span>
   </button>
-  <button class="tab-btn" data-tab="care" onclick="switchTab('care', this)">
-    <i class="fas fa-heart"></i><span>Care</span>
+  <button class="tab-btn" data-tab="devotees" onclick="switchTab('devotees', this)">
+    <i class="fas fa-users"></i><span>Devotees</span>
   </button>
+  <!-- Care tab removed — sub-tabs moved to Attendance -->
   <button class="tab-btn" data-tab="events" onclick="switchTab('events', this)">
     <i class="fas fa-calendar-star"></i><span>Events</span>
   </button>
@@ -280,10 +315,8 @@
 </nav>
 
 <!-- ══════════ BOTTOM NAV (mobile only) ══════════
-     All tabs in a scrollable strip — 4 visible at a time.
-     Arrow buttons on each side scroll by one "page" (4 tab widths).
-     Active tab auto-scrolls into view via _bnavScrollActive() in ui-core.js.
-     applyRoleUI hides individual .bnav-btn elements by role, same as before. -->
+     All tabs in a scrollable strip. Arrow buttons scroll one "page" at a time.
+     Active tab auto-scrolls into view via _bnavScrollActive() in ui-core.js. -->
 <nav class="bottom-nav">
   <button class="bnav-arrow" id="bnav-prev" onclick="_bnavScroll(-1)" aria-label="Previous tabs">
     <i class="fas fa-chevron-left"></i>
@@ -292,18 +325,19 @@
     <button class="bnav-btn" data-tab="dashboard" onclick="switchTab('dashboard', this)">
       <i class="fas fa-home"></i><span>Home</span>
     </button>
-    <button class="bnav-btn" data-tab="devotees" onclick="switchTab('devotees', this)">
-      <i class="fas fa-users"></i><span>Devotees</span>
-    </button>
     <button class="bnav-btn" data-tab="calling" onclick="switchTab('calling', this)">
       <i class="fas fa-phone-alt"></i><span>Calling</span>
     </button>
+    <button class="bnav-btn" data-tab="meetings" onclick="switchTab('meetings', this)">
+      <i class="fas fa-link"></i><span>Connect</span>
+    </button>
     <button class="bnav-btn" data-tab="attendance" onclick="switchTab('attendance', this)">
-      <i class="fas fa-check-circle"></i><span>Attendance</span>
+      <i class="fas fa-check-circle"></i><span>Attend</span>
     </button>
-    <button class="bnav-btn" data-tab="care" onclick="switchTab('care', this)">
-      <i class="fas fa-heart"></i><span>Care</span>
+    <button class="bnav-btn" data-tab="devotees" onclick="switchTab('devotees', this)">
+      <i class="fas fa-users"></i><span>Devotees</span>
     </button>
+    <!-- Care tab removed from bottom nav -->
     <button class="bnav-btn" data-tab="events" onclick="switchTab('events', this)">
       <i class="fas fa-calendar-star"></i><span>Events</span>
     </button>
@@ -317,11 +351,6 @@
 </nav>
 
 <!-- ══════════ BREADCRUMB TRAIL ══════════
-     A clickable path "Home › Reports › Attendance Reports › Attendance Sheet"
-     so users always know where they are inside nested screens. Click any
-     segment to jump up the hierarchy. -->
-<nav id="breadcrumb-trail" class="breadcrumb-trail" aria-label="Breadcrumb"></nav>
-
 <!-- ══════════ FILTER RIBBON ══════════
      Single source of truth for context filters across every tab.
      Chip = grey when inactive, brand-green when filter is active.
@@ -374,74 +403,74 @@
       </div>
     </div>
 
-    <!-- Clear all -->
-    <button class="fr-clear-all" id="fr-clear-all" onclick="_frClearAll()" style="display:none">
-      <i class="fas fa-broom"></i> Clear all
-    </button>
   </div>
-  <div class="mfb-caption" id="mfb-caption">Showing all teams</div>
 </section>
 
 <!-- ══════════ MAIN CONTENT ══════════ -->
 <main class="main-content">
 
-  <!-- ──────── TAB 0: DASHBOARD (REPORT-ONLY) ──────── -->
-  <section id="tab-dashboard" class="tab-panel active">
+  <!-- ──────── TAB 0: DASHBOARD — Leaderboard Home ──────── -->
+  <section id="tab-dashboard" class="tab-panel active dash">
 
-    <!-- Compact greeting bar -->
-    <div class="dash-greet">
-      <div class="dash-greet-left">
-        <span class="dash-greet-om">ॐ</span>
-        <div>
-          <div id="home-greeting" class="dash-greet-title">Hare Krishna!</div>
-          <div class="dash-greet-sub" id="dash-greet-sub">Today's snapshot</div>
+    <!-- Top-3 Podium Leaderboard (Mon–Sat only) -->
+    <section class="ds-panel" id="home-lb-podium-section">
+      <header class="ds-panel__head">
+        <h2 class="ds-panel__title">
+          <i class="fas fa-trophy"></i> <span id="lb-session-label">This Week</span>
+        </h2>
+        <button class="ds-panel__link" onclick="navTabView('attendance','coordinator')">
+          Full report <i class="fas fa-arrow-right"></i>
+        </button>
+      </header>
+      <div id="lb-total-line" class="lb-total-line">
+        <span id="lb-total-came">—</span> came · <span id="lb-total-calling">—</span> in calling
+      </div>
+      <!-- Podium circles (JS-rendered) -->
+      <div id="lb-podium" class="lb-podium">
+        <div class="ds-skel" style="height:160px;border-radius:12px"></div>
+      </div>
+    </section>
+
+    <!-- Last 4 sessions table (Mon–Sat only) -->
+    <section class="ds-panel" id="home-lb-table-section">
+      <header class="ds-panel__head">
+        <h2 class="ds-panel__title">
+          <i class="fas fa-history"></i> Last 4 Sessions
+        </h2>
+        <button class="ds-panel__link" onclick="navTabView('attendance','coordinator')">
+          Full report <i class="fas fa-arrow-right"></i>
+        </button>
+      </header>
+      <div id="lb-table" class="lb-table-wrap">
+        <div class="ds-skel" style="height:160px;border-radius:8px"></div>
+      </div>
+    </section>
+
+    <!-- Sunday only: full Coordinator Performance (snap card + team table) -->
+    <section class="ds-panel hidden" id="home-coord-section">
+      <header class="ds-panel__head">
+        <h2 class="ds-panel__title">
+          <i class="fas fa-clipboard-list"></i> Today's Performance
+        </h2>
+        <button class="ds-panel__link" onclick="navTabView('attendance','coordinator')">
+          Full report <i class="fas fa-arrow-right"></i>
+        </button>
+      </header>
+      <!-- Session snapshot (ring + 4 stats + calling CTA) -->
+      <div id="home-coord-snap" class="ds-card ds-card--flat" style="margin-bottom:var(--s-3)">
+        <div class="ds-skel" style="height:120px;border-radius:12px"></div>
+      </div>
+      <!-- Team table (Called/Yes/Came/Target/%) -->
+      <div id="home-coord-content" class="ds-card ds-card--flat dashboard-wrap" style="padding:var(--s-3)">
+        <div class="ds-skel-list">
+          <div class="ds-skel ds-skel--row"></div>
+          <div class="ds-skel ds-skel--row"></div>
+          <div class="ds-skel ds-skel--row"></div>
         </div>
       </div>
-      <button class="dash-refresh-btn" onclick="loadDashboard()" title="Refresh">
-        <i class="fas fa-sync-alt"></i>
-      </button>
-    </div>
+    </section>
 
-    <!-- KPI tiles row -->
-    <div class="dash-kpi-row" id="dash-kpi-row">
-      <div class="dash-kpi" data-kpi="attended">
-        <div class="dash-kpi-icon att-icon"><i class="fas fa-check-circle"></i></div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-num" id="kpi-attended">—</div>
-          <div class="dash-kpi-label">Attended</div>
-        </div>
-      </div>
-      <div class="dash-kpi" data-kpi="accuracy">
-        <div class="dash-kpi-icon call-icon"><i class="fas fa-phone-alt"></i></div>
-        <div class="dash-kpi-body">
-          <div class="dash-kpi-num" id="kpi-accuracy">—</div>
-          <div class="dash-kpi-label">Calling Accuracy</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Coordinator performance grid -->
-    <div class="dash-section-head">
-      <div>
-        <i class="fas fa-clipboard-list"></i> Coordinator Performance
-      </div>
-    </div>
-    <div id="dashboard-content" class="dashboard-wrap">
-      <div class="loading"><i class="fas fa-spinner"></i> Loading…</div>
-    </div>
-
-    <!-- Quick-launch shortcuts (compact) -->
-    <div class="dash-section-head"><i class="fas fa-bolt"></i> Quick Actions</div>
-    <div class="dash-quick-grid">
-      <button class="dash-quick" onclick="navTabView('attendance','live')">
-        <span class="dash-quick-icon att-icon"><i class="fas fa-check-circle"></i></span>
-        <span class="dash-quick-label">Mark Attendance</span>
-      </button>
-      <button class="dash-quick" onclick="navTabView('calling','calls')">
-        <span class="dash-quick-icon call-icon"><i class="fas fa-phone-alt"></i></span>
-        <span class="dash-quick-label">Log Calls</span>
-      </button>
-    </div>
+    <div class="dash__ornament" aria-hidden="true">·  ·  ❉  ·  ·</div>
 
   </section>
 
@@ -449,10 +478,6 @@
   <section id="tab-devotees" class="tab-panel">
     <div class="panel-header">
       <h2><i class="fas fa-spa"></i> Devotee Profiles</h2>
-      <div class="panel-actions">
-        <button class="btn btn-secondary" id="btn-import-excel" onclick="openImportModal()"><i class="fas fa-file-excel"></i> Import Excel</button>
-        <button class="btn btn-secondary admin-coordinator-only" onclick="exportDevoteeDatabase()" title="Export team-wise devotee database"><i class="fas fa-database"></i> Export DB</button>
-      </div>
     </div>
     <div class="search-filter-bar">
       <div class="search-box">
@@ -467,6 +492,7 @@
         <option>Most Serious</option>
         <option>New Devotee</option>
         <option>Inactive</option>
+        <option value="connecting">Connecting (met Prabhuji)</option>
       </select>
     </div>
     <div id="devotee-count" class="result-count"></div>
@@ -479,10 +505,10 @@
 
     <div class="att-sub-tabs">
       <button id="calling-calls-btn" class="att-sub-tab active" onclick="switchCallingSubTab(this,'calls')">
-        <i class="fas fa-phone-alt"></i> Calls
+        <i class="fas fa-phone-alt"></i> Your Calling Sewa
       </button>
       <button id="calling-team-btn" class="att-sub-tab" onclick="switchCallingSubTab(this,'team-calling')">
-        <i class="fas fa-users"></i> Team Calling
+        <i class="fas fa-users"></i> Your Team Calling
       </button>
       <button id="calling-reports-btn" class="att-sub-tab" onclick="switchCallingSubTab(this,'reports')">
         <i class="fas fa-chart-bar"></i> Reports
@@ -490,7 +516,21 @@
       <button id="calling-history-btn" class="att-sub-tab" onclick="switchCallingSubTab(this,'history')">
         <i class="fas fa-history"></i> Calling History
       </button>
+      <button id="calling-said-btn" class="att-sub-tab" onclick="switchCallingSubTab(this,'said-coming')">
+        <i class="fas fa-user-times"></i> Said Coming
+      </button>
+      <button id="calling-notcoming-btn" class="att-sub-tab" onclick="switchCallingSubTab(this,'not-coming-present')">
+        <i class="fas fa-user-check"></i> Surprise Present
+      </button>
     </div>
+
+    <!-- Active subtab name chip -->
+    <div id="calling-active-subtab" style="padding:.35rem 0 .2rem;display:none">
+      <span class="active-subtab-chip"><i class="fas fa-layer-group"></i> <span id="calling-active-subtab-name"></span></span>
+    </div>
+
+    <!-- ── GLOBAL CALLING STATS (visible on all sub-tabs) ── -->
+    <div id="calling-stats" class="calling-stats-row"></div>
 
     <!-- ── CALLING LIST PANEL ── -->
     <div id="calling-panel-list" class="att-sub-panel active">
@@ -524,8 +564,6 @@
           <option value="_none">Not Called</option>
         </select>
       </div>
-      <!-- Stats reflect the current filter (team / caller / search / status) -->
-      <div id="calling-stats" class="calling-stats-row"></div>
       <div id="calling-list" class="calling-table-wrap"></div>
       <div id="calling-submit-bar" class="calling-submit-bar"></div>
     </div>
@@ -541,7 +579,7 @@
     <div id="calling-panel-reports" class="att-sub-panel">
       <div id="reports-cat-calling" class="reports-cat-panel active">
         <div class="sub-tabs">
-          <button class="sub-tab active" onclick="switchCallingRptSub(this,'weekly')"><i class="fas fa-chart-bar"></i> Weekly Report</button>
+          <button class="sub-tab active" onclick="switchCallingRptSub(this,'weekly')"><i class="fas fa-chart-bar"></i> Calling Reports</button>
           <button class="sub-tab" onclick="switchCallingRptSub(this,'submission')"><i class="fas fa-chart-line"></i> Submission Reports</button>
         </div>
         <div id="subtab-calling-weekly" class="sub-panel active">
@@ -577,6 +615,20 @@
       </div>
     </div>
 
+    <!-- ── SAID COMING NOT COME PANEL ── -->
+    <div id="calling-panel-said-coming" class="att-sub-panel">
+      <div id="calling-said-content">
+        <div class="empty-state"><i class="fas fa-user-times"></i><p>Loading…</p></div>
+      </div>
+    </div>
+
+    <!-- ── NOT COMING BUT PRESENT PANEL ── -->
+    <div id="calling-panel-not-coming-present" class="att-sub-panel">
+      <div id="calling-notcoming-content">
+        <div class="empty-state"><i class="fas fa-user-check"></i><p>Loading…</p></div>
+      </div>
+    </div>
+
   </section>
 
   <!-- ──────── TAB 3: ATTENDANCE ──────── -->
@@ -585,9 +637,15 @@
       <button class="att-sub-tab active" onclick="switchAttSubTab(this,'live')">
         <i class="fas fa-check-circle"></i> Live
       </button>
+      <button class="att-sub-tab" onclick="switchAttSubTab(this,'coordinator')">
+        <i class="fas fa-clipboard-list"></i> Coordinator
+      </button>
       <button class="att-sub-tab" onclick="switchAttSubTab(this,'reports')">
         <i class="fas fa-chart-bar"></i> Reports
       </button>
+    </div>
+    <div id="att-active-subtab" style="padding:.35rem 0 .2rem;display:none">
+      <span class="active-subtab-chip"><i class="fas fa-layer-group"></i> <span id="att-active-subtab-name"></span></span>
     </div>
 
     <!-- ── LIVE SESSION PANEL ── -->
@@ -603,6 +661,9 @@
             <i class="fas fa-calendar-alt"></i>
             <span id="session-date-text"></span>
           </span>
+          <button class="btn btn-secondary" onclick="openConnectingPresent()" title="Present devotees connected with seniors">
+            <i class="fas fa-link"></i> Connecting
+          </button>
           <button class="btn btn-secondary admin-coordinator-only" onclick="exportAttendance()">
             <i class="fas fa-file-excel"></i> Export
           </button>
@@ -613,19 +674,19 @@
         <button class="btn btn-secondary admin-coordinator-only" style="padding:.25rem .8rem;font-size:.8rem;margin-left:auto" onclick="unCancelSession()"><i class="fas fa-undo"></i> Restore Class</button>
       </div>
       <div class="attendance-dashboard">
-        <div class="stat-card target-card">
+        <div class="stat-card target-card" style="cursor:pointer" onclick="openAttendanceStatList('confirmed')" title="Click to see names">
           <div class="stat-icon"><i class="fas fa-check-double"></i></div>
           <div class="stat-info"><div class="stat-value" id="stat-confirmed">0</div><div class="stat-label">Total Confirmed</div></div>
         </div>
-        <div class="stat-card present-card">
+        <div class="stat-card present-card" style="cursor:pointer" onclick="openAttendanceStatList('present')" title="Click to see names">
           <div class="stat-icon"><i class="fas fa-user-check"></i></div>
           <div class="stat-info"><div class="stat-value" id="stat-present">0</div><div class="stat-label">Present</div></div>
         </div>
-        <div class="stat-card new-card">
+        <div class="stat-card new-card" style="cursor:pointer" onclick="openAttendanceStatList('new')" title="Click to see names">
           <div class="stat-icon"><i class="fas fa-user-plus"></i></div>
           <div class="stat-info"><div class="stat-value" id="stat-new">0</div><div class="stat-label">New</div></div>
         </div>
-        <div class="stat-card total-card">
+        <div class="stat-card total-card" style="cursor:pointer" onclick="openAttendanceStatList('total')" title="Click to see names">
           <div class="stat-icon"><i class="fas fa-users"></i></div>
           <div class="stat-info"><div class="stat-value" id="stat-total">0</div><div class="stat-label">Total Present</div></div>
         </div>
@@ -637,6 +698,13 @@
         </div>
       </div>
       <div id="attendance-list" class="attendance-grid"></div>
+    </div>
+
+    <!-- ── COORDINATOR PERFORMANCE PANEL ── -->
+    <div id="att-panel-coordinator" class="att-sub-panel">
+      <div id="att-coordinator-content">
+        <div class="loading"><i class="fas fa-spinner"></i> Loading…</div>
+      </div>
     </div>
 
     <!-- ── REPORTS SUB-PANEL (was the standalone Reports tab) ── -->
@@ -689,52 +757,60 @@
       </div>
     </div>
 
+    <!-- ── CARE SUB-PANELS ── -->
+    <div id="att-panel-care-newcomers"  class="att-sub-panel"><div id="att-care-newcomers-content"></div></div>
+    <div id="att-panel-care-returning"  class="att-sub-panel"><div id="att-care-returning-content"></div></div>
+    <div id="att-panel-repeat-absent"   class="att-sub-panel"><div id="att-repeat-absent-content"></div></div>
+    <!-- Merged Absent panel — filter buttons rendered by loadCareAbsentTab() -->
+    <div id="att-panel-care-absent"     class="att-sub-panel"><div id="att-care-absent-merged-content"></div></div>
+
   </section>
 
-  <!-- ──────── TAB 5: CARE ──────── -->
-  <section id="tab-care" class="tab-panel">
-    <div class="panel-header">
-      <h2><i class="fas fa-heart"></i> Devotee Care</h2>
-      <button class="btn btn-secondary" onclick="loadCareData()"><i class="fas fa-sync"></i> Refresh</button>
+  <!-- ──────── TAB: MEETINGS ──────── -->
+  <!-- Sub-tabs (Overdue / Scheduled / Completed / Recently Met) live in the
+       top-nav dropdown via TAB_VIEWS.meetings — no inline pill row here. -->
+  <section id="tab-meetings" class="tab-panel meet">
+    <header class="meet__head">
+      <div>
+        <span class="active-subtab-chip" id="meet-active-label">Overdue</span>
+      </div>
+      <button class="ds-btn" onclick="openScheduleMeetingForm()">
+        <i class="fas fa-calendar-plus"></i> Schedule Meeting
+      </button>
+    </header>
+
+    <!-- Status filter chips — shared across sub-tabs -->
+    <div class="ds-row ds-row--tight ds-row--wrap meet__chip-row" id="meet-status-chips">
+      <button class="ds-chip ds-chip--active" data-status="all"          onclick="setMeetStatusFilter('all')">All <span class="ds-chip__count" data-count="all">0</span></button>
+      <button class="ds-chip"                 data-status="Most Serious" onclick="setMeetStatusFilter('Most Serious')">Most Serious <span class="ds-chip__count" data-count="Most Serious">0</span></button>
+      <button class="ds-chip"                 data-status="Serious"      onclick="setMeetStatusFilter('Serious')">Serious <span class="ds-chip__count" data-count="Serious">0</span></button>
+      <button class="ds-chip"                 data-status="ETS"          onclick="setMeetStatusFilter('ETS')">ETS <span class="ds-chip__count" data-count="ETS">0</span></button>
+      <button class="ds-chip"                 data-status="New Devotee"  onclick="setMeetStatusFilter('New Devotee')">New <span class="ds-chip__count" data-count="New Devotee">0</span></button>
+      <button class="ds-chip"                 data-status="Inactive"     onclick="setMeetStatusFilter('Inactive')">Inactive <span class="ds-chip__count" data-count="Inactive">0</span></button>
     </div>
-    <div class="care-grid">
-      <div class="care-card care-clickable" onclick="openCareDetail('absentWeek')">
-        <div class="care-card-header">
-          <i class="fas fa-user-clock"></i>
-          <div><h3>Absent This Week</h3><p>Regular attendees who missed this week</p></div>
-          <span class="care-badge" id="absent-week-count">0</span>
-        </div>
-      </div>
-      <div class="care-card warn-card care-clickable" onclick="openCareDetail('absent2Weeks')">
-        <div class="care-card-header">
-          <i class="fas fa-exclamation-triangle"></i>
-          <div><h3>Absent 2+ Weeks</h3><p>Missing for 2 consecutive weeks</p></div>
-          <span class="care-badge badge-warn" id="absent-2weeks-count">0</span>
-        </div>
-      </div>
-      <div class="care-card success-card care-clickable" onclick="openCareDetail('newcomers')">
-        <div class="care-card-header">
-          <i class="fas fa-seedling"></i>
-          <div><h3>Returning Newcomers</h3><p>Were new last week and came again!</p></div>
-          <span class="care-badge badge-success" id="newcomers-count">0</span>
-        </div>
-      </div>
-      <div class="care-card danger-card care-clickable" onclick="openCareDetail('inactive')">
-        <div class="care-card-header">
-          <i class="fas fa-flag"></i>
-          <div><h3>Inactivity Alerts</h3><p>Haven't attended in 3+ consecutive weeks</p></div>
-          <span class="care-badge badge-danger" id="inactive-count">0</span>
-        </div>
-      </div>
-      <div class="care-card warn-card care-clickable" onclick="openCareDetail('saidComing')">
-        <div class="care-card-header">
-          <i class="fas fa-user-times"></i>
-          <div><h3>Said Coming — Didn't Come</h3><p>Confirmed on call but absent on session</p></div>
-          <span class="care-badge badge-warn" id="said-coming-count">0</span>
-        </div>
-      </div>
+
+    <!-- Sub-panels (only one visible at a time via _meetActiveSubTab) -->
+    <div id="meet-panel-overdue"   class="meet-sub-panel">
+      <div class="loading"><i class="fas fa-spinner"></i> Loading…</div>
+    </div>
+    <div id="meet-panel-scheduled" class="meet-sub-panel hidden">
+      <div class="loading"><i class="fas fa-spinner"></i> Loading…</div>
+    </div>
+    <div id="meet-panel-completed" class="meet-sub-panel hidden">
+      <div class="loading"><i class="fas fa-spinner"></i> Loading…</div>
+    </div>
+    <div id="meet-panel-recent"    class="meet-sub-panel hidden">
+      <div class="loading"><i class="fas fa-spinner"></i> Loading…</div>
+    </div>
+    <div id="meet-panel-ptm"       class="meet-sub-panel hidden">
+      <div class="loading"><i class="fas fa-spinner"></i> Loading…</div>
+    </div>
+    <div id="meet-panel-my-log"    class="meet-sub-panel hidden">
+      <div class="loading"><i class="fas fa-spinner"></i> Loading…</div>
     </div>
   </section>
+
+  <!-- Care tab removed — sub-tabs moved into Attendance tab -->
 
   <!-- ──────── TAB 6: EVENTS ──────── -->
   <section id="tab-events" class="tab-panel">
@@ -835,6 +911,9 @@
 
     <!-- Profile Hero -->
     <div id="profile-view-hero"></div>
+    <!-- Hidden file input for direct photo upload from view modal -->
+    <input type="file" id="pv-photo-input" accept="image/*" style="display:none"
+           onchange="handleProfileViewPhotoSelect(event)">
 
     <!-- Same tab bar as Add New Devotee -->
     <div class="profile-sec-tabs">
@@ -912,6 +991,31 @@
           <span class="psec-note">Name, contact, and location details</span>
         </div>
         <div class="form-grid">
+          <!-- Profile photo upload -->
+          <div class="form-group full">
+            <label>Profile Photo <span class="field-hint">(optional · max 300 KB)</span></label>
+            <div style="display:flex;align-items:center;gap:1rem">
+              <div class="dev-pic-upload" id="f-photo-preview"
+                   onclick="document.getElementById('f-photo-input').click()"
+                   title="Click to upload photo" style="cursor:pointer">
+                <img id="f-photo-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%">
+                <span id="f-photo-initials" style="font-size:1.2rem;font-weight:700;color:#fff"></span>
+              </div>
+              <div>
+                <button type="button" class="btn btn-secondary btn-sm"
+                        onclick="document.getElementById('f-photo-input').click()">
+                  <i class="fas fa-camera"></i> Upload
+                </button>
+                <button type="button" class="btn btn-secondary btn-sm" id="f-remove-photo-btn"
+                        onclick="removeDevoteePhoto()" style="margin-left:.4rem;display:none">
+                  <i class="fas fa-trash"></i>
+                </button>
+                <input type="file" id="f-photo-input" accept="image/*" style="display:none"
+                       onchange="handleDevoteePhotoSelect(event)">
+                <p style="font-size:.72rem;color:var(--text-muted);margin:.3rem 0 0">JPG, PNG, WebP</p>
+              </div>
+            </div>
+          </div>
           <div class="form-group full">
             <label>Full Name <span class="req">*</span></label>
             <input type="text" id="f-name" placeholder="Enter full name">
@@ -1407,19 +1511,6 @@
   </div>
 </div>
 
-<!-- Admin Panel Modal -->
-<div id="admin-panel-modal" class="modal-overlay hidden">
-  <div class="modal-box large">
-    <div class="modal-header">
-      <h2><i class="fas fa-cog"></i> Admin Panel – User Management</h2>
-      <button class="btn-icon close" onclick="closeModal('admin-panel-modal')"><i class="fas fa-times"></i></button>
-    </div>
-    <div id="admin-users-list" style="max-height:65vh;overflow-y:auto">
-      <div class="loading"><i class="fas fa-spinner"></i> Loading users…</div>
-    </div>
-  </div>
-</div>
-
 <!-- Target Management Modal -->
 <div id="target-mgmt-modal" class="modal-overlay hidden">
   <div class="modal-box" style="max-width:480px">
@@ -1536,9 +1627,16 @@
           <option value="cancelled">Cancelled</option>
         </select>
       </div>
-      <div style="margin-bottom:.5rem">
+      <div style="margin-bottom:.75rem">
         <label style="display:block;font-size:.83rem;font-weight:600;margin-bottom:.3rem">Notes</label>
         <textarea id="meeting-notes" rows="3" style="width:100%;padding:.42rem .55rem;border:1px solid var(--color-border);border-radius:var(--radius-xs);font-size:.9rem;resize:vertical" placeholder="Outcome, key points discussed…"></textarea>
+      </div>
+      <div class="meet-remarks-wrap" style="margin-bottom:.5rem">
+        <label for="meeting-authority-remarks" style="display:block;font-size:.83rem;font-weight:600;margin-bottom:.3rem">
+          <i class="fas fa-feather-alt" style="color:#a16207;margin-right:.25rem"></i> Authority Remarks
+          <span style="font-weight:400;font-size:.72rem;color:var(--text-muted);margin-left:.25rem">(senior Prabhuji's guidance / minutes of meeting)</span>
+        </label>
+        <textarea id="meeting-authority-remarks" rows="3" style="width:100%;padding:.42rem .55rem;border:1px solid var(--color-border);border-radius:var(--radius-xs);font-size:.9rem;resize:vertical;background:#fffbeb" placeholder="Guidance, instructions, or remarks from the senior Prabhuji…"></textarea>
       </div>
     </div>
     <div class="modal-footer" style="padding:.75rem 1.25rem;display:flex;justify-content:space-between;gap:.5rem;border-top:1px solid var(--color-border)">
@@ -1614,12 +1712,13 @@
 </div>
 
 <!-- Calling History Modal -->
-<div id="calling-history-modal" class="modal-overlay hidden">
+<div id="calling-history-modal" class="modal-overlay modal-centered hidden">
   <div class="modal-box small">
     <div class="modal-header">
       <h2 id="calling-history-name"><i class="fas fa-history"></i> Calling History</h2>
       <button class="btn-icon close" onclick="closeModal('calling-history-modal')"><i class="fas fa-times"></i></button>
     </div>
+    <!-- Direct call/WA buttons populated by openCallingHistory() -->
     <div id="calling-history-content" style="padding:1rem 1.25rem 1.25rem"></div>
   </div>
 </div>
@@ -1686,6 +1785,18 @@
 </div>
 
 
+<!-- Devotee Meeting History Modal (WhatsApp call-info style) -->
+<div id="devotee-meeting-history-modal" class="modal-overlay modal-centered hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2><i class="fas fa-history"></i> <span id="dmh-name">Meeting History</span></h2>
+      <button class="btn-icon close" onclick="closeModal('devotee-meeting-history-modal')"><i class="fas fa-times"></i></button>
+    </div>
+    <div id="dmh-sub" class="dmh-sub"></div>
+    <div id="dmh-body" class="dmh-body"></div>
+  </div>
+</div>
+
 <!-- Edit Profile Modal -->
 <div id="edit-profile-modal" class="modal-overlay hidden">
   <div class="modal-box small">
@@ -1696,7 +1807,9 @@
     <div style="padding:1.25rem">
       <!-- Profile picture section -->
       <div style="display:flex;flex-direction:column;align-items:center;gap:.75rem;margin-bottom:1.25rem">
-        <div class="profile-pic-preview" id="profile-pic-preview">
+        <div class="profile-pic-preview" id="profile-pic-preview"
+             onclick="document.getElementById('profile-pic-input').click()"
+             style="cursor:pointer" title="Click to change photo">
           <img id="profile-pic-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%">
           <span id="profile-pic-initials" style="font-size:2.2rem;font-weight:700;color:#fff"></span>
         </div>
@@ -1708,7 +1821,7 @@
             <i class="fas fa-trash"></i> Remove
           </button>
           <input type="file" id="profile-pic-input" accept="image/*" style="display:none" onchange="handleProfilePicSelect(event)">
-          <p style="font-size:.75rem;color:var(--text-muted);margin:.35rem 0 0">Max 50 KB · JPG, PNG, WebP</p>
+          <p style="font-size:.75rem;color:var(--text-muted);margin:.35rem 0 0">Max 300 KB · JPG, PNG, WebP</p>
         </div>
       </div>
       <!-- Name field -->
@@ -1904,6 +2017,16 @@
           <option value="festival">Festival — includes festival-only devotees</option>
         </select>
       </div>
+      <div class="form-group">
+        <label class="sc-toggle-row">
+          <span><i class="fas fa-door-open"></i> Calling Window Open</span>
+          <span class="sc-switch">
+            <input type="checkbox" id="sc-calling-window">
+            <span class="sc-switch-track"><span class="sc-switch-knob"></span></span>
+          </span>
+        </label>
+        <span class="field-hint">When ON, callers can submit calling &amp; see the calling button on Home. Turn OFF to close the window.</span>
+      </div>
       <div class="form-grid" style="gap:.75rem">
         <div class="form-group">
           <label><i class="fas fa-phone-alt"></i> Calling Date</label>
@@ -2033,49 +2156,124 @@
 
 <!-- User Action Modal (click user in User Mgmt) -->
 <div id="user-action-modal" class="modal-overlay hidden">
-  <div class="modal-box small">
-    <div class="modal-header">
-      <h2><i class="fas fa-user-cog"></i> <span id="ua-user-name">User</span></h2>
-      <button class="btn-icon close" onclick="closeModal('user-action-modal')"><i class="fas fa-times"></i></button>
-    </div>
-    <input type="hidden" id="ua-user-id">
-    <div style="padding:1.25rem;display:flex;flex-direction:column;gap:.75rem">
-      <div class="form-group">
-        <label><i class="fas fa-user-tag"></i> App Role <span style="font-size:.75rem;font-weight:400;color:var(--text-muted)">(controls what tabs they can access)</span></label>
-        <select id="ua-role">
-          <option value="serviceDevotee">Caller / Facilitator</option>
-          <option value="teamAdmin">Team Coordinator</option>
-          <option value="superAdmin">Super Admin</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label><i class="fas fa-users"></i> Team</label>
-        <select id="ua-team">
-          <option value="">No Team</option>
-          <option>Champaklata</option><option>Chitralekha</option><option>Indulekha</option>
-          <option>Lalita</option><option>Nilachal</option><option>Other</option>
-          <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Vishakha</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label><i class="fas fa-briefcase"></i> Custom Title <span style="font-size:.75rem;font-weight:400;color:var(--text-muted)">(shown on their header badge)</span></label>
-        <input type="text" id="ua-position" placeholder="e.g. Head Caller, Zone Leader, Shiksha Coordinator…">
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:.6rem .75rem;background:var(--brand-subtle);border:1px solid var(--border);border-radius:var(--radius);gap:.75rem">
+  <div class="modal-box ua">
+    <header class="ua__head">
+      <div class="ua__head-id">
+        <div class="ua__avatar" id="ua-avatar">U</div>
         <div>
-          <div style="font-weight:700;font-size:.85rem;color:var(--brand)"><i class="fas fa-hands-helping"></i> Attendance Seva</div>
-          <div style="font-size:.75rem;color:var(--text-muted);margin-top:.15rem">Can mark live attendance for ALL teams</div>
+          <h2 class="ua__name" id="ua-user-name">User</h2>
+          <p class="ua__email ds-text-xs ds-text-dim" id="ua-user-email"></p>
         </div>
-        <label class="toggle-switch" style="margin:0" title="Grant live attendance access for all teams">
-          <input type="checkbox" id="ua-att-seva">
-          <span class="toggle-slider"></span>
-        </label>
       </div>
-      <div class="form-actions">
-        <button type="button" class="btn btn-danger" onclick="doRemoveUser()"><i class="fas fa-trash"></i> Remove User</button>
-        <button type="button" class="btn btn-primary" onclick="doSaveUserAction()"><i class="fas fa-save"></i> Save Changes</button>
+      <button class="ua__close" onclick="closeModal('user-action-modal')" aria-label="Close">
+        <i class="fas fa-times"></i>
+      </button>
+    </header>
+
+    <input type="hidden" id="ua-user-id">
+
+    <div class="ua__body ds-stack ds-stack--4">
+
+      <!-- Live access summary — top so impact is instant -->
+      <div class="ua__summary" id="ua-summary">
+        <i class="fas fa-circle-info"></i>
+        <span id="ua-summary-text">—</span>
       </div>
+
+      <!-- PROFILE -->
+      <section class="ds-stack ds-stack--3">
+        <h3 class="ds-section-title">Profile</h3>
+        <div class="ds-grid-2">
+          <div class="ds-field">
+            <label class="ds-field__lbl">Role</label>
+            <select id="ua-role">
+              <option value="serviceDevotee">Facilitator</option>
+              <option value="teamAdmin">Coordinator</option>
+              <option value="superAdmin">Super Admin</option>
+            </select>
+          </div>
+          <div class="ds-field">
+            <label class="ds-field__lbl">Team</label>
+            <select id="ua-team">
+              <option value="">— No team —</option>
+              <option>Champaklata</option><option>Chitralekha</option><option>Indulekha</option>
+              <option>Lalita</option><option>Nilachal</option><option>Other</option>
+              <option>Rangadevi</option><option>Sudevi</option><option>Tungavidya</option><option>Vishakha</option>
+            </select>
+          </div>
+        </div>
+        <div class="ds-field">
+          <label class="ds-field__lbl">
+            Custom title <span class="ds-field__hint">optional — shown on their header badge</span>
+          </label>
+          <input type="text" id="ua-position" placeholder="e.g. Head Caller, Zone Leader…">
+        </div>
+      </section>
+
+      <!-- SPECIAL POWERS -->
+      <section class="ds-stack ds-stack--3">
+        <div class="ds-row ds-row--between" style="flex-wrap:wrap;gap:var(--s-2)">
+          <h3 class="ds-section-title"><i class="fas fa-key"></i> Special Powers</h3>
+          <span class="ds-text-xs ds-text-dim">grant cross-team access without making them Super Admin</span>
+        </div>
+
+        <!-- Quick presets -->
+        <div class="ds-row ds-row--tight ds-row--wrap ua__presets">
+          <button type="button" class="ds-chip" onclick="_uaApplyPreset('deputy')"><i class="fas fa-user-shield"></i> Operations Deputy</button>
+          <button type="button" class="ds-chip" onclick="_uaApplyPreset('caller')"><i class="fas fa-phone-volume"></i> Cross-team Caller</button>
+          <button type="button" class="ds-chip" onclick="_uaApplyPreset('reviewer')"><i class="fas fa-binoculars"></i> Reviewer</button>
+          <button type="button" class="ds-chip ua__chip-clear" onclick="_uaApplyPreset('clear')" style="margin-left:auto"><i class="fas fa-eraser"></i> Clear</button>
+        </div>
+
+        <!-- Toggle rows — all use the same component -->
+        <div class="ds-stack ds-stack--2">
+          <label class="ua__toggle">
+            <div class="ua__toggle-text">
+              <strong>Attendance Seva</strong>
+              <em>Mark live attendance for any team</em>
+            </div>
+            <label class="toggle-switch" style="margin:0"><input type="checkbox" id="ua-att-seva"><span class="toggle-slider"></span></label>
+          </label>
+          <label class="ua__toggle">
+            <div class="ua__toggle-text">
+              <strong>Back-date Attendance</strong>
+              <em>Mark or undo attendance on past sessions (not just today's)</em>
+            </div>
+            <label class="toggle-switch" style="margin:0"><input type="checkbox" id="ua-can-backdate"><span class="toggle-slider"></span></label>
+          </label>
+          <label class="ua__toggle">
+            <div class="ua__toggle-text">
+              <strong>All-Team Calling</strong>
+              <em>Submit / edit calling on behalf of any team · unlocks Team Calling</em>
+            </div>
+            <label class="toggle-switch" style="margin:0"><input type="checkbox" id="ua-can-all-calling"><span class="toggle-slider"></span></label>
+          </label>
+          <label class="ua__toggle">
+            <div class="ua__toggle-text">
+              <strong>All-Team Reports</strong>
+              <em>View reports across every team (read-only)</em>
+            </div>
+            <label class="toggle-switch" style="margin:0"><input type="checkbox" id="ua-can-all-reports"><span class="toggle-slider"></span></label>
+          </label>
+          <label class="ua__toggle ua__toggle--strong">
+            <div class="ua__toggle-text">
+              <strong>Manage All Teams <span class="ds-badge">lite super admin</span></strong>
+              <em>Write access to every team · Calling Mgmt + Meetings tabs · cannot manage users or wipe data</em>
+            </div>
+            <label class="toggle-switch" style="margin:0"><input type="checkbox" id="ua-can-manage-all"><span class="toggle-slider"></span></label>
+          </label>
+        </div>
+      </section>
+
     </div>
+
+    <footer class="ua__footer">
+      <button type="button" class="ds-btn ds-btn--danger ds-btn--sm" onclick="doRemoveUser()"><i class="fas fa-trash"></i> Remove User</button>
+      <div class="ds-row ds-row--tight">
+        <button type="button" class="ds-btn ds-btn--ghost" onclick="closeModal('user-action-modal')">Cancel</button>
+        <button type="button" class="ds-btn" onclick="doSaveUserAction()"><i class="fas fa-save"></i> Save changes</button>
+      </div>
+    </footer>
   </div>
 </div>
 
@@ -2163,6 +2361,97 @@
 <script src="js/ui-calling.js"></script>
 <script src="js/ui-attendance.js"></script>
 <script src="js/ui-analytics.js"></script>
+<!-- Subtab Card Picker — replaces dropdown menus with a card grid -->
+<div id="subtab-picker" class="subtab-picker-overlay hidden" onclick="closeSubtabPicker()">
+  <div class="subtab-picker-sheet" onclick="event.stopPropagation()">
+    <div class="subtab-picker-header">
+      <h3 class="subtab-picker-title" id="subtab-picker-title"></h3>
+      <button class="subtab-picker-close" onclick="closeSubtabPicker()">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+    <div class="subtab-picker-body" id="subtab-picker-body"></div>
+  </div>
+</div>
+
+<!-- Log Interaction Modal -->
+<div id="log-interaction-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal('log-interaction-modal')">
+  <div class="modal-box small">
+    <div class="modal-header">
+      <h2><i class="fas fa-plus-circle"></i> Log Interaction</h2>
+      <button class="btn-icon close" onclick="closeModal('log-interaction-modal')"><i class="fas fa-times"></i></button>
+    </div>
+    <div style="padding:1.1rem 1.25rem 1.25rem;display:flex;flex-direction:column;gap:.85rem">
+      <!-- Devotee picker -->
+      <div class="form-group" style="margin:0">
+        <label style="font-weight:700;font-size:.82rem;color:#374151">Devotee</label>
+        <div id="li-picker-wrap" class="picker-wrap" style="margin-top:.3rem">
+          <input type="hidden" id="li-devotee-id">
+          <input type="text" id="li-devotee-name" class="picker-input" placeholder="Search devotee…"
+                 oninput="_liSearchDevotee(this.value)" autocomplete="off" style="width:100%">
+          <div id="li-picker-menu" class="picker-menu hidden"></div>
+        </div>
+      </div>
+      <!-- Level -->
+      <div class="form-group" style="margin:0">
+        <label style="font-weight:700;font-size:.82rem;color:#374151">Interaction Level</label>
+        <select id="li-level" class="form-control" style="margin-top:.3rem">
+          <option value="1">Level 1 — HG Ram Atirapriya Prabhuji</option>
+          <option value="2">Level 2 — HG Sulakshana Sita Mataji</option>
+          <option value="3">Level 3 — Naveena (Senior)</option>
+          <option value="4" selected>Level 4 — Team Coordinator</option>
+        </select>
+      </div>
+      <!-- Type -->
+      <div class="form-group" style="margin:0">
+        <label style="font-weight:700;font-size:.82rem;color:#374151">Type</label>
+        <div style="display:flex;gap:.5rem;margin-top:.3rem">
+          <label style="flex:1;display:flex;align-items:center;gap:.5rem;padding:.55rem .7rem;border:1.5px solid #e2e8f0;border-radius:8px;cursor:pointer;font-weight:600;font-size:.85rem">
+            <input type="radio" name="li-type" value="call" checked style="accent-color:#0d2d5a"> 📞 Call
+          </label>
+          <label style="flex:1;display:flex;align-items:center;gap:.5rem;padding:.55rem .7rem;border:1.5px solid #e2e8f0;border-radius:8px;cursor:pointer;font-weight:600;font-size:.85rem">
+            <input type="radio" name="li-type" value="meet" style="accent-color:#0d2d5a"> 🤝 Personal Meet
+          </label>
+          <label style="flex:1;display:flex;align-items:center;gap:.5rem;padding:.55rem .7rem;border:1.5px solid #e2e8f0;border-radius:8px;cursor:pointer;font-weight:600;font-size:.85rem">
+            <input type="radio" name="li-type" value="parent-meet" style="accent-color:#0d2d5a"> 👨‍👩 Parent Meet
+          </label>
+        </div>
+      </div>
+      <!-- Notes -->
+      <div class="form-group" style="margin:0">
+        <label style="font-weight:700;font-size:.82rem;color:#374151">Notes (optional)</label>
+        <textarea id="li-notes" class="form-control" rows="2" placeholder="What was discussed…" style="margin-top:.3rem;resize:vertical"></textarea>
+      </div>
+      <div id="li-error" style="color:#dc2626;font-size:.8rem;display:none"></div>
+      <div style="display:flex;gap:.5rem;margin-top:.25rem">
+        <button class="btn btn-secondary" style="flex:1" onclick="closeModal('log-interaction-modal')">Cancel</button>
+        <button class="btn btn-primary" style="flex:1" onclick="saveInteraction()">
+          <i class="fas fa-save"></i> Save
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Interaction History Modal (devotee deep-dive) -->
+<div id="interaction-history-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal('interaction-history-modal')">
+  <div class="modal-box" style="max-width:560px">
+    <div class="modal-header">
+      <h2 id="ih-title"><i class="fas fa-chart-bar"></i> Interaction History</h2>
+      <button class="btn-icon close" onclick="closeModal('interaction-history-modal')"><i class="fas fa-times"></i></button>
+    </div>
+    <div id="ih-body" style="padding:.75rem 1.1rem 1.25rem;max-height:70vh;overflow-y:auto"></div>
+  </div>
+</div>
+
+<!-- Photo Lightbox — shared fullscreen viewer for devotee & profile photos -->
+<div id="photo-lightbox" class="photo-lightbox hidden" onclick="closePhotoLightbox()">
+  <button class="photo-lightbox-close" onclick="event.stopPropagation();closePhotoLightbox()">
+    <i class="fas fa-times"></i>
+  </button>
+  <img id="photo-lightbox-img" src="" alt="" class="photo-lightbox-img" onclick="event.stopPropagation()">
+</div>
+
 <script src="js/ui-home.js"></script>
 <script src="js/ui-activities.js"></script>
 <script src="js/ui-ai-chat.js"></script>

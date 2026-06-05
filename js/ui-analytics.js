@@ -5,253 +5,287 @@
 // Pulls live data from attendance and calling collections for the selected
 // Session in the filter ribbon. All KPIs and grid cells respect the master
 // Team chip — locking to one team shows just that team's row + KPIs.
-// Generation counter: each call gets a unique ID. Before writing to DOM,
-// a call checks if it's still the latest — if not, a newer call superseded it.
-let _dashGen = 0;
+
+// ── DASHBOARD: fetch/render split with cache ──────────────────────────
+//
+// Cache key = (sessionId, callingDate). Team / Calling-By changes don't
+// invalidate the cache — they only change what _dashRender displays.
+//   • SESSION change → cache miss → fetch + render
+//   • TEAM / CALLING-BY change → cache hit → instant re-render, no network
+//   • Writes (markPresent, saveCallingStatus, etc.) call _bustDashboardCache()
+//
+// NOTE: No in-flight dedupe. Multiple simultaneous loadDashboard calls each
+// run their own fetch — wastes at most one extra query, but eliminates the
+// possibility of hanging on a stuck shared promise (which was the real
+// source of the "stuck on Loading…" bug for super admin).
+let _dashCache = null;  // { key, data: { allDevotees, csByDevotee, presentSet, targetCfg } }
+
+function _bustDashboardCache() { _dashCache = null; }
+window._bustDashboardCache = _bustDashboardCache;
+
+const _DASH_TIMEOUT_MS = 8000;
+function _dashSafe(p, fallback) {
+  const timeout = new Promise(resolve => setTimeout(() => resolve(fallback), _DASH_TIMEOUT_MS));
+  return Promise.race([Promise.resolve(p).catch(() => fallback), timeout]);
+}
 
 async function loadDashboard() {
-  const gen = ++_dashGen;
   const el = document.getElementById('dashboard-content');
   if (!el) return;
 
+  // Defensive render: any throw inside _dashRender (e.g. bad data shape) would
+  // silently leave the spinner up. Catch it, log, and show an error state.
+  const safeRender = (data, c) => {
+    try {
+      _dashRender(data, c);
+    } catch (e) {
+      console.error('dashboard render failed', e);
+      el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Render failed — <button onclick="loadDashboard()" style="text-decoration:underline;background:none;border:none;cursor:pointer;color:inherit">Retry</button></p></div>';
+    }
+  };
+
+  let ctx;
+  try {
+    ctx = await _dashResolveContext();
+  } catch (e) {
+    console.error('loadDashboard resolve', e);
+    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load — <button onclick="loadDashboard()" style="text-decoration:underline;background:none;border:none;cursor:pointer;color:inherit">Retry</button></p></div>';
+    return;
+  }
+
+  const key = `${ctx.sessionId || ''}|${ctx.callingDate || ''}`;
+
+  // CACHE HIT — pure re-render with current filter state. INSTANT.
+  if (_dashCache && _dashCache.key === key) {
+    safeRender(_dashCache.data, ctx);
+    return;
+  }
+
+  // CACHE MISS — spinner, fetch, cache, render.
   el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
 
-  // Per-query timeout of 8s so a hung Firestore call doesn't block forever.
-  // safeQuery returns the fallback value on timeout/error — the dashboard
-  // renders with whatever data arrived. The timedOut throw is intentionally
-  // removed: it reset KPIs to "—" even when safeQuery had already recovered.
-  const TIMEOUT_MS = 8000;
-  const timeoutPromise = new Promise(resolve => setTimeout(() => resolve('TIMEOUT'), TIMEOUT_MS));
-
-  // Wraps a query with timeout + catch so a single bad call can't hang loadDashboard.
-  const safeQuery = (p, fallback) => Promise.race([p.catch(() => fallback), timeoutPromise.then(() => fallback)]);
-
   try {
-    // Resolve which session to show.
-    // - If the filter points to a PAST session → use it directly.
-    // - If the filter points to a FUTURE session (initSession's live default) →
-    //   snap to the most recent past session inline, WITHOUT firing dispatchFilters.
-    //   This avoids a recursive second call and the race condition that caused
-    //   the KPI tiles to show "—" until the user manually clicked Refresh.
-    //   We still record _autoSnap so _maybeRestoreLiveSession can restore the
-    //   future session when the user navigates to a live view.
-    // - If nothing is selected at all → fall back to most recent past session.
-    let sessionDate = (typeof getFilterSessionId === 'function') ? getFilterSessionId() : null;
-    let sessionId   = AppState._currentSessionId || null;
-    const today = getToday();
-
-    if (sessionDate && sessionDate > today && !AppState._sessionExplicit) {
-      // Future session is the *default* (initSession defaults to upcoming Sunday).
-      // For the dashboard, snap to the latest past session so the user lands on
-      // a meaningful "last session report" by default. If the user explicitly
-      // picked a future session via the master filter, _sessionExplicit is set
-      // and we skip the snap so they see real-time data for the picked session.
-      if (!AppState._autoSnap) {
-        AppState._autoSnap = { from: sessionDate, fromDocId: sessionId, to: null };
-      }
-      const sn = await safeQuery(
-        fdb.collection('sessions').where('sessionDate', '<=', today).orderBy('sessionDate', 'desc').limit(1).get(),
-        null
-      );
-      if (sn && !sn.empty) {
-        sessionDate = sn.docs[0].data().sessionDate;
-        sessionId   = sn.docs[0].id;
-        AppState._autoSnap.to = sessionDate;
-      } else {
-        sessionDate = null; sessionId = null;
-      }
-    } else if (!sessionId && sessionDate) {
-      // Have a date but no doc ID yet — look it up once.
-      const sn = await safeQuery(
-        fdb.collection('sessions').where('sessionDate', '==', sessionDate).limit(1).get(),
-        null
-      );
-      if (sn && !sn.empty) sessionId = sn.docs[0].id;
-    } else if (!sessionId && !sessionDate) {
-      // Nothing selected — default to most recent past session.
-      const sn = await safeQuery(
-        fdb.collection('sessions').where('sessionDate', '<=', today).orderBy('sessionDate', 'desc').limit(1).get(),
-        null
-      );
-      if (sn && !sn.empty) {
-        sessionDate = sn.docs[0].data().sessionDate;
-        sessionId   = sn.docs[0].id;
-      }
-    }
-
-    // Calling date (Saturday) for callingStatus lookup.
-    let callingDate = '';
-    if (sessionDate) {
-      callingDate = (typeof resolveCallingDate === 'function')
-        ? await resolveCallingDate(sessionDate).catch(() => null)
-        : null;
-      if (!callingDate) {
-        const d = new Date(sessionDate + 'T00:00:00');
-        d.setDate(d.getDate() - 1);
-        callingDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-      }
-    }
-
-    // Activity window = the 7-day session week: session Sunday → following Saturday.
-    // This matches how coordinators think about their work — books distributed,
-    // services logged, registrations taken are all anchored to the session week.
-    // If no session is resolved, fall back to the current 7-day week ending today.
-    const activityStart = sessionDate || (() => {
-      const d = new Date(today + 'T00:00:00'); d.setDate(d.getDate() - 6);
-      return d.toISOString().slice(0, 10);
-    })();
-    const activityEnd = (() => {
-      const d = new Date(activityStart + 'T00:00:00'); d.setDate(d.getDate() + 6);
-      const sat = d.toISOString().slice(0, 10);
-      // Never show a future end date — cap at today
-      return sat > today ? today : sat;
-    })();
-
-    // Every fetch wrapped via safeQuery (timeout + catch fallback), so one
-    // failing/hung query never blocks the rest of the Dashboard from rendering.
-    const [allDevotees, csSnap, atSnap, targetCfg] = await Promise.all([
-      safeQuery(DevoteeCache.all(), []),
-      callingDate
-        ? safeQuery(fdb.collection('callingStatus').where('weekDate', '==', callingDate).get(), { docs: [] })
-        : Promise.resolve({ docs: [] }),
-      sessionId
-        ? safeQuery(fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get(), { docs: [] })
-        : Promise.resolve({ docs: [] }),
-      safeQuery(DB.getAttendanceTargets(), { type: 'class', teams: {} }),
-    ]);
-
-    // Bail if a newer loadDashboard() call has already started.
-    if (gen !== _dashGen) return;
-
-    // Maps
-    const csByDevotee = {};
-    csSnap.docs.forEach(d => { csByDevotee[d.data().devoteeId] = d.data(); });
-    const presentSet = new Set(atSnap.docs.map(d => d.data().devoteeId));
-
-    const filterTeam = (typeof getFilterTeam === 'function') ? getFilterTeam() : '';
-    const teamsToShow = filterTeam ? [filterTeam] : TEAMS;
-
-
-    // Per-team aggregation
-    const rows = teamsToShow.map(team => {
-      const members = allDevotees.filter(d =>
-        d.teamName === team
-        && d.isActive !== false
-        && !d.isNotInterested
-        && d.callingMode !== 'not_interested'
-        && d.callingMode !== 'online'
-      );
-      // "called" = devotees who have a callingStatus record for this week (actually called)
-      // NOT devotees.callingBy which is a static profile assignment, not a weekly action.
-      // callingListCount mirrors the Calling tab filter: callingBy set + not isNotInterested (regardless of callingMode)
-      const callingListCount = allDevotees.filter(d =>
-        d.teamName === team && d.isActive !== false && !d.isNotInterested && d.callingBy && d.callingBy.trim()
-      ).length;
-      const called   = members.filter(d => csByDevotee[d.id]);
-      const coming   = members.filter(d => csByDevotee[d.id]?.comingStatus === 'Yes');
-      const attended = members.filter(d => presentSet.has(d.id));
-      // Per-team target → global default → member count
-      const target   = (targetCfg.teams && targetCfg.teams[team] > 0)
-        ? targetCfg.teams[team]
-        : (targetCfg.global > 0 ? targetCfg.global : members.length);
-      const pct      = target > 0 ? Math.round((attended.length / target) * 100) : 0;
-      return {
-        team,
-        called:           called.length,
-        coming:           coming.length,
-        attended:         attended.length,
-        callingListCount,
-        target,
-        pct,
-        comingIds:   coming.map(d => d.id),
-        attendedIds: attended.map(d => d.id),
-        calledIds:   called.map(d => d.id),
-      };
-    });
-
-    // Grand totals row
-    const total = rows.reduce((acc, r) => ({
-      called:           acc.called           + r.called,
-      coming:           acc.coming           + r.coming,
-      attended:         acc.attended         + r.attended,
-      callingListCount: acc.callingListCount + r.callingListCount,
-      target:           acc.target           + r.target,
-    }), { called: 0, coming: 0, attended: 0, callingListCount: 0, target: 0 });
-    const totalPct = total.target > 0 ? Math.round((total.attended / total.target) * 100) : 0;
-    const callAccPct = total.coming > 0 ? Math.round((rows.reduce((a, r) => a + r.attended, 0) / total.coming) * 100) : 0;
-
-    // ── Update KPI tiles ──
-    _setText('kpi-attended', total.callingListCount > 0 ? `${total.attended}/${total.callingListCount}` : total.attended);
-    _setText('kpi-accuracy', callAccPct + '%');
-
-    // ── Update greeting subline + grid sub-caption ──
-    // Make the past-vs-live distinction visible at a glance: the report
-    // session (past) is what the KPIs/grid below reflect; the live cycle
-    // (future) is the upcoming session being set up. _autoSnap.from holds
-    // the future session if we snapped from one for this view.
-    const sessLabel = sessionDate
-      ? new Date(sessionDate + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' })
-      : '— no session —';
-    const liveSession = AppState._autoSnap?.from;
-    const liveLabel = liveSession
-      ? new Date(liveSession + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short' })
-      : null;
-    const actStartLabel = new Date(activityStart + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short' });
-    const actEndLabel   = new Date(activityEnd   + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short' });
-    const subParts = [`<i class="fas fa-clipboard-list" style="font-size:.7rem"></i> Reports for <strong>${sessLabel}</strong>`];
-    if (liveLabel) subParts.push(`<i class="fas fa-circle" style="font-size:.45rem;color:#86efac;margin-right:.15rem"></i> Live cycle: <strong>${liveLabel}</strong>`);
-    if (filterTeam) subParts.push(`<i class="fas fa-users" style="font-size:.7rem"></i> ${filterTeam}`);
-    subParts.push(`<i class="fas fa-calendar-week" style="font-size:.7rem"></i> Activities: <strong>${actStartLabel} – ${actEndLabel}</strong>`);
-    const greetSub = document.getElementById('dash-greet-sub');
-    if (greetSub) greetSub.innerHTML = subParts.join(' &nbsp;·&nbsp; ');
-    _setText('dash-grid-sub', '');
-
-    function pctCls(p) { return p >= 80 ? 'dt-pct-good' : p >= 50 ? 'dt-pct-mid' : 'dt-pct-low'; }
-
-    // ── Render the Coordinator grid ──
-    el.innerHTML = `
-      <div class="dashboard-wrap">
-        <table class="dashboard-table">
-          <thead>
-            <tr>
-              <th rowspan="2">Team</th>
-              <th colspan="5">Attendance</th>
-            </tr>
-            <tr class="dt-sub">
-              <th>Called</th>
-              <th>Yes</th>
-              <th>Came</th>
-              <th>Target</th>
-              <th>%</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map(r => `<tr>
-              <td class="dt-team">${r.team}</td>
-              <td class="dt-num"><button onclick="openDashboardList('called',   '${r.team.replace(/'/g,"\\'")}')">${r.called}</button></td>
-              <td class="dt-num"><button onclick="openDashboardList('coming',   '${r.team.replace(/'/g,"\\'")}')">${r.coming}</button></td>
-              <td class="dt-num"><button onclick="openDashboardList('attended', '${r.team.replace(/'/g,"\\'")}')">${r.attended}</button></td>
-              <td class="dt-num">${r.target}</td>
-              <td class="dt-pct ${pctCls(r.pct)}">${r.pct}%</td>
-            </tr>`).join('')}
-            <tr>
-              <td class="dt-team">Grand Total</td>
-              <td class="dt-num">${total.called}</td>
-              <td class="dt-num">${total.coming}</td>
-              <td class="dt-num">${total.attended}</td>
-              <td class="dt-num">${total.target}</td>
-              <td class="dt-pct ${pctCls(totalPct)}" style="color:${totalPct>=80?'#86efac':totalPct>=50?'#fde68a':'#fca5a5'}">${totalPct}%</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>`;
-
-    AppState._dashboard = { rows, sessionId, sessionDate, callingDate, csByDevotee, presentSet, allDevotees };
+    const data = await _dashFetchData(ctx);
+    _dashCache = { key, data };
+    safeRender(data, ctx);
   } catch (e) {
-    if (gen !== _dashGen) return;
-    console.error('loadDashboard', e);
-    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load dashboard — <button onclick="loadDashboard()" style="text-decoration:underline;background:none;border:none;cursor:pointer;color:inherit">Retry</button></p></div>';
+    console.error('loadDashboard fetch', e);
+    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load — <button onclick="loadDashboard()" style="text-decoration:underline;background:none;border:none;cursor:pointer;color:inherit">Retry</button></p></div>';
   }
+}
+
+// ── Resolve which session/calling week the dashboard should show. ──
+// Small/fast Firestore lookups only when needed (find session by date, etc.).
+// Returns ctx used as cache key + passed to render.
+async function _dashResolveContext() {
+  let sessionDate = (typeof getFilterSessionId === 'function') ? getFilterSessionId() : null;
+  let sessionId   = AppState._currentSessionId || null;
+  const today = getToday();
+
+  if (sessionDate && sessionDate > today && !AppState._sessionExplicit) {
+    // Future date defaulted by initSession — snap to latest past Sunday for dashboard.
+    if (!AppState._autoSnap) {
+      AppState._autoSnap = { from: sessionDate, fromDocId: sessionId, to: null };
+    }
+    const sn = await _dashSafe(
+      fdb.collection('sessions').where('sessionDate', '<=', today).orderBy('sessionDate', 'desc').limit(1).get(),
+      null
+    );
+    if (sn && !sn.empty) {
+      sessionDate = sn.docs[0].data().sessionDate;
+      sessionId   = sn.docs[0].id;
+      AppState._autoSnap.to = sessionDate;
+    } else {
+      sessionDate = null; sessionId = null;
+    }
+  } else if (!sessionId && sessionDate) {
+    const sn = await _dashSafe(
+      fdb.collection('sessions').where('sessionDate', '==', sessionDate).limit(1).get(),
+      null
+    );
+    if (sn && !sn.empty) sessionId = sn.docs[0].id;
+  } else if (!sessionId && !sessionDate) {
+    const sn = await _dashSafe(
+      fdb.collection('sessions').where('sessionDate', '<=', today).orderBy('sessionDate', 'desc').limit(1).get(),
+      null
+    );
+    if (sn && !sn.empty) {
+      sessionDate = sn.docs[0].data().sessionDate;
+      sessionId   = sn.docs[0].id;
+    }
+  }
+
+  let callingDate = '';
+  if (sessionDate) {
+    callingDate = (typeof resolveCallingDate === 'function')
+      ? await resolveCallingDate(sessionDate).catch(() => null)
+      : null;
+    if (!callingDate) {
+      const d = new Date(sessionDate + 'T00:00:00');
+      d.setDate(d.getDate() - 1);
+      callingDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+  }
+
+  const activityStart = sessionDate || (() => {
+    const d = new Date(today + 'T00:00:00'); d.setDate(d.getDate() - 6);
+    return d.toISOString().slice(0, 10);
+  })();
+  const activityEnd = (() => {
+    const d = new Date(activityStart + 'T00:00:00'); d.setDate(d.getDate() + 6);
+    const sat = d.toISOString().slice(0, 10);
+    return sat > today ? today : sat;
+  })();
+
+  return { sessionId, sessionDate, callingDate, activityStart, activityEnd };
+}
+
+// ── Heavy Firestore queries. Only called on cache miss. ──
+async function _dashFetchData(ctx) {
+  const { sessionId, callingDate } = ctx;
+  const [allDevotees, csSnap, atSnap, targetCfg] = await Promise.all([
+    _dashSafe(DevoteeCache.all(), []),
+    callingDate
+      ? _dashSafe(fdb.collection('callingStatus').where('weekDate', '==', callingDate).get(), { docs: [] })
+      : Promise.resolve({ docs: [] }),
+    sessionId
+      ? _dashSafe(fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get(), { docs: [] })
+      : Promise.resolve({ docs: [] }),
+    _dashSafe(DB.getAttendanceTargets(), { type: 'class', teams: {} }),
+  ]);
+  // Normalize once so renders are pure data-in → DOM-out.
+  const csByDevotee = {};
+  csSnap.docs.forEach(d => { csByDevotee[d.data().devoteeId] = d.data(); });
+  const presentSet = new Set(atSnap.docs.map(d => d.data().devoteeId));
+  return { allDevotees, csByDevotee, presentSet, targetCfg };
+}
+
+// ── Pure render. Reads CURRENT filter team every call → table always matches chip. ──
+function _dashRender(data, ctx) {
+  const el = document.getElementById('dashboard-content');
+  if (!el) return;
+  const { allDevotees, csByDevotee, presentSet, targetCfg } = data;
+  const { sessionId, sessionDate, callingDate, activityStart, activityEnd } = ctx;
+
+  const filterTeam = (typeof getFilterTeam === 'function') ? getFilterTeam() : '';
+  const teamsToShow = filterTeam ? [filterTeam] : TEAMS;
+
+  const rows = teamsToShow.map(team => {
+    const members = allDevotees.filter(d =>
+      d.teamName === team
+      && d.isActive !== false
+      && !d.isNotInterested
+      && d.callingMode !== 'not_interested'
+      && d.callingMode !== 'online'
+    );
+    const callingListCount = allDevotees.filter(d =>
+      d.teamName === team && d.isActive !== false && !d.isNotInterested && d.callingBy && d.callingBy.trim()
+    ).length;
+    const called   = members.filter(d => csByDevotee[d.id]);
+    const coming   = members.filter(d => csByDevotee[d.id]?.comingStatus === 'Yes');
+    const attended = members.filter(d => presentSet.has(d.id));
+    // Calling accuracy numerator: said "Yes" AND actually came (matches the
+    // Attendance → Accuracy report's yesAndCame/yes, not all attendees).
+    const comingAndCame = members.filter(d => csByDevotee[d.id]?.comingStatus === 'Yes' && presentSet.has(d.id));
+    const target   = (targetCfg.teams && targetCfg.teams[team] > 0)
+      ? targetCfg.teams[team]
+      : (targetCfg.global > 0 ? targetCfg.global : members.length);
+    const pct      = target > 0 ? Math.round((attended.length / target) * 100) : 0;
+    return {
+      team,
+      called:           called.length,
+      coming:           coming.length,
+      attended:         attended.length,
+      comingAndCame:    comingAndCame.length,
+      callingListCount,
+      target,
+      pct,
+      comingIds:   coming.map(d => d.id),
+      attendedIds: attended.map(d => d.id),
+      calledIds:   called.map(d => d.id),
+    };
+  });
+
+  const total = rows.reduce((acc, r) => ({
+    called:           acc.called           + r.called,
+    coming:           acc.coming           + r.coming,
+    attended:         acc.attended         + r.attended,
+    comingAndCame:    acc.comingAndCame    + r.comingAndCame,
+    callingListCount: acc.callingListCount + r.callingListCount,
+    target:           acc.target           + r.target,
+  }), { called: 0, coming: 0, attended: 0, comingAndCame: 0, callingListCount: 0, target: 0 });
+  const totalPct = total.target > 0 ? Math.round((total.attended / total.target) * 100) : 0;
+  // Calling accuracy = of those who said "Yes", how many actually came.
+  // Same definition as the Attendance → Accuracy report (yesAndCame / yes),
+  // so the two screens always agree. Naturally bounded 0–100%.
+  const callAccPct = total.coming > 0 ? Math.round((total.comingAndCame / total.coming) * 100) : 0;
+
+  _setText('kpi-attended', total.callingListCount > 0 ? `${total.attended}/${total.callingListCount}` : total.attended);
+  const accEl = document.getElementById('kpi-accuracy');
+  if (accEl) {
+    accEl.textContent = callAccPct + '%';
+    accEl.setAttribute('title', total.coming > 0
+      ? `${total.comingAndCame} of ${total.coming} who said "Yes" actually came — tap for the full Accuracy report`
+      : 'No "Yes" confirmations yet for this session');
+  }
+
+  const sessLabel = sessionDate
+    ? new Date(sessionDate + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short', year:'numeric' })
+    : '— no session —';
+  const liveSession = AppState._autoSnap?.from;
+  const liveLabel = liveSession
+    ? new Date(liveSession + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'numeric', month:'short' })
+    : null;
+  const actStartLabel = new Date(activityStart + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short' });
+  const actEndLabel   = new Date(activityEnd   + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short' });
+  const subParts = [`<i class="fas fa-clipboard-list" style="font-size:.7rem"></i> Reports for <strong>${sessLabel}</strong>`];
+  if (liveLabel) subParts.push(`<i class="fas fa-circle" style="font-size:.45rem;color:#86efac;margin-right:.15rem"></i> Live cycle: <strong>${liveLabel}</strong>`);
+  if (filterTeam) subParts.push(`<i class="fas fa-users" style="font-size:.7rem"></i> ${filterTeam}`);
+  subParts.push(`<i class="fas fa-calendar-week" style="font-size:.7rem"></i> Activities: <strong>${actStartLabel} – ${actEndLabel}</strong>`);
+  const greetSub = document.getElementById('dash-greet-sub');
+  if (greetSub) greetSub.innerHTML = subParts.join(' &nbsp;·&nbsp; ');
+  _setText('dash-grid-sub', '');
+
+  const pctCls = p => p >= 80 ? 'dt-pct-good' : p >= 50 ? 'dt-pct-mid' : 'dt-pct-low';
+
+  el.innerHTML = `
+    <div class="dashboard-wrap">
+      <table class="dashboard-table">
+        <thead>
+          <tr>
+            <th rowspan="2">Team</th>
+            <th colspan="5">Attendance</th>
+          </tr>
+          <tr class="dt-sub">
+            <th>Called</th>
+            <th>Yes</th>
+            <th style="background:#1e3a6e !important;color:#fff !important">Target</th>
+            <th>Present</th>
+            <th>%</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(r => `<tr>
+            <td class="dt-team">${r.team}</td>
+            <td class="dt-num"><button onclick="openDashboardList('called',   '${r.team.replace(/'/g,"\\'")}')">${r.called}</button></td>
+            <td class="dt-num"><button onclick="openDashboardList('coming',   '${r.team.replace(/'/g,"\\'")}')">${r.coming}</button></td>
+            <td class="dt-num" style="background:#e8edf5;font-weight:800;color:#0d2d5a">${r.target}</td>
+            <td class="dt-num"><button onclick="openDashboardList('attended', '${r.team.replace(/'/g,"\\'")}')">${r.attended}</button></td>
+            <td class="dt-pct ${pctCls(r.pct)}">${r.pct}%</td>
+          </tr>`).join('')}
+          <tr>
+            <td class="dt-team">Grand Total</td>
+            <td class="dt-num">${total.called}</td>
+            <td class="dt-num">${total.coming}</td>
+            <td class="dt-num" style="background:#e8edf5;font-weight:800;color:#0d2d5a">${total.target}</td>
+            <td class="dt-num">${total.attended}</td>
+            <td class="dt-pct ${pctCls(totalPct)}" style="color:${totalPct>=80?'#86efac':totalPct>=50?'#fde68a':'#fca5a5'}">${totalPct}%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+
+  AppState._dashboard = { rows, sessionId, sessionDate, callingDate, csByDevotee, presentSet, allDevotees };
 }
 
 function _setText(id, val) {
@@ -395,27 +429,40 @@ async function loadNewComersReport() {
       return;
     }
 
+    const TH_BASE = 'padding:.45rem .55rem;border:1.5px solid #000;font-weight:800;color:#000;background:#dbeafe;white-space:nowrap;';
+    const th2 = (s='') => `<th style="${TH_BASE}text-align:center;${s}">`;
+    const thL  = (s='') => `<th style="${TH_BASE}text-align:left;${s}">`;   // left-aligned (Name only)
+    const td2  = (s='') => `style="padding:.4rem .55rem;border:1px solid #d1d5db;text-align:center;${s}"`;
+
     el.innerHTML = `
-      <div style="font-size:.84rem;margin-bottom:.6rem;color:var(--text-muted)">
-        <i class="fas fa-user-plus"></i> ${list.length} new for
-        <strong style="color:var(--primary)">${formatDate(sess.session_date)}</strong>
+      <div style="font-size:.84rem;margin-bottom:.65rem;color:#374151;display:flex;align-items:center;gap:.4rem">
+        <i class="fas fa-user-plus" style="color:#1e40af"></i>
+        <strong style="color:#1e40af">${list.length}</strong> new devotees for
+        <strong style="color:#1e40af">${formatDate(sess.session_date)}</strong>
       </div>
       <div class="table-scroll">
-        <table class="report-table">
-          <thead><tr>
-            <th>#</th><th>Name</th><th>Source</th><th>Mobile</th><th>Reference</th>
-            <th>Team</th><th>Calling By</th><th style="text-align:center">C.R.</th>
-          </tr></thead>
-          <tbody>${list.map((d, i) => `<tr>
-            <td style="color:var(--text-muted)">${i + 1}</td>
-            <td><button class="cm-link" onclick="openProfileModal('${d.id}')">${d.name}</button></td>
-            <td>${d.source === 'attended' ? '<span class="newcomer-tag tag-attended">Attended</span>' : '<span class="newcomer-tag tag-joined">Joined</span>'}</td>
-            <td>${d.mobile ? contactIcons(d.mobile) + ' <span style="font-size:.78rem">' + d.mobile + '</span>' : '—'}</td>
-            <td style="font-size:.82rem">${d.referenceBy || '—'}</td>
-            <td>${d.teamName ? teamBadge(d.teamName) : '<span style="color:var(--text-muted);font-size:.78rem">— Unassigned —</span>'}</td>
-            <td style="font-size:.82rem">${d.callingBy || '<span style="color:var(--text-muted)">— Unassigned —</span>'}</td>
-            <td style="text-align:center">${d.chantingRounds || 0}</td>
-          </tr>`).join('')}</tbody>
+        <table style="width:100%;border-collapse:collapse;font-size:.82rem;border:2px solid #000">
+          <thead style="position:sticky;top:0;z-index:2">
+            <tr>
+              ${th2('width:2rem')}#</th>
+              ${thL('min-width:110px')}Name</th>
+              ${th2()}Mobile</th>
+              ${th2()}Reference</th>
+              ${th2('min-width:120px')}Team</th>
+              ${th2('min-width:110px')}Calling By</th>
+            </tr>
+          </thead>
+          <tbody>
+          ${list.map((d, i) => `<tr>
+            <td ${td2('color:#9ca3af;font-size:.75rem')}>${i + 1}</td>
+            <td style="padding:.4rem .55rem;border:1px solid #d1d5db;text-align:left;font-weight:700;cursor:pointer;color:#1e40af"
+                onclick="openProfileModal('${d.id}')">${d.name}</td>
+            <td ${td2('color:#374151;font-size:.8rem;white-space:nowrap')}>${d.mobile || '—'}</td>
+            <td ${td2('color:#374151;font-size:.8rem;white-space:nowrap')}>${d.referenceBy || '—'}</td>
+            <td ${td2('white-space:nowrap;font-size:.8rem')}>${d.teamName || '—'}</td>
+            <td ${td2('font-size:.8rem;color:#374151')}>${d.callingBy || '—'}</td>
+          </tr>`).join('')}
+          </tbody>
         </table>
       </div>`;
   } catch (e) {
@@ -637,7 +684,7 @@ async function loadTrends() {
         responsive: true,
         plugins: {
           legend: { labels: { color: '#1b4332', font: { family: 'Nunito', size: 13 } } },
-          tooltip: { backgroundColor: '#1a5c3a', titleFont: { family: 'Cinzel' }, bodyFont: { family: 'Nunito' } }
+          tooltip: { backgroundColor: '#1e40af', titleFont: { family: 'Cinzel' }, bodyFont: { family: 'Nunito' } }
         },
         scales: {
           y: { beginAtZero: true, grid: { color: '#d8f3dc' }, ticks: { color: '#6b9080', font: { family: 'Nunito' } } },
@@ -651,99 +698,110 @@ async function loadTrends() {
 // ── DEVOTEE CARE TAB ──────────────────────────────────
 // Cache the loaded lists so clicking a card can open a detail modal.
 const _careCache = {
-  absentWeek:   { title: 'Absent This Week',        list: [] },
-  absent2Weeks: { title: 'Absent 2+ Weeks',         list: [] },
-  newcomers:    { title: 'Returning Newcomers',     list: [] },
-  inactive:     { title: 'Inactivity Alerts (3+ wk)', list: [] },
+  absentWeek:   { title: 'Absent This Week',           list: [] },
+  absent2Weeks: { title: 'Absent 2+ Weeks',            list: [] },
+  newComers:    { title: 'New Comers This Session',    list: [] },
+  inactive:     { title: 'Inactivity Alerts (3+ wk)',  list: [] },
   saidComing:   { title: 'Said Coming — Didn\'t Come', list: [] },
 };
 let _careCurrentType = null;
 
+// Raw cache (pre-team-filter) keyed by sessionDate. Lets team filter changes
+// re-render INSTANTLY without re-querying Firestore. Session change → cache
+// miss → fetch all 4 in parallel. Writes call _bustCareCache().
+let _careRawCache = null;  // { key, absentWeek, absent2Weeks, newcomers, inactive, saidComing: {list, weekDate} }
+
+function _bustCareCache() { _careRawCache = null; }
+window._bustCareCache = _bustCareCache;
+
 async function loadCareData() {
-  await Promise.all([
-    loadAbsentDevotees(),
-    loadReturningNewcomers(),
-    loadInactiveDevotees(),
-    loadSaidComingDidntCome(),
-  ]);
-}
+  const sessionDate = getFilterSessionId() || '';
+  const key = sessionDate;
 
-// Care lists respect the master Team filter so admins can scope the alerts
-// to their team without leaving the Care tab.
-function _careTeamFilter(list) {
-  const team = getFilterTeam();
-  if (!team) return list;
-  return list.filter(d => (d.team_name || d.teamName) === team);
-}
-
-async function loadAbsentDevotees() {
-  try {
-    const sessionDate = getFilterSessionId();
-    const { absentThisWeek, absentPast2Weeks } = await DB.getCareAbsent(sessionDate || undefined);
-    const w1 = _careTeamFilter(absentThisWeek || []);
-    const w2 = _careTeamFilter(absentPast2Weeks || []);
-    document.getElementById('absent-week-count').textContent   = w1.length;
-    document.getElementById('absent-2weeks-count').textContent = w2.length;
-    _careCache.absentWeek.list   = w1;
-    _careCache.absent2Weeks.list = w2;
-  } catch (_) {}
-}
-
-async function loadReturningNewcomers() {
-  try {
-    const devotees = _careTeamFilter(await DB.getCareNewcomers());
-    document.getElementById('newcomers-count').textContent = devotees.length;
-    _careCache.newcomers.list = devotees;
-  } catch (_) {}
-}
-
-async function loadInactiveDevotees() {
-  try {
-    const devotees = _careTeamFilter(await DB.getCareInactive());
-    document.getElementById('inactive-count').textContent = devotees.length;
-    _careCache.inactive.list = devotees;
-  } catch (_) {}
-}
-
-// Said-coming-but-didn't-come — anchored on the master Session (or latest past
-// session if the master Session is in the future). Honours the master Team filter.
-async function loadSaidComingDidntCome() {
-  try {
-    const today = getToday();
-    let sessionDate = getFilterSessionId();
-    if (!sessionDate || sessionDate > today) {
-      const sessSnap = await fdb.collection('sessions')
-        .where('sessionDate', '<=', today)
-        .orderBy('sessionDate', 'desc').limit(1).get();
-      if (sessSnap.empty) { document.getElementById('said-coming-count').textContent = '0'; return; }
-      sessionDate = sessSnap.docs[0].data().sessionDate;
-    }
-    const callingDate = await resolveCallingDate(sessionDate);
-    const weekDate = sessionDate;
-    const { list } = await DB.getYesAbsentList(callingDate, sessionDate);
-    // Enrich with extra fields from the devotee cache so the detail table has
-    // reference / chanting_rounds etc.
-    const all = await DevoteeCache.all();
-    const byId = Object.fromEntries(all.map(d => [d.id, d]));
-    const enriched = (list || []).map(item => {
-      const d = byId[item.id] || {};
-      return {
-        id: item.id,
-        name: item.name || d.name,
-        mobile: item.mobile || d.mobile || '',
-        team_name: item.teamName || d.teamName || '',
-        calling_by: item.callingBy || d.callingBy || '',
-        reference_by: d.referenceBy || '',
-        chanting_rounds: d.chantingRounds || 0,
+  if (!_careRawCache || _careRawCache.key !== key) {
+    try {
+      const [absentResult, newComers, inactive, saidComingResult] = await Promise.all([
+        DB.getCareAbsent(sessionDate || undefined).catch(() => ({ absentThisWeek: [], absentPast2Weeks: [] })),
+        DB.getNewComersForSession(sessionDate).catch(() => []),
+        DB.getCareInactive().catch(() => []),
+        _careFetchSaidComing(sessionDate).catch(() => ({ list: [], weekDate: '' })),
+      ]);
+      _careRawCache = {
+        key,
+        absentWeek:   absentResult.absentThisWeek || [],
+        absent2Weeks: absentResult.absentPast2Weeks || [],
+        newComers:    newComers || [],
+        inactive:     inactive || [],
+        saidComing:   saidComingResult,
       };
-    });
-    const filtered = _careTeamFilter(enriched);
-    document.getElementById('said-coming-count').textContent = filtered.length;
-    _careCache.saidComing.list     = filtered;
-    _careCache.saidComing.weekDate = weekDate;
-  } catch (e) {
-    console.error('loadSaidComingDidntCome', e);
+    } catch (e) {
+      console.error('loadCareData fetch', e);
+      return;
+    }
   }
+
+  _careRender();
+}
+
+// Apply current team filter + update visible lists + counts.
+// Pure data → DOM, no network. Called on every loadCareData (cache hit or miss)
+// so team filter changes are INSTANT.
+function _careRender() {
+  if (!_careRawCache) return;
+  const team = getFilterTeam();
+  const tf = list => team ? list.filter(d => (d.team_name || d.teamName) === team) : list;
+
+  const w1 = tf(_careRawCache.absentWeek);
+  const w2 = tf(_careRawCache.absent2Weeks);
+  const ncs = tf(_careRawCache.newComers);
+  const ia = tf(_careRawCache.inactive);
+  const sc = tf(_careRawCache.saidComing.list || []);
+
+  _careCache.absentWeek.list   = w1;
+  _careCache.absent2Weeks.list = w2;
+  _careCache.newComers.list    = ncs;
+  _careCache.inactive.list     = ia;
+  _careCache.saidComing.list   = sc;
+  _careCache.saidComing.weekDate = _careRawCache.saidComing.weekDate;
+
+  const set = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = n; };
+  set('absent-week-count',   w1.length);
+  set('absent-2weeks-count', w2.length);
+  set('inactive-count',      ia.length);
+  set('said-coming-count',   sc.length);
+}
+
+// Said-coming-but-didn't-come — fetch helper used by loadCareData.
+// Anchored on the master Session (or latest past session if Session is in the future).
+async function _careFetchSaidComing(masterSessionDate) {
+  const today = getToday();
+  let sessionDate = masterSessionDate;
+  if (!sessionDate || sessionDate > today) {
+    const sessSnap = await fdb.collection('sessions')
+      .where('sessionDate', '<=', today)
+      .orderBy('sessionDate', 'desc').limit(1).get();
+    if (sessSnap.empty) return { list: [], weekDate: '' };
+    sessionDate = sessSnap.docs[0].data().sessionDate;
+  }
+  const callingDate = await resolveCallingDate(sessionDate);
+  const { list } = await DB.getYesAbsentList(callingDate, sessionDate);
+  const all = await DevoteeCache.all();
+  const byId = Object.fromEntries(all.map(d => [d.id, d]));
+  const enriched = (list || []).map(item => {
+    const d = byId[item.id] || {};
+    return {
+      id: item.id,
+      name: item.name || d.name,
+      mobile: item.mobile || d.mobile || '',
+      team_name: item.teamName || d.teamName || '',
+      calling_by: item.callingBy || d.callingBy || '',
+      reference_by: d.referenceBy || '',
+      chanting_rounds: d.chantingRounds || 0,
+      coming_status: 'Yes',        // confirmed in previous calling week
+      calling_notes: item.callingNotes || '',
+    };
+  });
+  return { list: enriched, weekDate: sessionDate };
 }
 
 function openCareDetail(type) {
@@ -780,6 +838,213 @@ function openCareDetail(type) {
   openModal('care-detail-modal');
 }
 
+// Renders care list directly into an inline panel (no modal) — used by Attendance tab care sub-tabs
+function _renderCareSection(careKey, targetEl) {
+  if (!targetEl) return;
+  if (careKey === 'newComers') { _renderNewComersTable((_careCache.newComers || {}).list || [], targetEl); return; }
+  const bucket = _careCache[careKey];
+  if (!bucket) { targetEl.innerHTML = '<div class="empty-state"><p>No data</p></div>'; return; }
+  const list = bucket.list || [];
+  const TH = `style="padding:.4rem .5rem;background:#0d2d5a;color:#fff;font-weight:700;font-size:.78rem"`;
+  if (!list.length) {
+    targetEl.innerHTML = `<div class="empty-state"><i class="fas fa-check-circle" style="color:#16a34a"></i><p>All clear — no devotees in this category</p></div>`;
+    return;
+  }
+  targetEl.innerHTML = `
+    <div style="font-size:.82rem;color:#64748b;margin-bottom:.6rem"><strong>${list.length}</strong> devotee${list.length===1?'':'s'}</div>
+    <div class="table-scroll">
+      <table style="width:100%;border-collapse:collapse;border:2px solid #000;font-size:.82rem">
+        <thead><tr>
+          <th ${TH} style="text-align:center;width:2rem">#</th>
+          <th ${TH}>Name</th>
+          <th ${TH}>Mobile</th>
+          <th ${TH}>Team</th>
+          <th ${TH}>Calling By</th>
+        </tr></thead>
+        <tbody>
+          ${list.map((d, i) => `<tr style="${i%2===0?'background:#fff':'background:#f5f7fa'}">
+            <td style="padding:.38rem .5rem;border:1px solid #d1d5db;text-align:center;color:#94a3b8;font-size:.75rem">${i+1}</td>
+            <td style="padding:.38rem .55rem;border:1px solid #d1d5db;font-weight:700;cursor:pointer;color:#0d2d5a"
+                onclick="openProfileModal('${d.id}')">${d.name||'—'}</td>
+            <td style="padding:.38rem .55rem;border:1px solid #d1d5db;font-size:.8rem;color:#374151">${d.mobile||'—'}</td>
+            <td style="padding:.38rem .55rem;border:1px solid #d1d5db;font-size:.78rem;white-space:nowrap">${d.team_name||'—'}</td>
+            <td style="padding:.38rem .55rem;border:1px solid #d1d5db;font-size:.78rem;color:#64748b">${d.calling_by||'—'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+window._renderCareSection = _renderCareSection;
+
+// New Comers this session — table with arrival time
+function _renderNewComersTable(list, targetEl) {
+  const TH = `style="padding:.4rem .5rem;background:#0d2d5a;color:#fff;font-weight:700;font-size:.78rem"`;
+  if (!list.length) {
+    targetEl.innerHTML = `<div class="empty-state"><i class="fas fa-seedling" style="color:#16a34a"></i><p>No new devotees in this session</p></div>`;
+    return;
+  }
+  const fmtTime = ts => {
+    if (!ts) return '—';
+    try { const d = ts.toDate ? ts.toDate() : new Date(ts); return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }); }
+    catch { return '—'; }
+  };
+  targetEl.innerHTML = `
+    <div style="font-size:.82rem;color:#64748b;margin-bottom:.6rem"><strong>${list.length}</strong> new devotee${list.length===1?'':'s'} this session</div>
+    <div class="table-scroll">
+      <table style="width:100%;border-collapse:collapse;border:2px solid #000;font-size:.82rem">
+        <thead><tr>
+          <th ${TH} style="text-align:center;width:2rem">#</th>
+          <th ${TH}>Name</th>
+          <th ${TH}>Mobile</th>
+          <th ${TH}>Team</th>
+          <th ${TH}>Ref By</th>
+          <th ${TH}>Arrived</th>
+        </tr></thead>
+        <tbody>
+          ${list.map((d, i) => `<tr style="${i%2===0?'background:#fff':'background:#f5f7fa'}">
+            <td style="padding:.38rem .5rem;border:1px solid #d1d5db;text-align:center;color:#94a3b8;font-size:.75rem">${i+1}</td>
+            <td style="padding:.38rem .55rem;border:1px solid #d1d5db;font-weight:700;cursor:pointer;color:#0d2d5a"
+                onclick="openProfileModal('${d.id}')">${d.name||'—'}</td>
+            <td style="padding:.38rem .55rem;border:1px solid #d1d5db;font-size:.8rem;color:#374151">${d.mobile||'—'}</td>
+            <td style="padding:.38rem .55rem;border:1px solid #d1d5db;font-size:.78rem;white-space:nowrap">${d.team_name||'—'}</td>
+            <td style="padding:.38rem .55rem;border:1px solid #d1d5db;font-size:.78rem;color:#64748b">${d.reference_by||'—'}</td>
+            <td style="padding:.38rem .55rem;border:1px solid #d1d5db;font-size:.78rem;color:#374151">${fmtTime(d.marked_at)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// Returning New Comers — all "New Devotee" status with 8-session attendance grid + joining date
+async function loadReturningNewComers(targetEl) {
+  if (!targetEl) return;
+  targetEl.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  try {
+    const { sessions, devotees } = await DB.getReturningNewComers();
+    _renderReturningNewComers(targetEl, sessions, devotees);
+  } catch (e) {
+    console.error('loadReturningNewComers', e);
+    targetEl.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+  }
+}
+window.loadReturningNewComers = loadReturningNewComers;
+
+function _renderReturningNewComers(targetEl, sessions, devotees) {
+  if (!devotees.length) {
+    targetEl.innerHTML = `<div class="empty-state"><i class="fas fa-seedling" style="color:#16a34a"></i><p>No devotees with "New Devotee" status remaining</p></div>`;
+    return;
+  }
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const fmtCol = dateStr => {
+    if (!dateStr) return '?';
+    try { const [, m, d] = dateStr.split('-'); return `${parseInt(d)} ${MONTHS[parseInt(m)-1]}`; }
+    catch { return dateStr; }
+  };
+  const fmtJoined = str => {
+    if (!str) return '—';
+    try { const [y, m, d] = str.split('-'); return `${parseInt(d)} ${MONTHS[parseInt(m)-1]} ${y.slice(2)}`; }
+    catch { return str; }
+  };
+
+  // ── sticky column widths ──
+  const SNO_W  = 34;   // px — serial number column
+  const NAME_W = 110;  // px — name column
+
+  // Header cells
+  const TH_BASE = `position:sticky;top:0;z-index:3;background:#0d2d5a;color:#fff;font-weight:700;font-size:.75rem;white-space:nowrap;border:1px solid #1e3a5f;padding:.42rem .45rem`;
+  const TH_CTR  = `${TH_BASE};text-align:center`;
+  // Corner sticky cells (# and Name in header — sticky both top AND left)
+  const TH_SNO  = `${TH_CTR};position:sticky;top:0;left:0;z-index:5;width:${SNO_W}px;min-width:${SNO_W}px`;
+  const TH_NAME = `${TH_BASE};position:sticky;top:0;left:${SNO_W}px;z-index:5;min-width:${NAME_W}px`;
+  const sessCols = sessions.map(s => `<th style="${TH_CTR}">${fmtCol(s.date)}</th>`).join('');
+
+  // Body rows
+  const rows = devotees.map((d, i) => {
+    const rowBg = i % 2 === 0 ? '#fff' : '#f5f7fa';
+    const attCells = d.attendance.map(came =>
+      came
+        ? `<td style="padding:.35rem .4rem;border:1px solid #d1d5db;text-align:center;background:#dcfce7;color:#16a34a;font-weight:800;font-size:.9rem">✓</td>`
+        : `<td style="padding:.35rem .4rem;border:1px solid #d1d5db;text-align:center;color:#d1d5db;font-size:.85rem">—</td>`
+    ).join('');
+    return `<tr>
+      <td style="position:sticky;left:0;z-index:2;background:${rowBg};width:${SNO_W}px;min-width:${SNO_W}px;padding:.38rem .35rem;border:1px solid #d1d5db;text-align:center;color:#94a3b8;font-size:.75rem">${i+1}</td>
+      <td style="position:sticky;left:${SNO_W}px;z-index:2;background:${rowBg};min-width:${NAME_W}px;padding:.38rem .55rem;border:1px solid #d1d5db;font-weight:700;cursor:pointer;color:#0d2d5a"
+          onclick="openProfileModal('${d.id}')">${d.name||'—'}</td>
+      <td style="padding:.38rem .45rem;border:1px solid #d1d5db;font-size:.75rem;white-space:nowrap;background:${rowBg}">${d.team_name||'—'}</td>
+      <td style="padding:.38rem .45rem;border:1px solid #d1d5db;font-size:.75rem;color:#64748b;white-space:nowrap;background:${rowBg}">${fmtJoined(d.date_of_joining)}</td>
+      ${attCells}
+    </tr>`;
+  }).join('');
+
+  targetEl.innerHTML = `
+    <div style="font-size:.82rem;color:#64748b;margin-bottom:.6rem"><strong>${devotees.length}</strong> devotee${devotees.length===1?'':'s'} still in "New Devotee" status</div>
+    <div style="overflow:auto;max-height:65vh;border:2px solid #000;border-radius:4px">
+      <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:.82rem">
+        <thead><tr>
+          <th style="${TH_SNO}">#</th>
+          <th style="${TH_NAME}">Name</th>
+          <th style="${TH_BASE}">Team</th>
+          <th style="${TH_BASE}">Joined</th>
+          ${sessCols}
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+// ── MERGED ABSENT TAB ─────────────────────────────────────────────────────────
+// Combines "Absent This Week", "Absent 2+ Weeks", "Inactivity Alerts" into one
+// panel with a 3-chip filter row.
+
+let _careAbsentFilter = 'week'; // 'week' | '2weeks' | 'inactive'
+
+async function loadCareAbsentTab(targetEl) {
+  if (!targetEl) return;
+  targetEl.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  _careAbsentFilter = 'week';
+  try {
+    await loadCareData();
+    _renderCareAbsentMergedFull(targetEl);
+  } catch (e) {
+    console.error('loadCareAbsentTab', e);
+    targetEl.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+  }
+}
+window.loadCareAbsentTab = loadCareAbsentTab;
+
+function _renderCareAbsentMergedFull(targetEl) {
+  const chipStyle = key => _careAbsentFilter === key
+    ? 'background:#0d2d5a;color:#fff;border:1.5px solid #0d2d5a;font-weight:700'
+    : 'background:#fff;color:#374151;border:1.5px solid #d1d5db';
+  targetEl.innerHTML = `
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.85rem">
+      <button style="padding:.38rem .9rem;border-radius:20px;font-size:.82rem;cursor:pointer;${chipStyle('week')}"
+              onclick="setCareAbsentFilter('week',this)">This Week</button>
+      <button style="padding:.38rem .9rem;border-radius:20px;font-size:.82rem;cursor:pointer;${chipStyle('2weeks')}"
+              onclick="setCareAbsentFilter('2weeks',this)">2+ Weeks</button>
+      <button style="padding:.38rem .9rem;border-radius:20px;font-size:.82rem;cursor:pointer;${chipStyle('inactive')}"
+              onclick="setCareAbsentFilter('inactive',this)">Inactivity (3+ wk)</button>
+    </div>
+    <div id="att-care-absent-list"></div>`;
+  const listEl = document.getElementById('att-care-absent-list');
+  _renderCareAbsentList(listEl);
+}
+
+function _renderCareAbsentList(listEl) {
+  if (!listEl) return;
+  const careKey = { week: 'absentWeek', '2weeks': 'absent2Weeks', inactive: 'inactive' }[_careAbsentFilter];
+  _renderCareSection(careKey, listEl);
+}
+
+window.setCareAbsentFilter = function(key, btn) {
+  _careAbsentFilter = key;
+  // Re-render the full merged panel (easiest way to update chip styles too)
+  const targetEl = document.getElementById('att-care-absent-merged-content');
+  if (targetEl) _renderCareAbsentMergedFull(targetEl);
+};
+
+// ── END MERGED ABSENT TAB ─────────────────────────────────────────────────────
+
 async function exportCareDetail() {
   if (!_careCurrentType) return;
   const bucket = _careCache[_careCurrentType];
@@ -796,6 +1061,127 @@ async function exportCareDetail() {
   }));
   downloadExcel(rows, `care_${_careCurrentType}_${getToday()}.xlsx`);
 }
+
+// ── REPEAT ABSENTEES TAB ─────────────────────────────────────────────────────
+// Shows devotees who said "Coming" but didn't show across multiple past weeks.
+let _repeatAbsentWeekFilter = 3; // default: last 3 weeks
+
+async function loadRepeatAbsenteesTab() {
+  const el = document.getElementById('att-repeat-absent-content');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  try {
+    await _renderRepeatAbsentees(el, _repeatAbsentWeekFilter);
+  } catch (e) {
+    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+    console.error('loadRepeatAbsenteesTab', e);
+  }
+}
+window.loadRepeatAbsenteesTab = loadRepeatAbsenteesTab;
+
+async function _renderRepeatAbsentees(el, numWeeks) {
+  const anchorSession = (typeof getFilterSessionId === 'function') ? getFilterSessionId() : null;
+  const today = getToday();
+
+  // Fetch last N sessions up to the anchor (or today)
+  const anchor = (anchorSession && anchorSession <= today) ? anchorSession : today;
+  const sessSnap = await fdb.collection('sessions')
+    .where('sessionDate', '<=', anchor)
+    .orderBy('sessionDate', 'desc').limit(numWeeks).get();
+
+  const sessions = sessSnap.docs
+    .map(d => ({ id: d.id, date: d.data().sessionDate, cancelled: d.data().isCancelled }))
+    .filter(s => !s.cancelled);
+
+  if (!sessions.length) {
+    el.innerHTML = '<div class="empty-state"><p>No sessions found</p></div>';
+    return;
+  }
+
+  // For each session, get the calling Saturday and fetch Said-Coming-But-Not-Come
+  const results = await Promise.all(sessions.map(async sess => {
+    const sun = sess.date;
+    const sat = new Date(sun + 'T00:00:00');
+    sat.setDate(sat.getDate() - 1);
+    const satStr = `${sat.getFullYear()}-${String(sat.getMonth()+1).padStart(2,'0')}-${String(sat.getDate()).padStart(2,'0')}`;
+    const { list } = await DB.getYesAbsentList(satStr, sun).catch(() => ({ list: [] }));
+    return { date: sun, list };
+  }));
+
+  // Count how many weeks each devotee appears in
+  const countMap = {};  // id → { name, team, mobile, count, weeks }
+  results.forEach(({ date, list }) => {
+    list.forEach(d => {
+      if (!countMap[d.id]) countMap[d.id] = { ...d, count: 0, weeks: [] };
+      countMap[d.id].count++;
+      countMap[d.id].weeks.push(new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short' }));
+    });
+  });
+
+  // Only show devotees who missed 2+ weeks
+  const repeaters = Object.values(countMap)
+    .filter(d => d.count >= 2)
+    .sort((a, b) => b.count - a.count || (a.name||'').localeCompare(b.name||''));
+
+  // Build the header with week filter buttons
+  const weekBtns = [2,3,4].map(n => `
+    <button onclick="setRepeatAbsentFilter(${n})"
+      style="padding:.35rem .8rem;border-radius:99px;border:1.5px solid ${n===numWeeks?'#0d2d5a':'#e2e8f0'};
+             background:${n===numWeeks?'#0d2d5a':'#fff'};color:${n===numWeeks?'#fff':'#374151'};
+             font-weight:700;font-size:.8rem;cursor:pointer;transition:.15s">
+      Last ${n} weeks
+    </button>`).join('');
+
+  const TH = `style="padding:.4rem .55rem;background:#0d2d5a;color:#fff;font-weight:700;font-size:.78rem"`;
+  const countColor = c => c >= numWeeks ? '#b91c1c' : c >= numWeeks - 1 ? '#d97706' : '#64748b';
+
+  const tableHtml = repeaters.length ? `
+    <div class="table-scroll">
+      <table style="width:100%;border-collapse:collapse;border:2px solid #000;font-size:.82rem">
+        <thead><tr>
+          <th ${TH} style="text-align:center;width:2rem">#</th>
+          <th ${TH}>Name</th>
+          <th ${TH}>Mobile</th>
+          <th ${TH};white-space:nowrap">Team</th>
+          <th ${TH} style="text-align:center">Times</th>
+          <th ${TH}>Sessions Missed</th>
+        </tr></thead>
+        <tbody>
+          ${repeaters.map((d, i) => `
+            <tr style="${i%2===0?'background:#fff':'background:#fef2f2'}">
+              <td style="padding:.38rem .5rem;border:1px solid #d1d5db;text-align:center;color:#94a3b8;font-size:.75rem">${i+1}</td>
+              <td style="padding:.38rem .55rem;border:1px solid #d1d5db;font-weight:700;cursor:pointer;color:#0d2d5a"
+                  onclick="openProfileModal('${d.id}')">${d.name||'—'}</td>
+              <td style="padding:.38rem .55rem;border:1px solid #d1d5db;font-size:.8rem;color:#374151">${d.mobile||'—'}</td>
+              <td style="padding:.38rem .55rem;border:1px solid #d1d5db;font-size:.78rem;white-space:nowrap">${d.teamName||d.team_name||'—'}</td>
+              <td style="padding:.38rem .55rem;border:1px solid #d1d5db;text-align:center;font-weight:900;font-size:1rem;color:${countColor(d.count)}">${d.count}/${sessions.length}</td>
+              <td style="padding:.38rem .55rem;border:1px solid #d1d5db;font-size:.72rem;color:#64748b">${d.weeks.join(', ')}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : `<div class="empty-state"><i class="fas fa-check-circle" style="color:#16a34a"></i><p>No repeat absentees in the last ${numWeeks} weeks 🙏</p></div>`;
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem;margin-bottom:.75rem">
+      <div>
+        <span style="font-size:.82rem;color:#64748b">Devotees who said "Coming" but missed</span>
+        ${repeaters.length ? `<strong style="color:#b91c1c;margin-left:.4rem">${repeaters.length} found</strong>` : ''}
+      </div>
+      <div style="display:flex;gap:.4rem">${weekBtns}</div>
+    </div>
+    ${tableHtml}`;
+}
+window._renderRepeatAbsentees = _renderRepeatAbsentees;
+
+function setRepeatAbsentFilter(n) {
+  _repeatAbsentWeekFilter = n;
+  const el = document.getElementById('att-repeat-absent-content');
+  if (el) {
+    el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+    _renderRepeatAbsentees(el, n).catch(() => {});
+  }
+}
+window.setRepeatAbsentFilter = setRepeatAbsentFilter;
 
 // ── EVENTS TAB ────────────────────────────────────────
 async function loadEvents() {
@@ -1035,7 +1421,7 @@ function _buildMgmtGrid(weekData, devotees) {
   const wkHdr1 = weekData.map(w => {
     const dt = new Date(w.callingDate + 'T00:00:00');
     const lbl = dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' });
-    return `<th colspan="2" style="text-align:center;background:#1a5c3a;color:#fff;white-space:nowrap">${lbl}</th>`;
+    return `<th colspan="2" style="text-align:center;background:#1e40af;color:#fff;white-space:nowrap">${lbl}</th>`;
   }).join('');
 
   const wkHdr2 = weekData.map(w =>
@@ -1064,13 +1450,13 @@ function _buildMgmtGrid(weekData, devotees) {
   <table style="border-collapse:collapse;min-width:600px;width:100%;font-size:.8rem">
     <thead>
       <tr>
-        <th rowspan="2" class="mgmt-col-sticky" style="left:0;min-width:30px;background:#1a5c3a;color:#fff;padding:.4rem .3rem">#</th>
-        <th rowspan="2" class="mgmt-col-sticky" style="left:30px;min-width:160px;background:#1a5c3a;color:#fff;text-align:left;padding:.4rem .6rem">Name</th>
-        <th rowspan="2" style="min-width:80px;background:#1a5c3a;color:#fff">Team</th>
-        <th rowspan="2" style="min-width:110px;background:#1a5c3a;color:#fff">Calling By</th>
+        <th rowspan="2" class="mgmt-col-sticky" style="left:0;min-width:30px;background:#1e40af;color:#fff;padding:.4rem .3rem">#</th>
+        <th rowspan="2" class="mgmt-col-sticky" style="left:30px;min-width:160px;background:#1e40af;color:#fff;text-align:left;padding:.4rem .6rem">Name</th>
+        <th rowspan="2" style="min-width:80px;background:#1e40af;color:#fff">Team</th>
+        <th rowspan="2" style="min-width:110px;background:#1e40af;color:#fff">Calling By</th>
         ${wkHdr1}
-        <th rowspan="2" style="text-align:center;background:#1a5c3a;color:#fff;min-width:44px">Total<br>AT</th>
-        <th rowspan="2" style="text-align:center;background:#1a5c3a;color:#fff;min-width:60px">Action</th>
+        <th rowspan="2" style="text-align:center;background:#1e40af;color:#fff;min-width:44px">Total<br>AT</th>
+        <th rowspan="2" style="text-align:center;background:#1e40af;color:#fff;min-width:60px">Action</th>
       </tr>
       <tr>${wkHdr2}</tr>
     </thead>
@@ -1488,7 +1874,7 @@ async function loadAttAccuracyReport() {
           </tr></thead>
           <tbody>
             ${bodyRows || '<tr><td colspan="5" style="text-align:center;padding:1.5rem;color:var(--text-muted)">No data for this session</td></tr>'}
-            <tr style="background:#1a5c3a;color:#fff;font-weight:700;font-size:.83rem">
+            <tr style="background:#1e40af;color:#fff;font-weight:700;font-size:.83rem">
               <td>Grand Total</td>
               <td style="text-align:center">${grandYes}</td>
               <td style="text-align:center">${grandCame}</td>
@@ -1559,16 +1945,34 @@ function switchCallingMgmtTab(tab, btn) {
   renderBreadcrumb?.();
 }
 
+// Cache CM data so team / callingBy changes are pure re-renders (no network).
+// Keyed by the calling week — if config hasn't changed and no write busted the
+// cache, we skip the fetch entirely and just re-render with current filters.
+let _cmCacheKey = null;
+function _bustCMCache() { _cmCacheKey = null; _cmData = null; }
+window._bustCMCache = _bustCMCache;
+
 async function loadCallingMgmtTab() {
-  _cmData = null;
   const weekEl = document.getElementById('cm-week-content');
+
+  // Resolve the cache key first (cheap config read) so we can short-circuit.
+  let cfg;
+  try { cfg = await DB.getCallingWeekConfig().catch(() => null); }
+  catch (_) { cfg = null; }
+  const currentWeek    = cfg?.callingDate || '';
+  const currentSession = cfg?.sessionDate || '';
+  const key = currentWeek;
+
+  // CACHE HIT — just re-render the active sub-tab with current filters. Instant.
+  if (_cmData && _cmCacheKey === key) {
+    _cmDispatchSubtabRender();
+    return;
+  }
+
+  // CACHE MISS — spinner, fetch, cache, render.
   if (weekEl) weekEl.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
 
   try {
-    const cfg = await DB.getCallingWeekConfig().catch(() => null);
-    const currentWeek    = cfg?.callingDate || '';
-    const currentSession = cfg?.sessionDate || '';
-
     // Pre-fill config inputs
     const ci = document.getElementById('cm-config-calling-date');
     if (ci && currentWeek) ci.value = currentWeek;
@@ -1590,17 +1994,22 @@ async function loadCallingMgmtTab() {
     ]);
 
     _cmData = { devotees: allDevotees, weeks, gridData, currentWeek };
+    _cmCacheKey = key;
 
-    if (_cmActiveSubtab === 'calling')       _renderCMWeek();
-    if (_cmActiveSubtab === 'newcomers')     _renderCMNewComers();
-    if (_cmActiveSubtab === 'online')        _renderCMSingleList('online');
-    if (_cmActiveSubtab === 'notinterested') _renderCMSingleList('notinterested');
-    if (_cmActiveSubtab === 'festival')      _renderCMSingleList('festival');
+    _cmDispatchSubtabRender();
   } catch (e) {
     console.error('loadCallingMgmtTab', e);
     if (weekEl) weekEl.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-circle"></i>
       <p>Failed to load.<br><small style="color:var(--danger)">If this is your first time: deploy Firestore rules in Firebase Console → Firestore → Rules, then refresh.</small></p></div>`;
   }
+}
+
+function _cmDispatchSubtabRender() {
+  if (_cmActiveSubtab === 'calling')       _renderCMWeek();
+  if (_cmActiveSubtab === 'newcomers')     _renderCMNewComers();
+  if (_cmActiveSubtab === 'online')        _renderCMSingleList('online');
+  if (_cmActiveSubtab === 'notinterested') _renderCMSingleList('notinterested');
+  if (_cmActiveSubtab === 'festival')      _renderCMSingleList('festival');
 }
 
 // Bulk selection state for Calling Mgmt — long-press to enter select mode
@@ -1892,7 +2301,7 @@ function _renderCMWeek() {
     <div class="table-scroll">
     <table style="border-collapse:collapse;min-width:720px;width:100%;font-size:.8rem">
       <thead>
-        <tr style="background:#1a5c3a;color:#fff">
+        <tr style="background:#1e40af;color:#fff">
           <th class="cm-check-cell" style="padding:.4rem .3rem;min-width:28px">
             <input type="checkbox" id="cm-check-all" onchange="_toggleCMSelAll(this.checked)" title="Select all">
           </th>
@@ -2196,7 +2605,13 @@ function _renderCMSingleList(type) {
     el.innerHTML = `<div class="empty-state"><i class="${icon}"></i><p>No devotees in ${title}</p></div>`;
     return;
   }
+  // Bulk permanent-delete is offered ONLY on the Not Interested list, and only
+  // to super admins (it's a hard delete — irreversible).
+  const canDelete = (type === 'notinterested') && AppState.userRole === 'superAdmin';
+  if (canDelete) _niSelected.clear();
+
   const rows = items.map((d, i) => `<tr style="font-size:.82rem">
+    ${canDelete ? `<td style="text-align:center"><input type="checkbox" class="ni-check" data-id="${d.id}" onchange="_niToggle('${d.id}', this.checked)"></td>` : ''}
     <td style="color:var(--text-muted);text-align:center">${i + 1}</td>
     <td style="font-weight:600">${d.name || ''}</td>
     <td style="font-size:.75rem">${d.mobile || '—'}</td>
@@ -2219,17 +2634,70 @@ function _renderCMSingleList(type) {
       </button>
     </td>
   </tr>`).join('');
+
+  const deleteBar = canDelete ? `
+    <div id="ni-bulk-bar" style="display:none;align-items:center;gap:.6rem;flex-wrap:wrap;background:#fff5f5;border:1px solid #f3c2c2;border-radius:var(--radius-xs);padding:.5rem .7rem;margin-bottom:.6rem">
+      <span style="font-weight:700;color:#b71c1c"><i class="fas fa-check-square"></i> <span id="ni-bulk-count">0</span> selected</span>
+      <button class="btn btn-danger" style="font-size:.78rem" onclick="_niDeleteSelected()"><i class="fas fa-trash"></i> Delete Permanently</button>
+      <button class="btn btn-secondary" style="font-size:.78rem" onclick="_niClear()"><i class="fas fa-times"></i> Clear</button>
+    </div>` : '';
+
   el.innerHTML = `<div class="sr-team-block">
     <div class="sr-team-banner" style="background:${bgColor};color:#fff">
       <i class="${icon}"></i> ${title}
       <span style="font-size:.8rem;font-weight:400;opacity:.85"> (${items.length})</span>
     </div>
+    ${canDelete ? `<div style="font-size:.74rem;color:var(--text-muted);margin:.5rem 0 .35rem"><i class="fas fa-info-circle"></i> Tick devotees and use <strong>Delete Permanently</strong> to remove them from the app for good (irreversible).</div>` : ''}
+    ${deleteBar}
     <table class="calling-table sr-table" style="margin:0">
-      <thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>Actions</th></tr></thead>
+      <thead><tr>${canDelete ? '<th style="width:30px;text-align:center"><input type="checkbox" onchange="_niToggleAll(this.checked)" title="Select all"></th>' : ''}<th>#</th><th>Name</th><th>Mobile</th><th>Team</th><th>Calling By</th><th>Actions</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </div>`;
+  if (canDelete) _niSyncBar();
 }
+
+// ── Not-Interested bulk permanent delete (super-admin only) ──────────────
+let _niSelected = new Set();
+function _niToggle(id, checked) { if (checked) _niSelected.add(id); else _niSelected.delete(id); _niSyncBar(); }
+function _niToggleAll(checked) {
+  document.querySelectorAll('#cm-notinterested-content input.ni-check').forEach(b => {
+    b.checked = checked;
+    if (checked) _niSelected.add(b.dataset.id); else _niSelected.delete(b.dataset.id);
+  });
+  _niSyncBar();
+}
+function _niClear() {
+  _niSelected.clear();
+  document.querySelectorAll('#cm-notinterested-content input[type="checkbox"]').forEach(b => b.checked = false);
+  _niSyncBar();
+}
+function _niSyncBar() {
+  const bar = document.getElementById('ni-bulk-bar');
+  if (bar) bar.style.display = _niSelected.size ? 'flex' : 'none';
+  const c = document.getElementById('ni-bulk-count');
+  if (c) c.textContent = _niSelected.size;
+}
+async function _niDeleteSelected() {
+  if (AppState.userRole !== 'superAdmin') { showToast('Only Super Admin can delete permanently', 'error'); return; }
+  const ids = [..._niSelected];
+  if (!ids.length) { showToast('Select at least one devotee', 'error'); return; }
+  if (!confirm(`Permanently DELETE ${ids.length} devotee(s) from the app?\n\nThis removes their profiles entirely and CANNOT be undone.`)) return;
+  if (!confirm('Are you absolutely sure? This is permanent and irreversible.')) return;
+  try {
+    const n = await DB.hardDeleteDevotees(ids);
+    _niSelected.clear();
+    _bustCMCache?.();
+    showToast(`${n} devotee(s) deleted permanently`, 'success');
+    loadCallingMgmtTab();
+  } catch (e) {
+    showToast('Delete failed: ' + (e.message || 'Error'), 'error');
+  }
+}
+window._niToggle = _niToggle;
+window._niToggleAll = _niToggleAll;
+window._niClear = _niClear;
+window._niDeleteSelected = _niDeleteSelected;
 
 // ── BULK ACTIONS (Calling Mgmt) ───────────────────────
 function openBulkAction() {
@@ -2469,12 +2937,13 @@ async function saveTargetMgmt() {
 // Yellow rows = 12:45–13:00, Red rows = after 13:00.
 // Filter chips: All Present / On Time / Late / Very Late.
 
-let _lateFilter = 'all';      // 'all' | 'ontime' | 'late' | 'verylate'
+let _lateFilter = 'all_late'; // 'all_late' | 'verylate' | 'late' | 'all'
 let _lateDataCache = null;    // last fetched present devotees with timestamps
 
 async function loadLateComersReport() {
   const wrap = document.getElementById('late-comers-content');
   if (!wrap) return;
+  _lateFilter = 'all_late'; // always reset to "All Late" on fresh load
   wrap.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
 
   try {
@@ -2529,11 +2998,12 @@ function _renderLateComers() {
   const all = _lateDataCache;
   const buckets = _bucketByLateness(all);
 
+  const allLateCount = buckets.verylate.length + buckets.late.length;
   const chips = [
-    { key: 'all',      label: 'All Present', count: all.length, color: '#1A5C3A' },
-    { key: 'ontime',   label: 'On Time',     count: buckets.ontime.length,   color: '#16a34a' },
-    { key: 'late',     label: 'Late (12:45–1:00)', count: buckets.late.length, color: '#ea580c' },
+    { key: 'all_late', label: 'All Late',            count: allLateCount,              color: '#b91c1c' },
     { key: 'verylate', label: 'Very Late (after 1:00)', count: buckets.verylate.length, color: '#dc2626' },
+    { key: 'late',     label: 'Late (12:45–1:00)',   count: buckets.late.length,       color: '#ea580c' },
+    { key: 'all',      label: 'All Present',          count: all.length,                color: '#1E40AF' },
   ];
   const chipsHtml = chips.map(c => {
     const active = c.key === _lateFilter;
@@ -2546,52 +3016,69 @@ function _renderLateComers() {
     </button>`;
   }).join(' ');
 
-  let rows = _lateFilter === 'all' ? all
-           : _lateFilter === 'ontime' ? buckets.ontime
-           : _lateFilter === 'late' ? buckets.late
-           : buckets.verylate;
-  // Sort by marked_at ascending (earliest first)
-  rows = [...rows].sort((a, b) => (a.marked_at || '').localeCompare(b.marked_at || ''));
+  // Build row list based on filter; most late always at top
+  let rows;
+  if      (_lateFilter === 'all_late') rows = [...buckets.verylate, ...buckets.late];
+  else if (_lateFilter === 'verylate') rows = [...buckets.verylate];
+  else if (_lateFilter === 'late')     rows = [...buckets.late];
+  else                                 rows = [...buckets.verylate, ...buckets.late, ...buckets.ontime];
+  rows.sort((a, b) => (b.marked_at || '').localeCompare(a.marked_at || ''));
 
-  const fmtTime = (iso) => {
+  const fmtTime = iso => {
     if (!iso) return '—';
     return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
   };
 
+  const rowBg = r => {
+    if (!r.marked_at) return '';
+    const d = new Date(r.marked_at), mins = d.getHours() * 60 + d.getMinutes();
+    if (mins >= 13 * 60)       return 'background:#fff0f0';   // very late — light red
+    if (mins >= 12 * 60 + 45) return 'background:#fff8ee';   // late — light orange
+    return '';
+  };
+
+  const timeBadge = r => {
+    if (!r.marked_at) return '<span style="color:#6b7280">—</span>';
+    const d = new Date(r.marked_at), mins = d.getHours() * 60 + d.getMinutes();
+    const t = fmtTime(r.marked_at);
+    if (mins >= 13 * 60)
+      return `<span style="background:#fecaca;color:#b91c1c;padding:.1rem .45rem;border-radius:9999px;font-weight:800;font-size:.78rem;white-space:nowrap">${t}</span>`;
+    if (mins >= 12 * 60 + 45)
+      return `<span style="background:#fed7aa;color:#c2410c;padding:.1rem .45rem;border-radius:9999px;font-weight:700;font-size:.78rem;white-space:nowrap">${t}</span>`;
+    return `<span style="color:#16a34a;font-weight:600;font-size:.78rem">${t}</span>`;
+  };
+
+  const th = s => `<th style="padding:.45rem .55rem;border:1.5px solid #000;font-weight:800;background:#1e40af;color:#fff;white-space:nowrap;${s||''}">`;
   const tableHtml = !rows.length
-    ? '<div class="empty-state"><i class="fas fa-check-circle" style="color:#16a34a"></i><p>No devotees in this category</p></div>'
-    : `<div class="table-scroll"><table class="report-table late-comers-table" style="width:100%;font-size:.85rem">
-        <thead><tr style="background:var(--color-primary,#1A5C3A);color:#fff">
-          <th style="padding:.5rem .6rem;text-align:left">#</th>
-          <th style="padding:.5rem .6rem;text-align:left">Name</th>
-          <th style="padding:.5rem .6rem;text-align:left">Mobile</th>
-          <th style="padding:.5rem .6rem;text-align:left">Team</th>
-          <th style="padding:.5rem .6rem;text-align:left">Calling By</th>
-          <th style="padding:.5rem .6rem;text-align:center">CR</th>
-          <th style="padding:.5rem .6rem;text-align:center">Time</th>
-        </tr></thead>
-        <tbody>
-        ${rows.map((r, i) => {
-          const ts = (typeof attTimeStyle === 'function') ? attTimeStyle(r.marked_at) : { card: '' };
-          return `<tr style="${ts.card};border-bottom:1px solid var(--color-border)">
-            <td style="padding:.4rem .6rem">${i + 1}</td>
-            <td style="padding:.4rem .6rem;font-weight:600;cursor:pointer;color:${ts.card.includes('color:#fff') ? '#fff' : 'var(--color-primary)'}" onclick="openProfileModal('${r.devotee_id || ''}')">${r.name || '—'}</td>
-            <td style="padding:.4rem .6rem">${r.mobile || '—'}</td>
-            <td style="padding:.4rem .6rem">${r.team_name || ''}</td>
-            <td style="padding:.4rem .6rem">${r.calling_by || ''}</td>
-            <td style="padding:.4rem .6rem;text-align:center">${r.chanting_rounds || 0}</td>
-            <td style="padding:.4rem .6rem;text-align:center;font-weight:700">${fmtTime(r.marked_at)}</td>
-          </tr>`;
-        }).join('')}
-        </tbody>
-      </table></div>`;
+    ? '<div class="empty-state"><i class="fas fa-check-circle" style="color:#16a34a"></i><p>No one is late in this session</p></div>'
+    : `<div class="table-scroll">
+        <table style="width:100%;border-collapse:collapse;font-size:.82rem;border:2px solid #000">
+          <thead style="position:sticky;top:0;z-index:2">
+            <tr>
+              ${th('text-align:center;width:2rem')}#</th>
+              ${th('text-align:left')}Name</th>
+              ${th('text-align:left')}Mobile</th>
+              ${th('text-align:left;min-width:110px')}Team</th>
+              ${th('text-align:center')}Time</th>
+            </tr>
+          </thead>
+          <tbody>
+          ${rows.map((r, i) => `
+            <tr style="${rowBg(r)}">
+              <td style="padding:.4rem .55rem;text-align:center;color:#6b7280;font-size:.75rem;border:1px solid #d1d5db">${i + 1}</td>
+              <td style="padding:.4rem .55rem;font-weight:700;color:#1a1a1a;cursor:pointer;border:1px solid #d1d5db"
+                  onclick="openProfileModal('${r.devotee_id || ''}')">${r.name || '—'}</td>
+              <td style="padding:.4rem .55rem;color:#374151;border:1px solid #d1d5db">${r.mobile || '—'}</td>
+              <td style="padding:.4rem .55rem;color:#374151;white-space:nowrap;border:1px solid #d1d5db">${r.team_name || '—'}</td>
+              <td style="padding:.4rem .55rem;text-align:center;border:1px solid #d1d5db">${timeBadge(r)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
 
   wrap.innerHTML = `
-    <div style="display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.8rem;align-items:center">
+    <div style="display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.75rem">
       ${chipsHtml}
-      <span style="margin-left:auto;font-size:.78rem;color:var(--text-muted)">
-        Yellow = late · Red = very late
-      </span>
     </div>
     ${tableHtml}
   `;
@@ -2608,10 +3095,576 @@ let _overdueListCache = null;     // computed overdue list (with last-met info)
 let _overdueFilter = 'all';       // 'all' | 'Most Serious' | 'Serious' | 'Expected to be Serious' | 'New Devotee' | 'Inactive'
 let _pmRenderState = { upcoming: [], recent: [] };
 
+// LEGACY entry point — kept so the old sidebar/admin shortcuts keep working.
+// Now redirects to the main Meetings tab instead of opening the modal.
 async function openPersonalMeetings() {
-  openModal('personal-meetings-modal');
-  await _loadPersonalMeetings();
+  closeSidebar?.();
+  const btn = document.querySelector('.tab-btn[data-tab="meetings"]');
+  if (typeof switchTab === 'function') switchTab('meetings', btn);
+  else loadMeetingsTab();
 }
+
+// ── MEETINGS TAB ─────────────────────────────────────────────
+// State for the Meetings tab. Sub-tab + status-filter + cached data.
+let _meetActiveSubTab = 'overdue';   // overdue | scheduled | completed | recent
+let _meetStatusFilter = 'all';        // all | Most Serious | Serious | ETS | New Devotee | Inactive
+
+function switchMeetingsSubTab(btn, sub) {
+  _meetActiveSubTab = sub;
+  document.querySelectorAll('.meet-sub-panel').forEach(p => p.classList.add('hidden'));
+  document.getElementById('meet-panel-' + sub)?.classList.remove('hidden');
+  const labels = { overdue:'Overdue', scheduled:'Scheduled', completed:'Completed', recent:'Recently Met', ptm:'PTM', 'my-log':'My Log' };
+  const lbl = document.getElementById('meet-active-label');
+  if (lbl) lbl.textContent = labels[sub] || '';
+
+  if (sub === 'ptm')    { _loadPTMTab();   return; }
+  if (sub === 'my-log') { _loadMyLogTab(); return; }
+  _renderMeetingsTabContent();
+}
+window.switchMeetingsSubTab = switchMeetingsSubTab;
+
+function setMeetStatusFilter(key) {
+  _meetStatusFilter = key;
+  document.querySelectorAll('#meet-status-chips .ds-chip').forEach(c => c.classList.remove('ds-chip--active'));
+  document.querySelector(`#meet-status-chips .ds-chip[data-status="${key}"]`)?.classList.add('ds-chip--active');
+  _renderMeetingsTabContent();
+}
+window.setMeetStatusFilter = setMeetStatusFilter;
+
+async function loadMeetingsTab() {
+  await _loadPersonalMeetings();   // reuse existing data fetch — populates _overdueListCache + _pmRenderState
+  _renderMeetingsTabContent();
+}
+window.loadMeetingsTab = loadMeetingsTab;
+
+// ── INTERACTION LEVELS ────────────────────────────────────────────────────────
+const INTERACTION_LEVELS = {
+  1: { name: 'HG Ram Atirapriya Prabhuji', abbr: 'Prabhuji (L1)', color: '#7c3aed', bg: '#f5f3ff' },
+  2: { name: 'HG Sulakshana Sita Mataji',  abbr: 'Mataji (L2)',   color: '#0369a1', bg: '#eff6ff' },
+  3: { name: 'Naveena (Senior)',            abbr: 'Senior (L3)',   color: '#0f766e', bg: '#f0fdfa' },
+  4: { name: 'Team Coordinator',           abbr: 'Coordinator (L4)', color: '#0d2d5a', bg: '#eef3fb' },
+};
+window.INTERACTION_LEVELS = INTERACTION_LEVELS;
+
+const TYPE_LABELS = { call: '📞 Call', meet: '🤝 Meet', 'parent-meet': '👨‍👩 Parent Meet' };
+
+// ── PTM TAB ───────────────────────────────────────────────────────────────────
+async function _loadPTMTab() {
+  const el = document.getElementById('meet-panel-ptm');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  try {
+    const all = await DevoteeCache.all();
+    const team = (typeof getFilterTeam === 'function') ? getFilterTeam() : '';
+    const pool = team ? all.filter(d => d.teamName === team) : all;
+    const active = pool.filter(d => d.isActive !== false && !d.isNotInterested);
+
+    // Section A: family members already attending
+    const secA = active.filter(d =>
+      (parseInt(d.familyParticipants) > 0) ||
+      (d.familyFavourable?.toLowerCase().includes('attend'))
+    );
+    const secAIds = new Set(secA.map(d => d.id));
+
+    // Section B: senior has met the devotee's PARENTS (parent-meet interaction exists)
+    //            and family is NOT already attending (not in Section A)
+    // Fetch parent-meet interactions to find which devotees have had a parent meeting logged
+    const pmSnap = await fdb.collection('interactions')
+      .where('type', '==', 'parent-meet').get().catch(() => ({ docs: [] }));
+    const parentMetIds = new Set(pmSnap.docs.map(d => d.data().devoteeId).filter(Boolean));
+    const secB = active.filter(d => parentMetIds.has(d.id) && !secAIds.has(d.id));
+
+    const renderRow = (d, i) => `
+      <tr>
+        <td style="padding:.35rem .5rem;color:#94a3b8;font-size:.75rem;text-align:center">${i+1}</td>
+        <td style="padding:.35rem .55rem;font-weight:700;color:#0d2d5a;cursor:pointer"
+            onclick="openInteractionHistory('${d.id}','${(d.name||'').replace(/'/g,"\\'")}','${d.teamName||''}')">${d.name || '—'}</td>
+        <td style="padding:.35rem .55rem;font-size:.8rem;color:#374151">${d.mobile || '—'}</td>
+        <td style="padding:.35rem .55rem;font-size:.78rem;color:#374151">${d.teamName || '—'}</td>
+        <td style="padding:.35rem .55rem;font-size:.75rem;color:#64748b">${d.familyMembers || 0} members</td>
+      </tr>`;
+
+    const TH = `style="padding:.4rem .5rem;background:#0d2d5a;color:#fff;font-weight:700;font-size:.78rem;white-space:nowrap"`;
+    const tableHtml = rows => `
+      <div class="table-scroll" style="margin-bottom:1.2rem">
+        <table style="width:100%;border-collapse:collapse;border:2px solid #000;font-size:.82rem">
+          <thead><tr>
+            <th ${TH} style="text-align:center;width:2rem">#</th>
+            <th ${TH}>Name</th><th ${TH}>Mobile</th><th ${TH}>Team</th><th ${TH}>Family</th>
+          </tr></thead>
+          <tbody>${rows.map((d,i) => renderRow(d,i)).join('')}</tbody>
+        </table>
+      </div>`;
+
+    el.innerHTML = `
+      <div style="margin-bottom:.75rem;display:flex;justify-content:flex-end">
+        <button class="btn btn-primary btn-sm" onclick="openLogInteractionModal()">
+          <i class="fas fa-plus"></i> Log Interaction
+        </button>
+      </div>
+      <div style="margin-bottom:1rem">
+        <div class="panel-header" style="margin-bottom:.5rem">
+          <h2 style="font-size:.9rem"><i class="fas fa-users"></i> Section A — Family Members Attending (${secA.length})</h2>
+        </div>
+        ${secA.length ? tableHtml(secA) : '<p style="color:#94a3b8;font-size:.82rem;padding:.5rem 0">No devotees in this category</p>'}
+      </div>
+      <div>
+        <div class="panel-header" style="margin-bottom:.5rem">
+          <h2 style="font-size:.9rem"><i class="fas fa-handshake"></i> Section B — Parents Met by Senior (${secB.length})</h2>
+        </div>
+        ${!secB.length ? `<p style="color:#94a3b8;font-size:.82rem;padding:.3rem 0">No parent-meet interactions logged yet. Use <strong>Log Interaction</strong> → type "Parent Meet" to record when a senior meets a devotee's parents.</p>` : ''}
+        ${secB.length ? tableHtml(secB) : '<p style="color:#94a3b8;font-size:.82rem;padding:.5rem 0">No devotees in this category</p>'}
+      </div>`;
+  } catch (e) {
+    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load PTM data</p></div>';
+    console.error('_loadPTMTab', e);
+  }
+}
+
+// ── MY LOG TAB ─────────────────────────────────────────────────────────────────
+async function _loadMyLogTab() {
+  const el = document.getElementById('meet-panel-my-log');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  try {
+    const [myInteractions, allDevotees] = await Promise.all([
+      DB.getMyInteractions(AppState.userId),
+      DevoteeCache.all(),
+    ]);
+    const byDevotee = {};
+    myInteractions.forEach(ix => {
+      if (!byDevotee[ix.devoteeId]) byDevotee[ix.devoteeId] = { name: ix.devoteeName, team: ix.teamName, interactions: [] };
+      byDevotee[ix.devoteeId].interactions.push(ix);
+    });
+
+    const entries = Object.entries(byDevotee).sort((a, b) => {
+      const aLast = a[1].interactions[0]?.atClient || '';
+      const bLast = b[1].interactions[0]?.atClient || '';
+      return bLast.localeCompare(aLast);
+    });
+
+    if (!entries.length) {
+      el.innerHTML = `
+        <div style="text-align:center;padding:2rem">
+          <div style="font-size:2.5rem;margin-bottom:.5rem">📋</div>
+          <p style="color:#64748b;font-size:.9rem">No interactions logged yet.<br>Use "Log Interaction" to track your calls and meetings.</p>
+          <button class="btn btn-primary" style="margin-top:1rem" onclick="openLogInteractionModal()">
+            <i class="fas fa-plus"></i> Log First Interaction
+          </button>
+        </div>`;
+      return;
+    }
+
+    const fmt = iso => iso ? new Date(iso).toLocaleString('en-IN', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit', hour12:true }) : '—';
+    const levelPill = lv => {
+      const l = INTERACTION_LEVELS[lv] || INTERACTION_LEVELS[4];
+      return `<span style="background:${l.bg};color:${l.color};font-size:.65rem;font-weight:700;padding:.1rem .35rem;border-radius:4px">${l.abbr}</span>`;
+    };
+
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
+        <span style="font-size:.82rem;color:#64748b"><strong>${entries.length}</strong> devotees · <strong>${myInteractions.length}</strong> total interactions</span>
+        <button class="btn btn-primary btn-sm" onclick="openLogInteractionModal()">
+          <i class="fas fa-plus"></i> Log
+        </button>
+      </div>
+      ${entries.map(([devId, info]) => `
+        <div style="background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;padding:.7rem .9rem;margin-bottom:.6rem">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.45rem">
+            <div>
+              <span style="font-weight:700;color:#0d2d5a;cursor:pointer;font-size:.9rem"
+                    onclick="openInteractionHistory('${devId}','${(info.name||'').replace(/'/g,"\\'")}','${info.team||''}')">${info.name}</span>
+              <span style="font-size:.72rem;color:#94a3b8;margin-left:.4rem">${info.team || ''}</span>
+            </div>
+            <span style="font-size:.7rem;color:#94a3b8">${info.interactions.length} interactions</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:.3rem">
+            ${info.interactions.slice(0,3).map(ix => `
+              <div style="display:flex;align-items:center;gap:.4rem;font-size:.76rem;color:#374151">
+                ${levelPill(ix.level)}
+                <span style="font-weight:600">${TYPE_LABELS[ix.type] || ix.type}</span>
+                <span style="color:#94a3b8;margin-left:auto">${fmt(ix.atClient)}</span>
+              </div>`).join('')}
+            ${info.interactions.length > 3 ? `<div style="font-size:.72rem;color:#94a3b8;text-align:right">+${info.interactions.length-3} more</div>` : ''}
+          </div>
+        </div>`).join('')}`;
+  } catch (e) {
+    el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+    console.error('_loadMyLogTab', e);
+  }
+}
+
+// ── INTERACTION HISTORY MODAL (deep-dive) ─────────────────────────────────────
+async function openInteractionHistory(devoteeId, devoteeName, teamName) {
+  const modal = document.getElementById('interaction-history-modal');
+  const body  = document.getElementById('ih-body');
+  document.getElementById('ih-title').innerHTML = `<i class="fas fa-chart-bar"></i> ${devoteeName}`;
+  body.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  modal.classList.remove('hidden');
+  try {
+    const interactions = await DB.getDevoteeInteractions(devoteeId);
+
+    // Matrix: level × type counts
+    const matrix = {};
+    [1,2,3,4].forEach(l => { matrix[l] = { call:0, meet:0, 'parent-meet':0 }; });
+    interactions.forEach(ix => { if (matrix[ix.level]) matrix[ix.level][ix.type] = (matrix[ix.level][ix.type]||0) + 1; });
+
+    const levelPill = lv => {
+      const l = INTERACTION_LEVELS[lv];
+      return `<span style="background:${l.bg};color:${l.color};font-size:.65rem;font-weight:700;padding:.12rem .4rem;border-radius:4px">${l.abbr}</span>`;
+    };
+    const fmt = iso => iso ? new Date(iso).toLocaleString('en-IN', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:true }) : '—';
+
+    const matrixHtml = `
+      <div style="margin-bottom:1rem">
+        <div style="font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#94a3b8;margin-bottom:.4rem">Interaction Matrix</div>
+        <table style="width:100%;border-collapse:collapse;font-size:.8rem">
+          <thead><tr style="background:#f5f7fa">
+            <th style="padding:.4rem .55rem;text-align:left;font-weight:700;color:#374151;border-bottom:1.5px solid #e2e8f0">Level</th>
+            <th style="padding:.4rem .55rem;text-align:center;font-weight:700;color:#374151;border-bottom:1.5px solid #e2e8f0">📞 Calls</th>
+            <th style="padding:.4rem .55rem;text-align:center;font-weight:700;color:#374151;border-bottom:1.5px solid #e2e8f0">🤝 Meets</th>
+            <th style="padding:.4rem .55rem;text-align:center;font-weight:700;color:#374151;border-bottom:1.5px solid #e2e8f0">👨‍👩 Parent</th>
+          </tr></thead>
+          <tbody>
+            ${[1,2,3,4].map(l => {
+              const m = matrix[l]; const total = m.call + m.meet + m['parent-meet'];
+              return `<tr style="${total > 0 ? 'background:#fafbff' : ''}">
+                <td style="padding:.4rem .55rem;border-bottom:1px solid #f1f5f9">${levelPill(l)}</td>
+                <td style="padding:.4rem .55rem;text-align:center;border-bottom:1px solid #f1f5f9;font-weight:${m.call > 0 ? 700 : 400};color:${m.call > 0 ? '#0d2d5a' : '#94a3b8'}">${m.call || '—'}</td>
+                <td style="padding:.4rem .55rem;text-align:center;border-bottom:1px solid #f1f5f9;font-weight:${m.meet > 0 ? 700 : 400};color:${m.meet > 0 ? '#15803d' : '#94a3b8'}">${m.meet || '—'}</td>
+                <td style="padding:.4rem .55rem;text-align:center;border-bottom:1px solid #f1f5f9;font-weight:${m['parent-meet'] > 0 ? 700 : 400};color:${m['parent-meet'] > 0 ? '#b45309' : '#94a3b8'}">${m['parent-meet'] || '—'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+    const timelineHtml = interactions.length ? `
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem">
+          <div style="font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#94a3b8">Timeline (${interactions.length})</div>
+          <button class="btn btn-primary btn-sm" onclick="openLogInteractionModal('${devoteeId}','${devoteeName.replace(/'/g,"\\'")}')">
+            <i class="fas fa-plus"></i> Add
+          </button>
+        </div>
+        ${interactions.map(ix => {
+          const l = INTERACTION_LEVELS[ix.level] || INTERACTION_LEVELS[4];
+          return `<div style="border-left:3px solid ${l.color};padding:.4rem .7rem;margin-bottom:.45rem;background:#fff;border-radius:0 6px 6px 0;box-shadow:0 1px 3px rgba(0,0,0,.05)">
+            <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">
+              <span style="background:${l.bg};color:${l.color};font-size:.65rem;font-weight:700;padding:.1rem .35rem;border-radius:4px">${l.abbr}</span>
+              <span style="font-weight:700;font-size:.8rem">${TYPE_LABELS[ix.type] || ix.type}</span>
+              <span style="font-size:.72rem;color:#94a3b8;margin-left:auto">${fmt(ix.atClient)}</span>
+            </div>
+            <div style="font-size:.72rem;color:#64748b;margin-top:.2rem">by ${ix.by}</div>
+            ${ix.notes ? `<div style="font-size:.75rem;color:#374151;margin-top:.2rem;font-style:italic">"${ix.notes}"</div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>` : `
+      <div style="text-align:center;padding:1rem">
+        <p style="color:#94a3b8;font-size:.85rem">No interactions logged yet</p>
+        <button class="btn btn-primary btn-sm" style="margin-top:.5rem"
+                onclick="openLogInteractionModal('${devoteeId}','${devoteeName.replace(/'/g,"\\'")}')">
+          <i class="fas fa-plus"></i> Log First Interaction
+        </button>
+      </div>`;
+
+    body.innerHTML = matrixHtml + timelineHtml;
+  } catch (e) {
+    body.innerHTML = '<div class="empty-state"><p>Failed to load</p></div>';
+    console.error('openInteractionHistory', e);
+  }
+}
+window.openInteractionHistory = openInteractionHistory;
+
+// ── LOG INTERACTION MODAL ─────────────────────────────────────────────────────
+let _liPrefillDevoteeId = null;
+let _liPrefillDevoteeName = '';
+
+function openLogInteractionModal(devoteeId, devoteeName) {
+  _liPrefillDevoteeId = devoteeId || null;
+  _liPrefillDevoteeName = devoteeName || '';
+  document.getElementById('li-devotee-id').value   = devoteeId || '';
+  document.getElementById('li-devotee-name').value = devoteeName || '';
+  document.getElementById('li-notes').value = '';
+  document.getElementById('li-error').style.display = 'none';
+  document.querySelector('input[name="li-type"][value="call"]').checked = true;
+  document.getElementById('li-level').value = '4';
+  openModal('log-interaction-modal');
+}
+window.openLogInteractionModal = openLogInteractionModal;
+
+async function _liSearchDevotee(q) {
+  const menu = document.getElementById('li-picker-menu');
+  if (!q || q.length < 2) { menu.classList.add('hidden'); return; }
+  const all = await DevoteeCache.all().catch(() => []);
+  const ql = q.toLowerCase();
+  const matches = all.filter(d => d.isActive !== false && (d.name||'').toLowerCase().includes(ql)).slice(0,8);
+  if (!matches.length) { menu.classList.add('hidden'); return; }
+  menu.innerHTML = matches.map(d =>
+    `<div class="picker-option" style="padding:.45rem .7rem;cursor:pointer;font-size:.85rem"
+          onclick="_liSelectDevotee('${d.id}','${(d.name||'').replace(/'/g,"\\'")}')">
+       ${d.name} <span style="color:#94a3b8;font-size:.75rem">${d.teamName||''}</span>
+     </div>`).join('');
+  menu.classList.remove('hidden');
+}
+window._liSearchDevotee = _liSearchDevotee;
+
+function _liSelectDevotee(id, name) {
+  document.getElementById('li-devotee-id').value   = id;
+  document.getElementById('li-devotee-name').value = name;
+  document.getElementById('li-picker-menu').classList.add('hidden');
+}
+window._liSelectDevotee = _liSelectDevotee;
+
+async function saveInteraction() {
+  const devoteeId   = document.getElementById('li-devotee-id').value.trim();
+  const devoteeName = document.getElementById('li-devotee-name').value.trim();
+  const level       = parseInt(document.getElementById('li-level').value);
+  const type        = document.querySelector('input[name="li-type"]:checked')?.value || 'call';
+  const notes       = document.getElementById('li-notes').value.trim();
+  const errEl       = document.getElementById('li-error');
+  errEl.style.display = 'none';
+
+  if (!devoteeId || !devoteeName) {
+    errEl.textContent = 'Please select a devotee.'; errEl.style.display = 'block'; return;
+  }
+  const all = await DevoteeCache.all().catch(() => []);
+  const dev = all.find(d => d.id === devoteeId) || {};
+
+  try {
+    await DB.logInteraction({ devoteeId, devoteeName, teamName: dev.teamName || '', level, type, notes, by: AppState.userName, byUserId: AppState.userId });
+    closeModal('log-interaction-modal');
+    showToast('Interaction logged! Hare Krishna 🙏', 'success');
+    // Refresh whichever meet sub-tab is active
+    if (_meetActiveSubTab === 'my-log') _loadMyLogTab();
+  } catch (e) {
+    errEl.textContent = 'Save failed: ' + e.message; errEl.style.display = 'block';
+  }
+}
+window.saveInteraction = saveInteraction;
+
+// Returns the bucket function for a given devoteeStatus matching the chip key.
+function _meetMatchesStatus(devoteeStatus, isActive, filterKey) {
+  if (filterKey === 'all') return true;
+  if (filterKey === 'Inactive') return devoteeStatus === 'Inactive' || isActive === false;
+  if (filterKey === 'ETS') return !devoteeStatus || devoteeStatus === 'Expected to be Serious';
+  return devoteeStatus === filterKey;
+}
+
+// Re-render whichever sub-panel is active + update chip counts.
+function _renderMeetingsTabContent() {
+  const overdue   = _overdueListCache || [];
+  const upcoming  = _pmRenderState?.upcoming || [];
+  const recent    = _pmRenderState?.recent || [];
+  const completed = (_meetingsCache || []).filter(m => m.status === 'completed')
+                      .sort((a, b) => (b.completedDate || b.scheduledDate || '').localeCompare(a.completedDate || a.scheduledDate || ''));
+
+  // Determine which list the chip filter applies to (depends on active sub-tab).
+  const activeList =
+      _meetActiveSubTab === 'overdue'   ? overdue
+    : _meetActiveSubTab === 'scheduled' ? upcoming
+    : _meetActiveSubTab === 'completed' ? completed
+    : recent;
+
+  // Update chip counts based on active list's status distribution.
+  _updateMeetingsChipCounts(activeList, _meetActiveSubTab);
+
+  // Apply status filter.
+  const filtered = activeList.filter(item => {
+    const d = item.devotee || (item.devoteeId ? { devoteeStatus: item.devoteeStatus, isActive: true } : item);
+    const status = item.devotee?.devoteeStatus ?? item.devoteeStatus ?? '';
+    const isActive = item.devotee?.isActive ?? true;
+    return _meetMatchesStatus(status, isActive, _meetStatusFilter);
+  });
+
+  // Render into the active panel.
+  if (_meetActiveSubTab === 'overdue') {
+    const target = document.getElementById('meet-panel-overdue');
+    if (target) target.innerHTML = filtered.length
+      ? _overdueTableHtml(filtered.slice(0, 300))
+      : '<div class="meet-empty"><i class="fas fa-check-circle"></i><p>All clear — no overdue meetings in this category.</p></div>';
+  } else if (_meetActiveSubTab === 'scheduled') {
+    const target = document.getElementById('meet-panel-scheduled');
+    if (target) target.innerHTML = filtered.length
+      ? _meetingsListHtml(filtered, 'scheduled')
+      : '<div class="meet-empty"><i class="fas fa-calendar"></i><p>No upcoming meetings scheduled.</p></div>';
+  } else if (_meetActiveSubTab === 'completed') {
+    const target = document.getElementById('meet-panel-completed');
+    if (target) target.innerHTML = _renderCompletedMeetings(filtered);
+  } else if (_meetActiveSubTab === 'recent') {
+    const target = document.getElementById('meet-panel-recent');
+    if (target) target.innerHTML = filtered.length
+      ? _meetingsListHtml(filtered, 'recent')
+      : '<div class="meet-empty"><i class="fas fa-clock"></i><p>No recent meetings in the last 30 days.</p></div>';
+  }
+}
+
+function _updateMeetingsChipCounts(list, subTab) {
+  const counts = { all: list.length, 'Most Serious': 0, 'Serious': 0, 'ETS': 0, 'New Devotee': 0, 'Inactive': 0 };
+  list.forEach(item => {
+    const status = item.devotee?.devoteeStatus ?? item.devoteeStatus ?? '';
+    const isActive = item.devotee?.isActive ?? true;
+    if (status === 'Most Serious') counts['Most Serious']++;
+    else if (status === 'Serious') counts['Serious']++;
+    else if (status === 'New Devotee') counts['New Devotee']++;
+    else if (status === 'Inactive' || isActive === false) counts['Inactive']++;
+    else counts['ETS']++;
+  });
+  Object.entries(counts).forEach(([key, n]) => {
+    const el = document.querySelector(`#meet-status-chips [data-count="${key}"]`);
+    if (el) el.textContent = n;
+  });
+}
+
+// Render a meetings list (Scheduled / Completed / Recent) as cards.
+function _meetingsListHtml(list, mode) {
+  return list.slice(0, 300).map(m => {
+    const dateStr = (mode === 'scheduled' || !m.completedDate) ? m.scheduledDate : m.completedDate;
+    const dateLbl = dateStr ? _meetingDateLabel(dateStr) : '—';
+    const dateBg  = mode === 'scheduled' ? 'var(--accent-light)' : 'var(--success-light)';
+    const dateColor = mode === 'scheduled' ? 'var(--accent)' : 'var(--success)';
+    const remarks = m.authorityRemarks ? `
+      <div style="margin-top:.4rem;padding:.45rem .65rem;background:var(--accent-light);border-left:3px solid var(--accent);border-radius:var(--radius-xs);font-size:.78rem;color:#5a3a1a">
+        <strong style="font-size:.7rem;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:.15rem">Authority Remarks</strong>
+        ${m.authorityRemarks}
+      </div>` : '';
+    return `
+      <div style="border:1px solid var(--color-border);border-radius:var(--radius-sm);padding:.7rem .85rem;margin-bottom:.55rem;background:var(--bg-card)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:.6rem;flex-wrap:wrap">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:700;font-size:.95rem;cursor:pointer;color:var(--color-primary)" onclick="openProfileModal('${m.devoteeId}')">${m.devoteeName || '—'}</div>
+            <div style="font-size:.74rem;color:var(--text-muted);margin-top:.15rem">${m.teamName || ''}${m.devoteeStatus ? ' · ' + m.devoteeStatus : ''}</div>
+          </div>
+          <div style="background:${dateBg};color:${dateColor};padding:.22rem .6rem;border-radius:var(--radius-xs);font-size:.78rem;font-weight:700;white-space:nowrap">${dateLbl}</div>
+        </div>
+        <div style="font-size:.78rem;color:var(--text-muted);margin-top:.35rem">
+          ${m.metBy ? `<i class="fas fa-user" style="opacity:.6"></i> ${m.metBy}` : ''}
+        </div>
+        ${m.notes ? `<div style="font-size:.78rem;color:#444;margin-top:.3rem;font-style:italic">"${m.notes}"</div>` : ''}
+        ${remarks}
+        <div style="margin-top:.55rem;display:flex;gap:.4rem;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" style="font-size:.74rem" onclick="openScheduleMeetingForm('${m.id}')"><i class="fas fa-edit"></i> Edit / Add Remarks</button>
+          ${mode === 'scheduled' ? `<button class="btn btn-primary btn-sm" style="font-size:.74rem" onclick="markMeetingComplete('${m.id}')"><i class="fas fa-check"></i> Mark Complete</button>` : ''}
+          ${mode === 'completed' ? `<button class="btn btn-ghost btn-sm" style="font-size:.74rem;color:var(--danger)" onclick="disconnectMetBadge('${m.devoteeId}','${(m.devoteeName||'').replace(/'/g,"\\'")}')"><i class="fas fa-unlink"></i> Remove © Badge</button>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ── COMPLETED MEETINGS — WhatsApp-Calls-style list ──────────────────────────
+// Grouped by devotee: avatar + name + "last met · team · ref" sub-line +
+// call/WhatsApp icons. Tap a row → full chronological meeting history modal.
+let _completedMeetGroups = [];
+function _mhEsc(s) { return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function _renderCompletedMeetings(list) {
+  const byDev = {};
+  list.forEach(m => {
+    const id = m.devoteeId; if (!id) return;
+    if (!byDev[id]) byDev[id] = { id, name: m.devoteeName || '—', teamName: m.teamName || '', meetings: [] };
+    byDev[id].meetings.push(m);
+  });
+  const devs = Object.values(byDev);
+  const lastOf = dv => (dv.meetings[0]?.completedDate || dv.meetings[0]?.scheduledDate || '');
+  devs.forEach(dv => dv.meetings.sort((a, b) =>
+    (b.completedDate || b.scheduledDate || '').localeCompare(a.completedDate || a.scheduledDate || '')));
+  devs.sort((a, b) => lastOf(b).localeCompare(lastOf(a)));
+  _completedMeetGroups = devs;
+
+  return `
+    <div class="mtg-toolbar">
+      <button class="mtg-tool-btn mtg-tool-btn--primary" onclick="openScheduleMeetingForm()">
+        <i class="fas fa-calendar-plus"></i> Schedule
+      </button>
+      <div class="mtg-search">
+        <i class="fas fa-search"></i>
+        <input id="mtg-search-input" placeholder="Search devotee…" autocomplete="off"
+               oninput="_filterCompletedMeetings(this.value)">
+      </div>
+    </div>
+    <div class="mtg-list" id="mtg-completed-list">${_completedMeetRows(devs)}</div>`;
+}
+
+function _completedMeetRows(devs) {
+  if (!devs.length) return '<div class="meet-empty"><i class="fas fa-history"></i><p>No completed meetings</p></div>';
+  return devs.map(dv => {
+    const dev = (_meetingsDevoteesCache || []).find(x => x.id === dv.id) || {};
+    const mobile  = dev.mobile || '';
+    const altMob  = dev.mobileAlt || '';
+    const ref     = dev.referenceBy || '';
+    const last    = dv.meetings[0];
+    const lastLbl = _meetingDateLabel(last.completedDate || last.scheduledDate);
+    const sub = [lastLbl ? `Last met ${lastLbl}` : '', dv.teamName, ref ? `Ref: ${ref}` : '']
+                  .filter(Boolean).join('  ·  ');
+    const cnt = dv.meetings.length > 1 ? `<span class="mtg-row__count">${dv.meetings.length}</span>` : '';
+    const sName = (dv.name || '').replace(/'/g, "\\'");
+    return `<div class="mtg-row" onclick="openDevoteeMeetingHistory('${dv.id}')">
+      <span class="mtg-row__avatar">${initials(dv.name)}</span>
+      <span class="mtg-row__body">
+        <span class="mtg-row__name">${dv.name}${cnt}</span>
+        <span class="mtg-row__sub">${sub || '—'}</span>
+      </span>
+      <span class="mtg-row__actions" onclick="event.stopPropagation()">${contactIcons(mobile, { altMobile: altMob, devoteeId: dv.id, name: sName })}</span>
+    </div>`;
+  }).join('');
+}
+
+function _filterCompletedMeetings(q) {
+  const ql = (q || '').toLowerCase().trim();
+  const filtered = !ql ? _completedMeetGroups
+    : _completedMeetGroups.filter(dv => (dv.name || '').toLowerCase().includes(ql));
+  const el = document.getElementById('mtg-completed-list');
+  if (el) el.innerHTML = _completedMeetRows(filtered);
+}
+window._filterCompletedMeetings = _filterCompletedMeetings;
+
+// Full meeting history for one devotee — chronological (latest at top),
+// each meeting expandable to show its minutes (notes + authority remarks).
+function openDevoteeMeetingHistory(devoteeId) {
+  const meetings = (_meetingsCache || [])
+    .filter(m => m.devoteeId === devoteeId)
+    .sort((a, b) => (b.completedDate || b.scheduledDate || '').localeCompare(a.completedDate || a.scheduledDate || ''));
+  const dev  = (_meetingsDevoteesCache || []).find(x => x.id === devoteeId) || {};
+  const name = meetings[0]?.devoteeName || dev.name || 'Devotee';
+
+  const nameEl = document.getElementById('dmh-name');
+  const subEl  = document.getElementById('dmh-sub');
+  const body   = document.getElementById('dmh-body');
+  if (nameEl) nameEl.textContent = name;
+  if (subEl)  subEl.textContent  = [dev.teamName, `${meetings.length} meeting${meetings.length !== 1 ? 's' : ''}`]
+                                     .filter(Boolean).join('  ·  ');
+
+  if (body) {
+    const items = meetings.map((m, i) => {
+      const dateLbl = _meetingDateLabel(m.completedDate || m.scheduledDate) || '—';
+      const latest  = i === 0;
+      const badge   = m.status === 'completed'
+        ? '<span class="dmh-badge dmh-badge--done">Completed</span>'
+        : '<span class="dmh-badge dmh-badge--sched">Scheduled</span>';
+      const mins = [];
+      if (m.notes)            mins.push(`<div class="dmh-min"><strong>Notes</strong><span>${_mhEsc(m.notes)}</span></div>`);
+      if (m.authorityRemarks) mins.push(`<div class="dmh-min dmh-min--auth"><strong>Authority remarks</strong><span>${_mhEsc(m.authorityRemarks)}</span></div>`);
+      const minsHtml = mins.length ? mins.join('') : '<div class="dmh-min dmh-min--empty">No minutes recorded for this meeting.</div>';
+      return `<div class="dmh-item${latest ? ' dmh-open' : ''}">
+        <button class="dmh-item__head" onclick="this.parentElement.classList.toggle('dmh-open')">
+          <span class="dmh-item__date">${dateLbl}${latest ? '<span class="dmh-latest">Latest</span>' : ''}</span>
+          <span class="dmh-item__by"><i class="fas fa-user"></i> ${_mhEsc(m.metBy) || '—'}</span>
+          ${badge}
+          <i class="fas fa-chevron-down dmh-item__chev"></i>
+        </button>
+        <div class="dmh-item__min">${minsHtml}</div>
+      </div>`;
+    }).join('');
+    const sName = (name || '').replace(/'/g, "\\'");
+    body.innerHTML = (meetings.length ? items : '<div class="meet-empty"><p>No meetings recorded yet.</p></div>')
+      + `<div class="dmh-foot">
+           <button class="btn btn-ghost btn-sm" onclick="openScheduleMeetingForm(null,'${devoteeId}')"><i class="fas fa-calendar-plus"></i> New meeting</button>
+           <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="closeModal('devotee-meeting-history-modal'); disconnectMetBadge('${devoteeId}','${sName}')"><i class="fas fa-unlink"></i> Remove © badge</button>
+         </div>`;
+  }
+  openModal('devotee-meeting-history-modal');
+}
+window.openDevoteeMeetingHistory = openDevoteeMeetingHistory;
 
 function openTeamRenameModal() {
   document.getElementById('rename-team-from').value = '';
@@ -2678,8 +3731,10 @@ async function _loadPersonalMeetings() {
       .filter(m => m.status === 'completed' && (m.completedDate || m.scheduledDate || '') >= recentCutoffStr)
       .sort((a, b) => (b.completedDate || b.scheduledDate || '').localeCompare(a.completedDate || a.scheduledDate || ''));
 
-    // Overdue: ALL devotees (incl. Inactive status) with last meeting > 30 days ago OR never met,
-    // excluding those already in upcoming, those marked not-interested, and online-mode callers.
+    // Overdue: only CONNECTING devotees (those who have already met Prabhuji at
+    // least once) whose LAST meeting was 30+ days ago — i.e. due for a follow-up.
+    // Never-met devotees are excluded (they belong to calling, not meeting follow-up).
+    // Also excludes upcoming-scheduled, not-interested, and online-mode callers.
     const upcomingDevIds = new Set(upcoming.map(m => m.devoteeId));
     const eligibleDevotees = devotees.filter(d =>
       !d.isNotInterested && d.callingMode !== 'not_interested'
@@ -2693,7 +3748,8 @@ async function _loadPersonalMeetings() {
         const days = lastDate ? Math.floor((new Date(today) - new Date(lastDate)) / 86400000) : Infinity;
         return { devotee: d, lastDate, lastMetBy: last?.metBy || '', days };
       })
-      .filter(x => x.days > 30)
+      // require lastDate → only those who have met Prabhuji before (connecting)
+      .filter(x => x.lastDate && x.days > 30)
       .sort((a, b) => {
         const seriousness = s => s === 'Most Serious' ? 0 : s === 'Serious' ? 1 : s === 'Expected to be Serious' || !s ? 2 : s === 'New Devotee' ? 3 : 4;
         const sa = seriousness(a.devotee.devoteeStatus);
@@ -2847,8 +3903,8 @@ function _overdueTableHtml(list) {
   }).join('');
 
   return `
-    <table style="width:100%;border-collapse:collapse;font-size:.82rem">
-      <thead style="position:sticky;top:0;z-index:1;background:#1A5C3A;color:#fff">
+    <table class="striped-rows" style="width:100%;border-collapse:collapse;font-size:.82rem">
+      <thead style="position:sticky;top:0;z-index:1;background:#1E40AF;color:#fff">
         <tr>
           <th style="padding:.45rem .5rem;text-align:left;font-size:.72rem">#</th>
           <th style="padding:.45rem .5rem;text-align:left;font-size:.72rem">Name</th>
@@ -2873,7 +3929,7 @@ function _renderPersonalMeetingsBody() {
     // Default home view: Upcoming + Recently Met (top) + Overdue with chips (bottom)
     body.innerHTML = `
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1rem;margin-bottom:1rem">
-        ${_renderMeetingSection('Upcoming', upcoming.length, '#1A5C3A', _renderUpcomingCards(upcoming))}
+        ${_renderMeetingSection('Upcoming', upcoming.length, '#1E40AF', _renderUpcomingCards(upcoming))}
         ${_renderMeetingSection('Recently Met', recent.length, '#2563eb', _renderRecentCards(recent))}
       </div>
       <div id="pm-overdue-section">${_renderOverdueSectionInner()}</div>
@@ -2961,6 +4017,7 @@ function openScheduleMeetingForm(meetingId = null, devoteeId = null) {
       document.getElementById('meeting-met-by').value = m.metBy || '';
       document.getElementById('meeting-status').value = m.status || 'scheduled';
       document.getElementById('meeting-notes').value = m.notes || '';
+      document.getElementById('meeting-authority-remarks').value = m.authorityRemarks || '';
     }
   } else {
     document.getElementById('meeting-devotee').value = '';
@@ -2970,6 +4027,7 @@ function openScheduleMeetingForm(meetingId = null, devoteeId = null) {
     document.getElementById('meeting-met-by').value = '';
     document.getElementById('meeting-status').value = 'scheduled';
     document.getElementById('meeting-notes').value = '';
+    document.getElementById('meeting-authority-remarks').value = '';
     if (devoteeId && _meetingsDevoteesCache) {
       const d = _meetingsDevoteesCache.find(x => x.id === devoteeId);
       if (d) {
@@ -3047,25 +4105,30 @@ async function saveScheduledMeeting() {
   const metBy = document.getElementById('meeting-met-by').value;
   const status = document.getElementById('meeting-status').value;
   const notes = document.getElementById('meeting-notes').value.trim();
+  const authorityRemarks = document.getElementById('meeting-authority-remarks').value.trim();
 
   if (!_editingMeetingDevotee) { showToast('Please select a devotee', 'error'); return; }
   if (!date) { showToast('Please select a date', 'error'); return; }
   if (!metBy) { showToast('Please select Met By', 'error'); return; }
 
+  // Firestore rejects `undefined` field values. Always send a real string.
   const data = {
     devoteeId: _editingMeetingDevotee.id,
     devoteeName: _editingMeetingDevotee.name,
     teamName: _editingMeetingDevotee.teamName || '',
     devoteeStatus: _editingMeetingDevotee.devoteeStatus || '',
     scheduledDate: date,
-    metBy, status, notes,
-    completedDate: status === 'completed' ? (id ? undefined : date) : '',
+    metBy, status, notes, authorityRemarks,
+    completedDate: status === 'completed' ? date : '',
   };
-  if (status === 'completed' && !id) data.completedDate = date;
 
   try {
     if (id) await DB.updatePersonalMeeting(id, data);
     else await DB.addPersonalMeeting(data);
+    // Completing a meeting flags the devotee as "met Prabhuji" (© badge).
+    if (status === 'completed' && _editingMeetingDevotee.id) {
+      await DB.setDevoteeMetPrabhuji(_editingMeetingDevotee.id, true);
+    }
     showToast(id ? 'Meeting updated' : 'Meeting scheduled', 'success');
     closeModal('schedule-meeting-modal');
     _loadPersonalMeetings();
@@ -3080,12 +4143,30 @@ async function markMeetingComplete(id) {
       status: 'completed',
       completedDate: getToday(),
     });
+    // Flag the devotee as "met Prabhuji" (© badge).
+    const m = (_meetingsCache || []).find(x => x.id === id);
+    if (m && m.devoteeId) await DB.setDevoteeMetPrabhuji(m.devoteeId, true);
     showToast('Marked as completed', 'success');
     _loadPersonalMeetings();
   } catch (e) {
     showToast('Failed: ' + (e.message || 'Error'), 'error');
   }
 }
+
+// Remove the © "met" badge from a devotee — used from the Completed-meetings
+// tab when an entry was logged by mistake or the connection should be reset.
+async function disconnectMetBadge(devoteeId, name) {
+  if (!devoteeId) return;
+  if (!confirm(`Remove the "met Prabhuji" © badge from ${name || 'this devotee'}?\n\nThe meeting record stays — only the name badge is removed.`)) return;
+  try {
+    await DB.setDevoteeMetPrabhuji(devoteeId, false);
+    showToast('Badge removed', 'success');
+    if (typeof loadDevotees === 'function') loadDevotees();
+  } catch (e) {
+    showToast('Failed: ' + (e.message || 'Error'), 'error');
+  }
+}
+window.disconnectMetBadge = disconnectMetBadge;
 
 async function deleteCurrentMeeting() {
   const id = document.getElementById('meeting-id').value;
@@ -3167,12 +4248,9 @@ async function _loadIndividualReports() {
     const range = _irGetRange();
     document.getElementById('ir-period-label').textContent = range.label;
 
-    const [sessSnap, allDevotees, books, regs, services] = await Promise.all([
+    const [sessSnap, allDevotees] = await Promise.all([
       fdb.collection('sessions').where('sessionDate', '>=', range.start).where('sessionDate', '<=', range.end).orderBy('sessionDate', 'asc').get(),
       DevoteeCache.all(),
-      DB.getBookDistributions({ startDate: range.start, endDate: range.end }),
-      DB.getRegistrations(    { startDate: range.start, endDate: range.end }),
-      DB.getServices(         { startDate: range.start, endDate: range.end }),
     ]);
     const sessions = sessSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => !s.isCancelled);
     const totalSessions = sessions.length;
@@ -3188,13 +4266,6 @@ async function _loadIndividualReports() {
       });
     });
 
-    const booksByDev = {};
-    books.forEach(b => { if (b.devoteeId) booksByDev[b.devoteeId] = (booksByDev[b.devoteeId] || 0) + (parseInt(b.quantity) || 0); });
-    const regsByDev = {};
-    regs.forEach(r => { if (r.devoteeId) regsByDev[r.devoteeId] = (regsByDev[r.devoteeId] || 0) + (parseInt(r.count) || 1); });
-    const svcByDev = {};
-    services.forEach(s => { if (s.devoteeId) svcByDev[s.devoteeId] = (svcByDev[s.devoteeId] || 0) + 1; });
-
     const activeDevotees = allDevotees
       .filter(d => d.isActive !== false && !d.isNotInterested && d.callingMode !== 'not_interested')
       .map(d => ({
@@ -3205,9 +4276,6 @@ async function _loadIndividualReports() {
         status: d.devoteeStatus || '',
         sessions: totalSessions,
         attended: presentByDev[d.id] || 0,
-        books: booksByDev[d.id] || 0,
-        regs: regsByDev[d.id] || 0,
-        services: svcByDev[d.id] || 0,
       }))
       .sort((a, b) =>
         (a.team || '').localeCompare(b.team || '') ||
@@ -3218,10 +4286,7 @@ async function _loadIndividualReports() {
 
     const totals = activeDevotees.reduce((acc, d) => ({
       attended: acc.attended + d.attended,
-      books: acc.books + d.books,
-      regs: acc.regs + d.regs,
-      services: acc.services + d.services,
-    }), { attended: 0, books: 0, regs: 0, services: 0 });
+    }), { attended: 0 });
 
     body.innerHTML = `
       <div style="font-size:.82rem;color:var(--text-muted);margin-bottom:.6rem">
@@ -3230,16 +4295,13 @@ async function _loadIndividualReports() {
       <div class="table-scroll">
       <table class="report-table" style="width:100%;font-size:.82rem">
         <thead>
-          <tr style="background:var(--color-primary,#1A5C3A);color:#fff">
+          <tr style="background:var(--color-primary,#1E40AF);color:#fff">
             <th style="padding:.45rem .55rem;text-align:left">Sno</th>
             <th style="padding:.45rem .55rem;text-align:left">Name</th>
             <th style="padding:.45rem .55rem;text-align:left">Team</th>
             <th style="padding:.45rem .55rem;text-align:center">Sessions</th>
             <th style="padding:.45rem .55rem;text-align:center">Attended</th>
             <th style="padding:.45rem .55rem;text-align:center">%</th>
-            <th style="padding:.45rem .55rem;text-align:center">Books</th>
-            <th style="padding:.45rem .55rem;text-align:center">Regs</th>
-            <th style="padding:.45rem .55rem;text-align:center">Services</th>
           </tr>
         </thead>
         <tbody>
@@ -3253,9 +4315,6 @@ async function _loadIndividualReports() {
               <td style="padding:.4rem .55rem;text-align:center">${d.sessions}</td>
               <td style="padding:.4rem .55rem;text-align:center;font-weight:600">${d.attended}</td>
               <td style="padding:.4rem .55rem;text-align:center;color:${pctColor};font-weight:700">${pct}%</td>
-              <td style="padding:.4rem .55rem;text-align:center">${d.books || ''}</td>
-              <td style="padding:.4rem .55rem;text-align:center">${d.regs || ''}</td>
-              <td style="padding:.4rem .55rem;text-align:center">${d.services || ''}</td>
             </tr>`;
           }).join('')}
           <tr style="background:#f5f7f5;font-weight:700">
@@ -3265,9 +4324,6 @@ async function _loadIndividualReports() {
             <td style="padding:.5rem .55rem;text-align:center">${totalSessions}</td>
             <td style="padding:.5rem .55rem;text-align:center">${totals.attended}</td>
             <td></td>
-            <td style="padding:.5rem .55rem;text-align:center">${totals.books}</td>
-            <td style="padding:.5rem .55rem;text-align:center">${totals.regs}</td>
-            <td style="padding:.5rem .55rem;text-align:center">${totals.services}</td>
           </tr>
         </tbody>
       </table>
@@ -3300,25 +4356,22 @@ function downloadIndividualReports() {
       [
         { v: 'Sno', s: hdr }, { v: 'Name', s: hdr }, { v: 'Team', s: hdr }, { v: 'Calling By', s: hdr }, { v: 'Status', s: hdr },
         { v: 'Sessions', s: hdr }, { v: 'Attended', s: hdr }, { v: '%', s: hdr },
-        { v: 'Books', s: hdr }, { v: 'Regs', s: hdr }, { v: 'Services', s: hdr },
       ],
     ];
     devotees.forEach((d, i) => {
       rows.push([
         num(i + 1), txt(d.name), txt(d.team), txt(d.callingBy), txt(d.status),
         num(d.sessions), num(d.attended), pctCell(d.attended, totalSessions),
-        num(d.books), num(d.regs), num(d.services),
       ]);
     });
-    const totals = devotees.reduce((a, d) => ({ at: a.at + d.attended, b: a.b + d.books, r: a.r + d.regs, s: a.s + d.services }), { at: 0, b: 0, r: 0, s: 0 });
+    const totals = devotees.reduce((a, d) => ({ at: a.at + d.attended }), { at: 0 });
     rows.push([
       { v: '', s: hdr }, { v: 'Grand Total', s: hdr }, { v: '', s: hdr }, { v: '', s: hdr }, { v: '', s: hdr },
       { v: totalSessions, s: hdr }, { v: totals.at, s: hdr }, { v: '', s: hdr },
-      { v: totals.b, s: hdr }, { v: totals.r, s: hdr }, { v: totals.s, s: hdr },
     ]);
 
     const ws = _xlsSheet(rows.map(r => r.map(c => (c && 'v' in c) ? c : { v: c ?? '' })),
-      [{ wch: 5 }, { wch: 26 }, { wch: 13 }, { wch: 18 }, { wch: 13 }, { wch: 9 }, { wch: 9 }, { wch: 6 }, { wch: 7 }, { wch: 7 }, { wch: 9 }]);
+      [{ wch: 5 }, { wch: 26 }, { wch: 13 }, { wch: 18 }, { wch: 13 }, { wch: 9 }, { wch: 9 }, { wch: 6 }]);
     rows.forEach((row, r) => row.forEach((cell, c) => {
       if (cell?.s) { const addr = XLSX.utils.encode_cell({ r, c }); if (ws[addr]) ws[addr].s = cell.s; }
     }));
@@ -3332,3 +4385,53 @@ function downloadIndividualReports() {
     showToast('Failed: ' + (e.message || 'Error'), 'error');
   }
 }
+
+// ── COORDINATOR PERFORMANCE TAB (Attendance → Coordinator sub-tab) ──────────
+// Moved from Home. Shows the full cross-team table (Called/Yes/Came/Target/%).
+// Clicking a team bubble on the home leaderboard routes here with master Team
+// filter pre-set, so the table scopes to that one team instantly.
+let _cpInFlight = null;
+async function loadCoordinatorPerformance() {
+  if (_cpInFlight) return _cpInFlight;
+  const el = document.getElementById('att-coordinator-content');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  _cpInFlight = (async () => {
+    try {
+      const ctx = await _dashResolveContext();
+      const key  = `${ctx.sessionId || ''}|${ctx.callingDate || ''}`;
+      let data;
+      if (_dashCache && _dashCache.key === key) {
+        data = _dashCache.data;
+      } else {
+        data = await _dashFetchData(ctx);
+        _dashCache = { key, data };
+      }
+      const sessLbl = ctx.sessionDate
+        ? new Date(ctx.sessionDate + 'T00:00:00').toLocaleDateString('en-IN',
+            { weekday:'short', day:'numeric', month:'short', year:'numeric' })
+        : '— no session selected —';
+
+      el.innerHTML = `
+        <div class="cp-session-label"><i class="fas fa-calendar-check"></i> ${sessLbl}</div>
+        <div id="dashboard-content" class="ds-card ds-card--flat dashboard-wrap"
+             style="padding:var(--s-3);margin-top:var(--s-3)">
+          <div class="loading"><i class="fas fa-spinner"></i></div>
+        </div>`;
+      _dashRender(data, ctx);
+    } catch (e) {
+      console.error('loadCoordinatorPerformance', e);
+      if (el) el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+    } finally {
+      _cpInFlight = null;
+    }
+  })();
+  return _cpInFlight;
+}
+window.loadCoordinatorPerformance = loadCoordinatorPerformance;
+window.addEventListener('filtersChanged', () => {
+  if (AppState._attSubTab === 'coordinator') {
+    _cpInFlight = null;
+    loadCoordinatorPerformance();
+  }
+});

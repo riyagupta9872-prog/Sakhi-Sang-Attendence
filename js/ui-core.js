@@ -14,10 +14,17 @@ auth.onAuthStateChanged(async (user) => {
     Object.assign(AppState, {
       userRole: null, userTeam: null, userPosition: null,
       userName: '', userId: null, profilePic: null,
-      isAttSevaDev: false, _sessionExplicit: false,
+      isAttSevaDev: false,
+      canAllTeamCalling: false, canAllTeamReports: false, canManageAllTeams: false,
+      canBackDateAttendance: false,
+      _sessionExplicit: false,
       _dashboard: null, _autoSnap: null,
       callingData: [], attendanceCandidates: {}, sessionsCache: {},
       filters: { sessionId: null, team: '', callingBy: '', period: 'session', periodAnchor: null },
+      // Reset currentTab so the next login resolves it fresh from the active
+      // DOM panel — prevents a stale tab name from blocking loadDashboard
+      // when the dashboard panel is actually visible.
+      currentTab: null, _callingSubTab: null, _attSubTab: null,
     });
 
     // ── Bust the in-memory devotee cache so the next user re-fetches fresh
@@ -42,9 +49,74 @@ auth.onAuthStateChanged(async (user) => {
         await fdb.collection('users').doc(user.uid).set(data);
         userDoc = { data: () => data };
       } else {
-        // No users-doc and not the first user → must be approved.
-        showPendingApprovalScreen();
-        return;
+        // ── SELF-HEAL ──────────────────────────────────────────────
+        // The "Awaiting Approval — for no reason" bug: super admin sees the user
+        // by name in user management, but `users/{currentUid}` doesn't exist
+        // because the doc was created under an OLD UID (auth account was
+        // deleted/recreated, or rejection was reversed). Look up by email and
+        // re-link the existing approved row to the current UID.
+        let healed = false;
+        try {
+          const byEmail = await fdb.collection('users')
+            .where('email', '==', user.email).limit(3).get();
+          const approved = byEmail.docs.find(d =>
+            d.id !== user.uid &&
+            d.data().status !== 'rejected' &&
+            !d.data().migratedTo
+          );
+          if (approved) {
+            const oldData = approved.data();
+            // Copy role/team/permissions to the current UID
+            await fdb.collection('users').doc(user.uid).set({
+              ...oldData,
+              email: user.email,
+              name: oldData.name || user.displayName || user.email.split('@')[0],
+              migratedFrom: approved.id,
+              migratedAt: TS(),
+            }, { merge: true });
+            // Mark the old row as superseded so admin panel can filter it out
+            await fdb.collection('users').doc(approved.id).update({
+              migratedTo: user.uid,
+              migratedAt: TS(),
+            });
+            userDoc = await fdb.collection('users').doc(user.uid).get();
+            healed = true;
+          } else {
+            // If a REJECTED row exists for this email, mirror it under the new
+            // UID so the existing rejection-block path takes over below.
+            const rejected = byEmail.docs.find(d => d.data().status === 'rejected');
+            if (rejected) {
+              await fdb.collection('users').doc(user.uid).set(
+                { ...rejected.data(), email: user.email, migratedFrom: rejected.id, migratedAt: TS() },
+                { merge: true }
+              );
+              userDoc = await fdb.collection('users').doc(user.uid).get();
+              healed = true;
+            }
+          }
+        } catch (e) { console.warn('Self-heal lookup failed', e); }
+
+        if (!healed) {
+          // Genuinely new account with no docs. Make sure a pending request
+          // exists so super admin sees it — covers password-reset / direct-login
+          // paths that bypass the signup form.
+          try {
+            const reqRef = fdb.collection('signupRequests').doc(user.uid);
+            const reqDoc = await reqRef.get();
+            if (!reqDoc.exists || reqDoc.data().status !== 'pending') {
+              await reqRef.set({
+                uid: user.uid,
+                email: user.email,
+                name: user.displayName || user.email.split('@')[0],
+                status: 'pending',
+                createdAt: TS(),
+                autoCreated: true,
+              }, { merge: true });
+            }
+          } catch (_) {}
+          showPendingApprovalScreen();
+          return;
+        }
       }
     }
     const ud = userDoc.data();
@@ -65,6 +137,16 @@ auth.onAuthStateChanged(async (user) => {
     AppState.userName      = ud.name       || user.email;
     AppState.profilePic    = ud.profilePic || null;
     AppState.isAttSevaDev  = !!ud.isAttSevaDev;
+    // ── DELEGATION FLAGS ── per-user powers granted by super admin without
+    // promoting them to super admin. Each flag widens one specific gate:
+    //   canAllTeamCalling  → submit/edit calling on behalf of any team
+    //   canAllTeamReports  → view reports across all teams (read-only)
+    //   canManageAllTeams  → both above + write access app-wide (lite super admin)
+    AppState.canAllTeamCalling = !!ud.canAllTeamCalling || !!ud.canManageAllTeams;
+    // Back-date attendance: super admins always; others need the explicit flag.
+    AppState.canBackDateAttendance = ud.role === 'superAdmin' || !!ud.canBackDateAttendance || !!ud.canManageAllTeams;
+    AppState.canAllTeamReports = !!ud.canAllTeamReports || !!ud.canManageAllTeams;
+    AppState.canManageAllTeams = !!ud.canManageAllTeams;
     // "Login as Attendance Service Devotee" — when checked at login, override
     // role to serviceDevotee for THIS session only (the user's actual role in
     // Firestore is unchanged). They'll only see the Attendance tab. Stored in
@@ -90,6 +172,10 @@ auth.onAuthStateChanged(async (user) => {
       DB.migrateTeamNameOnce('Visakha', 'Vishakha').then(migrated => {
         if (migrated) { DevoteeCache.bust(); if (typeof loadDashboard === 'function') loadDashboard(); }
       }).catch(() => {});
+      // Backfill the © "met Prabhuji" flag from existing completed meetings.
+      DB.migrateMetPrabhujiOnce().then(migrated => {
+        if (migrated) { DevoteeCache.bust(); if (typeof loadDevotees === 'function') loadDevotees(); }
+      }).catch(() => {});
     }
   } catch (e) {
     if (e.code === 'permission-denied') {
@@ -110,9 +196,16 @@ let _pendingApprovalUnsub = null;
 function showPendingApprovalScreen() {
   document.getElementById('pending-approval-screen')?.classList.remove('hidden');
   document.getElementById('auth-screen').classList.add('hidden');
+  // Surface the user's email + Auth UID so they can give it to super admin
+  // if their request didn't show up (the "stuck for no reason" case).
+  const user = auth.currentUser;
+  const uidEl = document.getElementById('pending-uid');
+  const emailEl = document.getElementById('pending-email');
+  if (uidEl) uidEl.textContent = user?.uid || '—';
+  if (emailEl) emailEl.textContent = user?.email || '—';
   // Watch users/{uid} in real-time — fires the moment super admin approves,
   // so the user doesn't have to manually refresh to get in.
-  const uid = auth.currentUser?.uid;
+  const uid = user?.uid;
   if (uid && !_pendingApprovalUnsub) {
     _pendingApprovalUnsub = fdb.collection('users').doc(uid).onSnapshot(doc => {
       if (doc.exists && doc.data()?.status !== 'rejected') {
@@ -472,8 +565,8 @@ function handleProfilePicSelect(e) {
   if (!file) return;
   const errEl = document.getElementById('edit-profile-error');
   errEl.style.display = 'none';
-  if (file.size > 50 * 1024) {
-    errEl.textContent = `Image is too large (${(file.size / 1024).toFixed(1)} KB). Please choose an image under 50 KB.`;
+  if (file.size > 300 * 1024) {
+    errEl.textContent = `Image is too large (${(file.size / 1024).toFixed(1)} KB). Please choose an image under 300 KB.`;
     errEl.style.display = 'block';
     e.target.value = '';
     return;
@@ -560,6 +653,113 @@ function _applySidebarInfo() {
 }
 
 // ── SIDEBAR ────────────────────────────────────────────
+// ── APP STORAGE TRACKER ───────────────────────────────
+// Estimates Firestore storage by reading document JSON sizes.
+// Firestore free tier limit: 1 GB. Estimate = raw JSON size × 1.5 (index overhead).
+let _storageCache = null;      // { ts, totalBytes, rows }
+const _STORAGE_TTL = 5 * 60 * 1000; // 5 min
+const _STORAGE_LIMIT_GB = 1;
+
+const _STORAGE_COLS = [
+  { label: 'Devotees',    col: 'devotees'          },
+  { label: 'Attendance',  col: 'attendanceRecords'  },
+  { label: 'Calling',     col: 'callingStatus'      },
+  { label: 'Submissions', col: 'callingSubmissions' },
+  { label: 'Sessions',    col: 'sessions'           },
+  { label: 'Users',       col: 'users'              },
+  { label: 'Events',      col: 'events'             },
+  { label: 'Evt Members', col: 'eventDevotees'      },
+  { label: 'Profile Log', col: 'profileChanges'     },
+  { label: 'Signups',     col: 'signupRequests'     },
+];
+
+function _fmtBytes(b) {
+  if (b < 1024)           return b + ' B';
+  if (b < 1024 * 1024)    return (b / 1024).toFixed(1) + ' KB';
+  return (b / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+async function _calcStorage() {
+  // Fetch all collections in parallel — ~10x faster than sequential awaits
+  const rows = await Promise.all(_STORAGE_COLS.map(async ({ label, col }) => {
+    try {
+      const snap = await fdb.collection(col).get();
+      let bytes = 0;
+      snap.docs.forEach(doc => {
+        bytes += col.length + doc.id.length + 2;
+        bytes += JSON.stringify(doc.data()).length;
+      });
+      return { label, count: snap.size, bytes };
+    } catch (_) {
+      return { label, count: 0, bytes: 0 };
+    }
+  }));
+  const totalRaw = rows.reduce((sum, r) => sum + r.bytes, 0);
+  return { totalBytes: Math.round(totalRaw * 1.5), rows };
+}
+
+const _STORAGE_ROW_COLORS = ['#6366f1','#f59e0b','#10b981','#ef4444','#8b5cf6'];
+
+function _renderStorageWidget(data) {
+  const body = document.getElementById('sidebar-storage-body');
+  if (!body) return;
+  body.className = ''; // clear sidebar-storage-idle flex layout
+  const { totalBytes, rows } = data;
+  const limitBytes = _STORAGE_LIMIT_GB * 1024 * 1024 * 1024;
+  const pct        = Math.min(100, (totalBytes / limitBytes) * 100);
+  const barColor   = pct < 50 ? '#16a34a' : pct < 80 ? '#d97706' : '#dc2626';
+  const topRows    = [...rows].filter(r => r.bytes > 0)
+                              .sort((a, b) => b.bytes - a.bytes)
+                              .slice(0, 5);
+
+  const rowsHtml = topRows.map((r, i) => `
+    <div class="ss-row">
+      <span class="ss-row-dot" style="background:${_STORAGE_ROW_COLORS[i % _STORAGE_ROW_COLORS.length]}"></span>
+      <span class="ss-row-label">${r.label}</span>
+      <span class="ss-row-count">${r.count.toLocaleString()}</span>
+      <span class="ss-row-size" style="color:${_STORAGE_ROW_COLORS[i % _STORAGE_ROW_COLORS.length]}">${_fmtBytes(Math.round(r.bytes * 1.5))}</span>
+    </div>`).join('');
+
+  body.innerHTML = `
+    <div class="ss-bar-section">
+      <div class="ss-bar-track">
+        <div class="ss-bar-fill" style="width:${Math.max(pct, 0.4).toFixed(2)}%;background:${barColor}"></div>
+      </div>
+      <div class="ss-bar-meta">
+        <span class="ss-bar-pct" style="color:${barColor}">${pct < 0.1 ? '&lt;0.1' : pct.toFixed(1)}%</span>
+        <span class="ss-used-line"><strong>${_fmtBytes(totalBytes)}</strong> of 1 GB</span>
+      </div>
+    </div>
+    <div class="ss-rows">${rowsHtml}</div>
+    <div class="ss-note">~ includes index overhead</div>`;
+}
+
+async function refreshStorageStats(force = true) {
+  if (AppState.userRole !== 'superAdmin') return;
+  if (!force && _storageCache && Date.now() - _storageCache.ts < _STORAGE_TTL) {
+    _renderStorageWidget(_storageCache);
+    return;
+  }
+  const body   = document.getElementById('sidebar-storage-body');
+  const icon   = document.getElementById('storage-refresh-icon');
+  const btn    = document.getElementById('storage-refresh-btn');
+  if (body) { body.className = ''; body.innerHTML = '<div class="ss-loading"><i class="fas fa-circle-notch fa-spin"></i> Calculating…</div>'; }
+  if (icon) icon.classList.add('fa-spin');
+  if (btn)  btn.disabled = true;
+  try {
+    const data = await _calcStorage();
+    _storageCache = { ts: Date.now(), ...data };
+    _renderStorageWidget(_storageCache);
+  } catch (e) {
+    if (body) body.innerHTML = '<div class="ss-loading" style="color:var(--danger)"><i class="fas fa-exclamation-circle"></i> Failed</div>';
+  } finally {
+    if (icon) icon.classList.remove('fa-spin');
+    if (btn)  btn.disabled = false;
+  }
+}
+window.refreshStorageStats = refreshStorageStats;
+// ── END APP STORAGE TRACKER ───────────────────────────
+
 function openSidebar() {
   const sb = document.getElementById('app-sidebar');
   if (!sb || sb.classList.contains('open')) return;
@@ -567,6 +767,8 @@ function openSidebar() {
   sb.classList.add('open');
   document.getElementById('sidebar-overlay')?.classList.remove('hidden');
   _ensureOverlayHistory?.();
+  // Refresh storage stats quietly (uses cache if fresh)
+  if (AppState.userRole === 'superAdmin') refreshStorageStats(false);
 }
 function closeSidebar() {
   const sb = document.getElementById('app-sidebar');
@@ -593,6 +795,7 @@ async function openSessionConfig() {
     document.getElementById('sc-session-type').value    = cfg?.sessionType  || 'regular';
     document.getElementById('sc-calling-date').value    = cfg?.callingDate  || '';
     document.getElementById('sc-attendance-date').value = cfg?.sessionDate  || '';
+    document.getElementById('sc-calling-window').checked = cfg?.callingWindowOpen === true;
   } catch (_) {}
   openModal('session-config-modal');
 }
@@ -603,10 +806,11 @@ async function saveSessionConfig() {
   const sessionType = document.getElementById('sc-session-type').value;
   const callingDate = document.getElementById('sc-calling-date').value;
   const sessionDate = document.getElementById('sc-attendance-date').value;
+  const callingWindowOpen = document.getElementById('sc-calling-window').checked;
   if (!callingDate) { showToast('Calling date is required', 'error'); return; }
   if (!sessionDate) { showToast('Attendance date is required', 'error'); return; }
   try {
-    await DB.setCallingWeekConfig(callingDate, sessionDate, { topic, speakerName, sessionType });
+    await DB.setCallingWeekConfig(callingDate, sessionDate, { topic, speakerName, sessionType, callingWindowOpen });
     closeModal('session-config-modal');
     showToast('Session configured! Hare Krishna 🙏', 'success');
     if (AppState.currentTab === 'calling') loadCallingStatus?.();
@@ -753,6 +957,10 @@ async function openUserManagement() {
   try {
     const snap = await fdb.collection('users').get();
     _umUsers = snap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    // Hide rows superseded by self-heal (their Auth UID was re-linked to a new doc).
+    // The "Migrated" details section in renderUserMgmtList still lets super admin
+    // see + purge these if they want.
+    _umUsers = _umUsers.filter(u => !u.migratedTo);
     _umUsers.sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
     renderUserMgmtList();
   } catch (_) {
@@ -768,50 +976,192 @@ function renderUserMgmtList() {
     if (!q) return true;
     return (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q);
   });
+
+  // Diagnostic banner at top — shortcut to find users stuck on "Awaiting Approval"
+  const banner = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;margin-bottom:.75rem;padding:.55rem .75rem;background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius)">
+      <div style="font-size:.78rem;color:#92400e">
+        <i class="fas fa-stethoscope"></i> User stuck on <strong>"Awaiting Approval"</strong>?
+        <span style="color:var(--text-muted)"> Their Auth UID may not match their users-doc.</span>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="openStuckUserFinder()"><i class="fas fa-search"></i> Find by Email</button>
+    </div>`;
+
   if (!filtered.length) {
-    list.innerHTML = '<div class="empty-state"><i class="fas fa-user-slash"></i><p>No users found</p></div>';
+    list.innerHTML = banner + '<div class="empty-state"><i class="fas fa-user-slash"></i><p>No users found</p></div>';
     return;
   }
-  list.innerHTML = filtered.map(u => {
-    const roleLabel = u.role === 'superAdmin' ? 'Super Admin'
-      : u.role === 'teamAdmin' ? 'Coordinator' : 'Facilitator';
-    const customTitle = u.position && u.position.toLowerCase() !== roleLabel.toLowerCase() ? u.position : '';
-    const meta = [roleLabel, u.teamName || '', customTitle].filter(Boolean).join(' · ');
-    return `<div class="um-row" onclick="openUserAction('${u.uid}')">
-      <div class="um-avatar">${initials(u.name || u.email)}</div>
-      <div class="um-info">
-        <div class="um-name">${u.name || u.email}</div>
-        <div class="um-meta">${u.email ? u.email + ' · ' : ''}${meta}</div>
-      </div>
-      <i class="fas fa-chevron-right um-chevron"></i>
-    </div>`;
+
+  // Group by role for clear bifurcation: Super Admins → Coordinators → Facilitators.
+  const groups = { superAdmin: [], teamAdmin: [], serviceDevotee: [], other: [] };
+  filtered.forEach(u => {
+    const k = u.role === 'superAdmin' || u.role === 'teamAdmin' || u.role === 'serviceDevotee' ? u.role : 'other';
+    groups[k].push(u);
+  });
+  Object.values(groups).forEach(arr => arr.sort((a, b) => (a.name || '').localeCompare(b.name || '')));
+
+  const sectionDef = [
+    { key: 'superAdmin',     label: 'Super Admins',  icon: 'fa-user-shield' },
+    { key: 'teamAdmin',      label: 'Coordinators',  icon: 'fa-user-tie' },
+    { key: 'serviceDevotee', label: 'Facilitators',  icon: 'fa-headset' },
+    { key: 'other',          label: 'Other',         icon: 'fa-user' },
+  ];
+
+  const sections = sectionDef.filter(s => groups[s.key].length).map(s => {
+    const rows = groups[s.key].map(u => _umRowHtml(u)).join('');
+    return `<section class="um-section">
+      <h3 class="um-section-head"><i class="fas ${s.icon}"></i> ${s.label}
+        <span class="um-section-count">${groups[s.key].length}</span></h3>
+      <div class="um-section-body">${rows}</div>
+    </section>`;
   }).join('');
+
+  list.innerHTML = banner + sections;
+}
+
+function _umRowHtml(u) {
+  const roleLabel = u.role === 'superAdmin' ? 'Super Admin'
+    : u.role === 'teamAdmin' ? 'Coordinator' : 'Facilitator';
+  const customTitle = u.position && u.position.toLowerCase() !== roleLabel.toLowerCase() ? u.position : '';
+  const tags = [];
+  if (u.teamName)   tags.push(`<span class="um-tag um-tag-team">${u.teamName}</span>`);
+  if (customTitle)  tags.push(`<span class="um-tag um-tag-title">${customTitle}</span>`);
+  if (u.isAttSevaDev)      tags.push('<span class="um-booster" title="Live attendance across teams">Att.Seva</span>');
+  if (u.canBackDateAttendance) tags.push('<span class="um-booster" title="Can mark attendance on past sessions">Back-date</span>');
+  if (u.canAllTeamCalling) tags.push('<span class="um-booster" title="Cross-team calling submit">All-Call</span>');
+  if (u.canAllTeamReports) tags.push('<span class="um-booster" title="Reports across teams">All-Rpts</span>');
+  if (u.canManageAllTeams) tags.push('<span class="um-booster um-booster-strong" title="Lite super admin">Mgr-All</span>');
+  return `<button type="button" class="um-row" onclick="openUserAction('${u.uid}')">
+    <span class="um-avatar">${initials(u.name || u.email)}</span>
+    <span class="um-info">
+      <span class="um-name">${u.name || u.email}</span>
+      ${u.email ? `<span class="um-meta">${u.email}</span>` : ''}
+      ${tags.length ? `<span class="um-tags">${tags.join('')}</span>` : ''}
+    </span>
+    <i class="fas fa-chevron-right um-chevron"></i>
+  </button>`;
 }
 
 function openUserAction(uid) {
   const u = _umUsers.find(x => x.uid === uid);
   if (!u) return;
-  document.getElementById('ua-user-name').textContent    = u.name || u.email || 'User';
-  document.getElementById('ua-user-id').value             = uid;
-  document.getElementById('ua-position').value            = u.position || '';
-  document.getElementById('ua-team').value                = u.teamName || '';
-  document.getElementById('ua-role').value                = u.role     || 'serviceDevotee';
-  document.getElementById('ua-att-seva').checked          = !!u.isAttSevaDev;
+  document.getElementById('ua-user-name').textContent      = u.name || u.email || 'User';
+  document.getElementById('ua-user-email').textContent     = u.email || '';
+  const av = document.getElementById('ua-avatar');
+  if (av) av.textContent = (typeof initials === 'function') ? initials(u.name || u.email) : (u.name || u.email || 'U').charAt(0).toUpperCase();
+  document.getElementById('ua-user-id').value              = uid;
+  document.getElementById('ua-position').value             = u.position || '';
+  document.getElementById('ua-team').value                 = u.teamName || '';
+  document.getElementById('ua-role').value                 = u.role     || 'serviceDevotee';
+  document.getElementById('ua-att-seva').checked           = !!u.isAttSevaDev;
+  document.getElementById('ua-can-backdate').checked       = !!u.canBackDateAttendance;
+  document.getElementById('ua-can-all-calling').checked    = !!u.canAllTeamCalling;
+  document.getElementById('ua-can-all-reports').checked    = !!u.canAllTeamReports;
+  document.getElementById('ua-can-manage-all').checked     = !!u.canManageAllTeams;
+  // Open the Special Powers section automatically if any booster is set
+  const det = document.querySelector('#user-action-modal .ua-special-powers');
+  if (det) det.open = !!(u.isAttSevaDev || u.canBackDateAttendance || u.canAllTeamCalling || u.canAllTeamReports || u.canManageAllTeams);
+  // Auto-update summary on any change; re-render now for current values
+  _uaWireSummary();
+  _uaRefreshSummary();
   openModal('user-action-modal');
 }
 
+// One-click presets for the four common booster combinations.
+function _uaApplyPreset(kind) {
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.checked = val; };
+  if (kind === 'deputy') {        // Operations Deputy — almost super admin
+    set('ua-can-all-calling', true);
+    set('ua-can-all-reports', true);
+    set('ua-can-manage-all',  true);
+    set('ua-att-seva',        true);
+    set('ua-can-backdate',    true);
+  } else if (kind === 'reviewer') { // Cross-team Reviewer — read-only oversight
+    set('ua-can-all-calling', false);
+    set('ua-can-all-reports', true);
+    set('ua-can-manage-all',  false);
+    set('ua-att-seva',        false);
+    set('ua-can-backdate',    false);
+  } else if (kind === 'caller') {   // Cross-team Caller — submits on behalf of any team
+    set('ua-can-all-calling', true);
+    set('ua-can-all-reports', false);
+    set('ua-can-manage-all',  false);
+    set('ua-att-seva',        false);
+    set('ua-can-backdate',    false);
+  } else if (kind === 'clear') {
+    set('ua-can-all-calling', false);
+    set('ua-can-all-reports', false);
+    set('ua-can-manage-all',  false);
+    set('ua-att-seva',        false);
+    set('ua-can-backdate',    false);
+  }
+  _uaRefreshSummary();
+}
+window._uaApplyPreset = _uaApplyPreset;
+
+// Listen for toggles inside the user action modal so the summary stays live.
+let _uaSummaryWired = false;
+function _uaWireSummary() {
+  if (_uaSummaryWired) return;
+  _uaSummaryWired = true;
+  ['ua-role','ua-team','ua-att-seva','ua-can-all-calling','ua-can-all-reports','ua-can-manage-all']
+    .forEach(id => document.getElementById(id)?.addEventListener('change', _uaRefreshSummary));
+}
+
+// Computes a plain-English sentence describing what this user can do, given
+// their current Role + Team + Boosters. Mirrors the rules in applyRoleUI().
+function _uaRefreshSummary() {
+  const role     = document.getElementById('ua-role').value;
+  const team     = document.getElementById('ua-team').value;
+  const attSeva  = document.getElementById('ua-att-seva').checked;
+  const allCall  = document.getElementById('ua-can-all-calling').checked;
+  const allRpt   = document.getElementById('ua-can-all-reports').checked;
+  const mgrAll   = document.getElementById('ua-can-manage-all').checked;
+  const roleLabel = role === 'superAdmin' ? 'Super Admin'
+    : role === 'teamAdmin' ? 'Coordinator' : 'Facilitator';
+  const parts = [];
+  if (role === 'superAdmin') {
+    parts.push('Full power — every tab, every team, manages users, can wipe data.');
+  } else {
+    parts.push(`<strong>${roleLabel}</strong>${team ? ' of <strong>' + team + '</strong>' : ''}`);
+    const owns = role === 'teamAdmin' ? 'Manages their own team\'s devotees, calling, attendance.' : 'Marks calling + attendance for their own team.';
+    parts.push(owns);
+    if (mgrAll)      parts.push('Lite super admin: writes across <strong>all teams</strong> + Calling Mgmt + Meetings tabs.');
+    else if (allCall) parts.push('Can submit calling on behalf of <strong>any team</strong> (Team Calling tab).');
+    if (allRpt && !mgrAll)  parts.push('Sees reports across <strong>all teams</strong> (read-only).');
+    if (attSeva)     parts.push('Live Attendance for <strong>all teams</strong>.');
+  }
+  const el = document.getElementById('ua-summary-text');
+  if (el) el.innerHTML = parts.join(' ');
+}
+
 async function doSaveUserAction() {
-  const uid          = document.getElementById('ua-user-id').value;
-  const position     = document.getElementById('ua-position').value.trim() || null;
-  const teamName     = document.getElementById('ua-team').value || null;
-  const role         = document.getElementById('ua-role').value;
-  const isAttSevaDev = document.getElementById('ua-att-seva').checked;
+  const uid               = document.getElementById('ua-user-id').value;
+  const position          = document.getElementById('ua-position').value.trim() || null;
+  const teamName          = document.getElementById('ua-team').value || null;
+  const role              = document.getElementById('ua-role').value;
+  const isAttSevaDev          = document.getElementById('ua-att-seva').checked;
+  const canBackDateAttendance = document.getElementById('ua-can-backdate').checked;
+  const canAllTeamCalling     = document.getElementById('ua-can-all-calling').checked;
+  const canAllTeamReports     = document.getElementById('ua-can-all-reports').checked;
+  const canManageAllTeams     = document.getElementById('ua-can-manage-all').checked;
   if (!uid) return;
   try {
-    await fdb.collection('users').doc(uid).update({ position, teamName, role, isAttSevaDev, updatedAt: TS() });
+    await fdb.collection('users').doc(uid).update({
+      position, teamName, role,
+      isAttSevaDev, canBackDateAttendance, canAllTeamCalling, canAllTeamReports, canManageAllTeams,
+      updatedAt: TS(),
+    });
     // reflect in local cache
     const u = _umUsers.find(x => x.uid === uid);
-    if (u) { u.position = position; u.teamName = teamName; u.role = role; u.isAttSevaDev = isAttSevaDev; }
+    if (u) {
+      u.position = position; u.teamName = teamName; u.role = role;
+      u.isAttSevaDev = isAttSevaDev;
+      u.canBackDateAttendance = canBackDateAttendance;
+      u.canAllTeamCalling = canAllTeamCalling;
+      u.canAllTeamReports = canAllTeamReports;
+      u.canManageAllTeams = canManageAllTeams;
+    }
     renderUserMgmtList();
     closeModal('user-action-modal');
     showToast('User updated!', 'success');
@@ -860,7 +1210,9 @@ function applyRoleUI() {
     el.style.display = isSuper ? '' : 'none';
   });
 
-  // serviceDevotee (Facilitator) gets same tab access as teamAdmin — all team tabs
+  // serviceDevotee (Facilitator) gets same tab access as teamAdmin — all team tabs.
+  // Meetings + calling-mgmt are super-admin tools; canManageAllTeams users
+  // ALSO get them ("lite super admin" delegation).
   const tabs = {
     dashboard:      ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     devotees:       ['superAdmin', 'teamAdmin', 'serviceDevotee'],
@@ -868,18 +1220,26 @@ function applyRoleUI() {
     attendance:     ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     care:           ['superAdmin', 'teamAdmin', 'serviceDevotee'],
     events:         ['superAdmin', 'teamAdmin', 'serviceDevotee'],
+    meetings:       ['superAdmin'],
     'calling-mgmt': ['superAdmin'],
+  };
+  const liteSuperAdmin = (typeof canCrossTeamManage === 'function' && canCrossTeamManage());
+  const isAllowed = (tab) => {
+    if (tabs[tab]?.includes(role)) return true;
+    // Delegated "lite super admin" sees super-admin-only tabs too
+    if (liteSuperAdmin && tabs[tab]?.includes('superAdmin')) return true;
+    return false;
   };
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const tab = btn.dataset.tab;
-    const allowed = tabs[tab]?.includes(role);
+    const allowed = isAllowed(tab);
     btn.style.display = allowed ? '' : 'none';
     const group = btn.closest('.tab-btn-group');
     if (group) group.style.display = allowed ? '' : 'none';
   });
   document.querySelectorAll('.bnav-btn').forEach(btn => {
     const tab = btn.dataset.tab;
-    const allowed = tabs[tab]?.includes(role);
+    const allowed = isAllowed(tab);
     btn.style.display = allowed ? '' : 'none';
     const group = btn.closest('.bnav-btn-group');
     if (group) group.style.display = allowed ? '' : 'none';
@@ -887,46 +1247,58 @@ function applyRoleUI() {
 
   const activePanel = document.querySelector('.tab-panel.active');
   const activeTab   = activePanel?.id?.replace('tab-', '');
-  if (activeTab && !tabs[activeTab]?.includes(role)) {
-    const firstAllowed = Object.keys(tabs).find(t => tabs[t].includes(role));
+  if (activeTab && !isAllowed(activeTab)) {
+    const firstAllowed = Object.keys(tabs).find(t => isAllowed(t));
     const firstBtn = document.querySelector(`.tab-btn[data-tab="${firstAllowed}"]`);
     if (firstBtn && typeof switchTab === 'function') switchTab(firstAllowed, firstBtn);
   }
 
   // Calling sub-tab button visibility by role:
   // "Calls" = personal calling → teamAdmin + serviceDevotee only (superAdmin doesn't do personal calling)
-  // "Team Calling" = oversight view → teamAdmin + superAdmin only
+  // "Team Calling" = oversight view → teamAdmin + superAdmin + delegated cross-team callers
+  const canCrossCalling = (typeof canCrossTeamCalling === 'function') ? canCrossTeamCalling() : (role === 'superAdmin');
   document.getElementById('calling-calls-btn')?.classList.toggle('hidden', role === 'superAdmin');
-  document.getElementById('calling-team-btn')?.classList.toggle('hidden', role === 'serviceDevotee');
+  document.getElementById('calling-team-btn')?.classList.toggle('hidden', role === 'serviceDevotee' && !canCrossCalling);
 
-  // Also update the dropdown menu items for the calling tab
+  // Also update the dropdown menu items for the calling tab.
+  // A delegated facilitator (canAllTeamCalling) gets Team Calling even though
+  // their role is serviceDevotee.
   ['tab-menu-calling', 'bnav-menu-calling'].forEach(menuId => {
     const menu = document.getElementById(menuId);
     if (!menu) return;
     menu.querySelectorAll('.tab-menu-item').forEach(item => {
       const view = item.dataset.view;
       const entry = TAB_VIEWS.calling?.find(it => it.key === view);
-      if (entry?.roles) item.style.display = entry.roles.includes(role) ? '' : 'none';
+      if (!entry?.roles) return;
+      const allowed = entry.roles.includes(role)
+        || (view === 'team-calling' && canCrossCalling);
+      item.style.display = allowed ? '' : 'none';
     });
   });
 
-  // superAdmin opens Calling tab → land on Team Calling, not Calls
-  if (role === 'superAdmin' && AppState.currentTab === 'calling') {
+  // superAdmin (and lite-super delegated users) opens Calling tab → land on Team Calling, not Calls
+  if ((role === 'superAdmin' || (typeof canCrossTeamManage === 'function' && canCrossTeamManage())) && AppState.currentTab === 'calling') {
     applyTabView('calling', 'team-calling');
   }
 
-  // Both directions: show for admin/coordinator, hide for serviceDevotee.
+  // Both directions: show for admin/coordinator/delegated, hide for plain Facilitator.
   // Without the explicit show branch, switching FROM serviceDevotee TO coordinator
   // leaves these elements permanently hidden.
-  const isAdminOrCoord = ['superAdmin', 'teamAdmin'].includes(role);
+  const isAdminOrCoord = ['superAdmin', 'teamAdmin'].includes(role)
+    || (typeof canCrossTeamManage === 'function' && canCrossTeamManage());
   document.querySelectorAll('.admin-coordinator-only').forEach(el => {
     el.style.display = isAdminOrCoord ? '' : 'none';
   });
 
-  // Non-superAdmin roles: lock team filter to their team
-  if (role !== 'superAdmin' && team) {
+  // Lock the legacy team filter for users WITHOUT cross-team permission.
+  // Super admin AND any delegated user (canAllTeam* / canManageAllTeams) keep it editable.
+  const canCrossTeam = (typeof canChangeTeamFilter === 'function') ? canChangeTeamFilter() : (role === 'superAdmin');
+  if (!canCrossTeam && team) {
     const ft = document.getElementById('filter-team');
     if (ft) { ft.value = team; ft.disabled = true; }
+  } else {
+    const ft = document.getElementById('filter-team');
+    if (ft) ft.disabled = false;
   }
 
   // Live sub-tab: ONLY visible to users with Att. Seva flag.
@@ -952,50 +1324,64 @@ function applyRoleUI() {
   }
 }
 
-// ── ADMIN PANEL ───────────────────────────────────────
-async function openAdminPanel() {
-  openModal('admin-panel-modal');
-  const container = document.getElementById('admin-users-list');
-  container.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+// ── STUCK USER FINDER ──────────────────────────────────────
+// Diagnose the "Awaiting Approval — for no reason" case. The user's email is
+// in `users` but under a stale Auth UID; their current Auth UID has no doc.
+// Self-heal in onAuthStateChanged covers most cases. This tool is the manual
+// fallback: super admin enters the user's email, sees every users-doc + pending
+// signupRequest for that email, and can hand-link or delete orphans.
+async function openStuckUserFinder() {
+  const email = prompt('Enter the email of the user stuck on "Awaiting Approval":');
+  if (!email) return;
+  const e = email.trim().toLowerCase();
+  if (!e) return;
   try {
-    const snap = await fdb.collection('users').get();
-    const users = snap.docs.map(d => ({ uid: d.id, ...d.data() }));
-    const teams = ['', ...TEAMS];
-    container.innerHTML = users.map(u => `
-      <div class="admin-user-row">
-        <div class="devotee-avatar" style="width:36px;height:36px;font-size:.8rem;flex-shrink:0">${initials(u.name||u.email)}</div>
-        <div class="admin-user-info">
-          <div class="admin-user-email">${u.name || ''} <span style="font-weight:400;color:var(--text-muted)">&lt;${u.email}&gt;</span></div>
-          <div class="admin-user-meta">UID: ${u.uid.slice(0,8)}…</div>
-        </div>
-        <div class="admin-user-controls">
-          <select class="filter-select" id="role-${u.uid}" onchange="updateUserRole('${u.uid}')">
-            <option value="serviceDevotee"${u.role==='serviceDevotee'?' selected':''}>Facilitator</option>
-            <option value="teamAdmin"${u.role==='teamAdmin'?' selected':''}>Coordinator</option>
-            <option value="superAdmin"${u.role==='superAdmin'?' selected':''}>Super Admin</option>
-          </select>
-          <select class="filter-select" id="team-${u.uid}" onchange="updateUserRole('${u.uid}')">
-            ${teams.map(t => `<option value="${t}"${u.teamName===t?' selected':''}>${t||'No Team'}</option>`).join('')}
-          </select>
-          <input class="filter-select" id="pos-${u.uid}" placeholder="Position…" value="${u.position||''}" style="width:110px" onchange="updateUserRole('${u.uid}')" onblur="updateUserRole('${u.uid}')" />
-          <label style="display:flex;align-items:center;gap:.35rem;font-size:.75rem;font-weight:600;color:var(--brand);white-space:nowrap;cursor:pointer" title="Gives this person Live Attendance access for all teams">
-            <input type="checkbox" id="attSeva-${u.uid}" ${u.isAttSevaDev ? 'checked' : ''} onchange="updateUserRole('${u.uid}')">
-            Att. Seva
-          </label>
-        </div>
-      </div>`).join('');
-  } catch (_) { container.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load users</p></div>'; }
+    const [usersSnap, reqSnap] = await Promise.all([
+      fdb.collection('users').where('email', '==', email.trim()).get(),
+      fdb.collection('signupRequests').where('email', '==', email.trim()).get(),
+    ]);
+    const userRows = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    const reqRows  = reqSnap.docs.map(d => ({ uid: d.id, ...d.data() }));
+    let msg = `Diagnostic for ${email.trim()}:\n\n`;
+    if (!userRows.length && !reqRows.length) {
+      msg += '• No users-doc and no signupRequests found.\nAsk the user to sign up again — the auto-heal will create a fresh request.';
+    } else {
+      if (userRows.length) {
+        msg += `Users-doc rows (${userRows.length}):\n`;
+        userRows.forEach(u => {
+          const tag = u.migratedTo ? ' [SUPERSEDED]' : u.status === 'rejected' ? ' [REJECTED]' : '';
+          msg += `  • UID ${u.uid.slice(0,12)}… · role=${u.role||'-'} · team=${u.teamName||'-'}${tag}\n`;
+        });
+      } else {
+        msg += '• No users-doc found.\n';
+      }
+      if (reqRows.length) {
+        msg += `\nSignup requests (${reqRows.length}):\n`;
+        reqRows.forEach(r => {
+          msg += `  • UID ${r.uid.slice(0,12)}… · status=${r.status||'-'}\n`;
+        });
+      }
+      msg += '\nNext steps:\n';
+      msg += '• If a pending request exists → approve it from Sign-up Requests.\n';
+      msg += '• If an old users-doc exists → ask the user to log in once; self-heal will re-link automatically.\n';
+      msg += '• If multiple rows are competing → keep the row with the correct role + delete the others.';
+    }
+    alert(msg);
+  } catch (e) {
+    showToast('Lookup failed: ' + (e.message || 'Error'), 'error');
+  }
 }
 
-async function updateUserRole(uid) {
-  const role         = document.getElementById(`role-${uid}`)?.value;
-  const teamName     = document.getElementById(`team-${uid}`)?.value || null;
-  const position     = document.getElementById(`pos-${uid}`)?.value.trim() || null;
-  const isAttSevaDev = document.getElementById(`attSeva-${uid}`)?.checked || false;
+async function purgeMigratedUserDoc(uid) {
+  if (!confirm('Permanently delete this superseded users row?\n\nThis only removes the old (stale-UID) doc. The current account is untouched.')) return;
   try {
-    await fdb.collection('users').doc(uid).update({ role, teamName, position, isAttSevaDev });
-    showToast('User updated!', 'success');
-  } catch (_) { showToast('Update failed', 'error'); }
+    await fdb.collection('users').doc(uid).delete();
+    showToast('Old row removed', 'success');
+    // Reload the (real) user-management list so the row disappears immediately.
+    if (typeof openUserManagement === 'function') openUserManagement();
+  } catch (e) {
+    showToast('Delete failed: ' + (e.message || 'Error'), 'error');
+  }
 }
 
 // ── CLEAR DATA ────────────────────────────────────────
@@ -1032,14 +1418,32 @@ async function clearDataForDate() {
       chunk.forEach(d => { b.delete(d.ref); });
       await b.commit();
     }
-    const csSnap = await fdb.collection('callingStatus').where('weekDate', '==', date).get();
-    const csBatches = chunkArray(csSnap.docs, 400);
+    // callingStatus.weekDate is the Saturday of the session week (not Sunday).
+    // Resolve it through the same helper as the rest of the app — otherwise
+    // this clear leaves orphan calling records behind.
+    const callingDate = (typeof resolveCallingDate === 'function')
+      ? (await resolveCallingDate(date)) || date
+      : date;
+    // Query both keys: current data uses Saturday, but legacy rows may still
+    // sit under the Sunday session date. Deleting both is safe — no overlap.
+    const csKeys = callingDate === date ? [date] : [callingDate, date];
+    const csDocs = [];
+    for (const k of csKeys) {
+      const s = await fdb.collection('callingStatus').where('weekDate', '==', k).get();
+      csDocs.push(...s.docs);
+    }
+    const csBatches = chunkArray(csDocs, 400);
     for (const chunk of csBatches) {
       const b = fdb.batch();
       chunk.forEach(d => { b.delete(d.ref); });
       await b.commit();
     }
-    const submSnap = await fdb.collection('callingSubmissions').where('weekDate', '==', date).get();
+    const submDocs = [];
+    for (const k of csKeys) {
+      const s = await fdb.collection('callingSubmissions').where('weekDate', '==', k).get();
+      submDocs.push(...s.docs);
+    }
+    const submSnap = { docs: submDocs };
     const submBatches = chunkArray(submSnap.docs, 400);
     for (const chunk of submBatches) {
       const b = fdb.batch();
@@ -1054,6 +1458,8 @@ async function clearDataForDate() {
       await b.commit();
     }
     DevoteeCache.bust();
+    if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
+    if (typeof _bustCareCache === 'function') _bustCareCache();
     showToast(`Cleared ${attSnap.size} records for ${formatDate(date)}`, 'success');
     loadAttendanceCandidates?.(); updateAttendanceStats?.();
   } catch (e) { showToast('Error: ' + e.message, 'error'); console.error(e); }
@@ -1081,6 +1487,8 @@ async function clearDataForTeamDate() {
     attSnap.docs.forEach(d => b2.update(fdb.collection('devotees').doc(d.data().devoteeId), { lifetimeAttendance: INC(-1) }));
     await b2.commit();
     DevoteeCache.bust();
+    if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
+    if (typeof _bustCareCache === 'function') _bustCareCache();
     showToast(`Cleared ${attSnap.size} records for ${team} on ${formatDate(date)}`, 'success');
     loadAttendanceCandidates?.(); updateAttendanceStats?.();
   } catch (e) { showToast('Error: ' + e.message, 'error'); console.error(e); }
@@ -1104,6 +1512,8 @@ async function clearAllData() {
       }
     }
     DevoteeCache.bust();
+    if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
+    if (typeof _bustCareCache === 'function') _bustCareCache();
     showToast('All data erased. Reloading…', 'success');
     setTimeout(() => location.reload(), 2000);
   } catch (e) { showToast('Error: ' + e.message, 'error'); console.error(e); }
@@ -1122,17 +1532,24 @@ async function initApp() {
       history.replaceState({ nav: true, tab: 'dashboard', view: null }, '', location.href);
     }
   } catch (_) {}
+  // Warm key caches in background so first tab-switch feels instant
+  Promise.all([
+    DevoteeCache.all(),
+    DB.getCallingWeekConfig(),
+  ]).catch(() => {});
   loadDevotees();
   loadCallingPersonsFilter();
   loadBirthdays();
   initReportsSessionFilter?.();
   initAllPickers();
   initSheetYearSelector();
-  // Default current tab follows the HTML's active panel.
-  if (!AppState.currentTab) {
-    const activePanel = document.querySelector('.tab-panel.active');
-    AppState.currentTab = activePanel?.id?.replace('tab-', '') || 'dashboard';
-  }
+  // ALWAYS sync currentTab to the active DOM panel at startup. The old code
+  // only set this when currentTab was empty, which meant a stale value from a
+  // previous session could survive logout (logout reset didn't clear it). If
+  // currentTab said "devotees" but the dashboard panel was actually visible,
+  // loadDashboard never fired and the dashboard sat on "Loading…" forever.
+  const _activePanel = document.querySelector('.tab-panel.active');
+  AppState.currentTab = _activePanel?.id?.replace('tab-', '') || 'dashboard';
   if (AppState.currentTab === 'dashboard') { loadHome?.(); loadDashboard?.(); }
   renderBreadcrumb?.();
 }
@@ -1143,16 +1560,22 @@ async function initApp() {
 // + a 'filtersChanged' listener that syncs legacy <select> values back.
 let _mfbInitDone = false;
 async function initMasterFilterBar() {
-  // Mark Team chip as locked for non-superAdmin users (they cannot change team).
+  // Mark Team chip as locked for users without cross-team permission.
+  // Super admin AND anyone with canAllTeamCalling / canAllTeamReports /
+  // canManageAllTeams can change the team. Everyone else is locked to their own.
   const teamChip    = document.getElementById('mfb-team-chip');
   const teamChipBox = document.getElementById('fr-chip-team');
-  if (AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam) {
+  const teamUnlocked = (typeof canChangeTeamFilter === 'function' && canChangeTeamFilter());
+  if (AppState.userRole && AppState.userTeam && !teamUnlocked) {
     if (teamChipBox) teamChipBox.dataset.locked = 'true';
     if (teamChip) {
       teamChip.style.display = '';
       teamChip.innerHTML = `<i class="fas fa-lock" style="font-size:.7rem"></i> ${AppState.userTeam}`;
     }
     AppState.filters.team = AppState.userTeam;
+  } else if (teamChipBox) {
+    // Make sure delegated users get an UNLOCKED chip even though they aren't super admin
+    delete teamChipBox.dataset.locked;
   }
 
   // Populate dropdown panels
@@ -1207,8 +1630,39 @@ function _frToggle(event, chip) {
   if (!dd) return;
   const wasHidden = dd.classList.contains('hidden');
   document.querySelectorAll('.fr-dropdown').forEach(d => d.classList.add('hidden'));
-  if (wasHidden) dd.classList.remove('hidden');
+  if (wasHidden) {
+    dd.classList.remove('hidden');
+    _positionFrDropdown(dd, event?.currentTarget);
+  }
 }
+
+// Position the dropdown (which is position:fixed) relative to its chip,
+// staying inside the viewport. Mirrors the .tab-menu pattern so dropdowns
+// never get clipped by main-content's overflow or trapped under cards.
+function _positionFrDropdown(dd, chipEl) {
+  if (!dd) return;
+  // Anchor: the chip the user clicked
+  const anchor = chipEl?.closest('.fr-chip') || chipEl;
+  if (!anchor) return;
+  const r = anchor.getBoundingClientRect();
+  // Measure dropdown after it's visible so we have real dimensions
+  const ddW = dd.offsetWidth  || 240;
+  const ddH = dd.offsetHeight || 280;
+  const margin = 8;
+  // Horizontal: left-aligned with the chip, clamped to viewport
+  const maxLeft = window.innerWidth - ddW - margin;
+  const left = Math.max(margin, Math.min(r.left, maxLeft));
+  // Vertical: below the chip; flip above if no room below
+  let top = r.bottom + 6;
+  if (top + ddH > window.innerHeight - margin) {
+    top = Math.max(margin, r.top - ddH - 6);
+  }
+  dd.style.left = left + 'px';
+  dd.style.top  = top  + 'px';
+}
+// Close dropdowns on scroll/resize so they don't drift away from their chip
+window.addEventListener('resize', () => document.querySelectorAll('.fr-dropdown').forEach(d => d.classList.add('hidden')));
+window.addEventListener('scroll', () => document.querySelectorAll('.fr-dropdown').forEach(d => d.classList.add('hidden')), { passive: true });
 
 function _frCloseAll() {
   document.querySelectorAll('.fr-dropdown').forEach(d => d.classList.add('hidden'));
@@ -1383,19 +1837,25 @@ function _frRefreshChips() {
     }
   }
 
-  // Team chip
-  const tChip = document.getElementById('fr-chip-team');
-  const tVal  = document.getElementById('fr-team-value');
-  const tClr  = document.getElementById('fr-team-clear');
+  // Team chip — hidden entirely for team-locked users on non-Devotees tabs
+  // (they can't change it, so showing a non-functional chip is just confusing).
+  const tChip    = document.getElementById('fr-chip-team');
+  const tVal     = document.getElementById('fr-team-value');
+  const tClr     = document.getElementById('fr-team-clear');
+  const tChipBox = tChip?.closest('.fr-chip-wrap') || tChip;
   if (tChip && tVal) {
-    if (f.team) {
-      tVal.textContent = f.team;
-      tChip.dataset.active = 'true';
-      // Hide clear button if user can't change team (locked role)
-      if (tClr) tClr.style.display = isLocked ? 'none' : '';
+    if (isLocked) {
+      if (tChipBox) tChipBox.style.display = 'none';
     } else {
-      tVal.textContent = '';
-      tChip.dataset.active = 'false';
+      if (tChipBox) tChipBox.style.display = '';
+      if (f.team) {
+        tVal.textContent = f.team;
+        tChip.dataset.active = 'true';
+        if (tClr) tClr.style.display = '';
+      } else {
+        tVal.textContent = '';
+        tChip.dataset.active = 'false';
+      }
     }
   }
 
@@ -1459,9 +1919,18 @@ function _frRefreshActiveItems() {
 
 // Sync between master bar + legacy widgets. Fires on every dispatchFilters call.
 function _mfbOnFiltersChanged(e) {
+  // When called from switchTab with { tabSwitch:true }, e is a plain object — not
+  // a CustomEvent — so e?.detail is undefined. We use this to know the tab
+  // switch already handled events/meetings above; all other tabs still need loading.
+  const isTabSwitch = e?.tabSwitch === true;
   const f = AppState.filters;
   // Re-highlight the active item in each custom dropdown panel
   _frRefreshActiveItems();
+  // Re-sync the chip text/state from AppState.filters. Without this, a
+  // locked-role user who taps another team sees the chip stay at their
+  // pick even though dispatchFilters silently forced it back. Result:
+  // chip and data look mismatched until something else triggers a chip refresh.
+  if (typeof _frRefreshChips === 'function') _frRefreshChips();
   // Legacy widgets (mirrors so both stay in sync until later stages drop them)
   const pairs = [
     ['filter-team',           f.team],
@@ -1483,14 +1952,21 @@ function _mfbOnFiltersChanged(e) {
   });
   _mfbUpdateCaption();
 
-  // Re-render the visible tab so it picks up the new filter values.
-  // Each load* is idempotent and reads from filters / legacy widgets (now
-  // already synced above). Reports has its own dispatch in _refreshAfterFilter.
-  const tab = AppState.currentTab;
-  if (tab === 'dashboard'    && typeof loadDashboard === 'function')       loadDashboard();
-  if (tab === 'devotees'     && typeof loadDevotees === 'function')        loadDevotees();
-  const _sessionChanged = e?.detail?.before && e.detail.before.sessionId !== AppState.filters.sessionId;
-  if (tab === 'calling') {
+  // Re-render the visible tab. Derive it from the DOM (not AppState.currentTab
+  // which can drift after browser back-button).
+  const _activePanel = document.querySelector('.tab-panel.active');
+  const tab = _activePanel?.id?.replace('tab-', '') || AppState.currentTab;
+  const _sessionChanged = !isTabSwitch && e?.detail?.before && e.detail.before.sessionId !== AppState.filters.sessionId;
+
+  if (tab === 'dashboard') {
+    // loadHome is called here on tab switch only; filter-change re-renders
+    // are handled by the debounced filtersChanged listener in ui-home.js
+    // to avoid calling it twice on the same filter change.
+    if (isTabSwitch) loadHome?.();
+    loadDashboard?.();
+  } else if (tab === 'devotees') {
+    if (typeof loadDevotees === 'function') loadDevotees();
+  } else if (tab === 'calling') {
     if (AppState._callingSubTab === 'reports') {
       _reportsCategory = 'calling';
       if (typeof _refreshAfterFilter === 'function') _refreshAfterFilter();
@@ -1498,22 +1974,25 @@ function _mfbOnFiltersChanged(e) {
       loadCallingHistory?.();
     } else if (AppState._callingSubTab === 'team-calling') {
       loadTeamCallingList?.();
-    } else if (_sessionChanged) {
+    } else if (AppState._callingSubTab === 'said-coming') {
+      loadSaidComingTab?.();          // re-run on session change — session determines calling week
+    } else if (AppState._callingSubTab === 'not-coming-present') {
+      loadNotComingPresentTab?.();
+    } else if (isTabSwitch || _sessionChanged) {
       loadCallingStatus?.();
     } else if (typeof filterCallingList === 'function' && AppState.callingData?.length) {
       filterCallingList();
     }
-  }
-  if (tab === 'attendance') {
+  } else if (tab === 'attendance') {
     if (AppState._attSubTab === 'reports') {
       _reportsCategory = 'attendance';
       if (typeof _refreshAfterFilter === 'function') _refreshAfterFilter();
     } else {
       loadAttendanceTab?.();
     }
+  } else if (tab === 'calling-mgmt') {
+    if (typeof loadCallingMgmtTab === 'function') loadCallingMgmtTab();
   }
-  if (tab === 'care'         && typeof loadCareData === 'function')        loadCareData();
-  if (tab === 'calling-mgmt' && typeof loadCallingMgmtTab === 'function')  loadCallingMgmtTab();
 }
 
 // ── MOBILE VALIDATION ─────────────────────────────────
@@ -1763,7 +2242,7 @@ async function loadBirthdays() {
 }
 function closeBirthdayPopup() { document.getElementById('birthday-popup').classList.add('hidden'); }
 
-// ── BOTTOM NAV ARROWS ─────────────────────────────────
+// ── BOTTOM NAV ARROWS (legacy — kept as no-ops since 5-tab nav has no scroll) ─
 function _bnavScroll(dir) {
   const el = document.getElementById('bnav-scroll');
   if (el) el.scrollBy({ left: dir * el.clientWidth, behavior: 'smooth' });
@@ -1804,28 +2283,26 @@ function switchTab(tab, btn) {
   renderBreadcrumb();
   document.getElementById('register-fab')?.classList.toggle('hidden', tab !== 'attendance');
   document.getElementById('add-devotee-fab')?.classList.toggle('hidden', tab !== 'devotees');
-  if (tab === 'dashboard')  { loadHome?.(); loadDashboard?.(); }
-  if (tab === 'care')       loadCareData();
   if (tab === 'events')     loadEvents();
-  if (tab === 'calling-mgmt') loadCallingMgmtTab?.();
+  if (tab === 'meetings')   loadMeetingsTab?.();
 
   // For tabs with TAB_VIEWS, restore the last-picked view (or default to first
   // non-divider entry). All the navigation through the tab now flows through
   // applyTabView, so the in-panel sub-tab strips are not needed.
   if (typeof TAB_VIEWS !== 'undefined' && TAB_VIEWS[tab]) {
-    if (tab === 'attendance') loadAttendanceTab?.();
     const lastView = AppState._tabView?.[tab];
-    // superAdmin default on calling tab = team-calling (they have no personal calling list)
-    const roleDefault = (tab === 'calling' && AppState.userRole === 'superAdmin') ? 'team-calling' : null;
-    const defaultView = roleDefault || TAB_VIEWS[tab].find(it => !it.divider && (!it.roles || it.roles.includes(AppState.userRole)))?.key;
+    // All roles default to calls (Your Calling Sewa) — super admin sees the stats+progress there too
+    const defaultView = TAB_VIEWS[tab].find(it => !it.divider && (!it.roles || it.roles.includes(AppState.userRole)))?.key;
     const view = lastView || defaultView;
     if (view) applyTabView(tab, view);
     _pushNavState?.(tab, view);
   } else {
     _pushNavState?.(tab, null);
   }
-  // Sync legacy widgets on the newly-shown tab to current filter values.
-  if (typeof _mfbOnFiltersChanged === 'function') _mfbOnFiltersChanged();
+  // Sync legacy widgets + trigger load for this tab.
+  // Pass tabSwitch:true so _mfbOnFiltersChanged skips tabs already
+  // triggered above (events/meetings) but still fires the rest.
+  if (typeof _mfbOnFiltersChanged === 'function') _mfbOnFiltersChanged({ tabSwitch: true });
 }
 
 // ── Tab dropdown navigation ──────────────────────────
@@ -1834,23 +2311,31 @@ function switchTab(tab, btn) {
 // opens that view as its own screen and updates the breadcrumb path.
 const TAB_VIEWS = {
   calling: [
-    { key: 'calls',         label: 'Calls',              icon: 'fa-phone-alt', roles: ['teamAdmin','serviceDevotee'] },
-    { key: 'team-calling',  label: 'Team Calling',       icon: 'fa-users',     roles: ['teamAdmin','superAdmin'] },
+    { key: 'calls',              label: 'Your Calling Sewa',    icon: 'fa-phone-alt' },
+    { key: 'team-calling',       label: 'Your Team Calling',    icon: 'fa-users',     roles: ['teamAdmin','superAdmin'] },
     { divider: true, label: 'REPORTS' },
-    { key: 'weekly',        label: 'Weekly Report',      icon: 'fa-chart-bar' },
-    { key: 'submission',    label: 'Submission Reports', icon: 'fa-chart-line' },
-    { key: 'history',       label: 'Calling History',    icon: 'fa-history'   },
+    { key: 'weekly',             label: 'Calling Reports',      icon: 'fa-chart-bar' },
+    { key: 'submission',         label: 'Submission Reports',   icon: 'fa-chart-line' },
+    { key: 'history',            label: 'Calling History',      icon: 'fa-history'   },
+    { key: 'said-coming',        label: 'Said Coming',          icon: 'fa-user-times' },
+    { key: 'not-coming-present', label: 'Surprise Present',     icon: 'fa-user-check' },
   ],
   attendance: [
-    { key: 'live',      label: 'Live Attendance',  icon: 'fa-check-circle' },
+    { key: 'live',          label: 'Live Attendance',        icon: 'fa-check-circle' },
+    { key: 'coordinator',   label: 'Coordinator Performance', icon: 'fa-clipboard-list' },
     { divider: true, label: 'REPORTS' },
-    { key: 'sheet',     label: 'Attendance Sheet', icon: 'fa-table' },
-    { key: 'late',      label: 'Late Comers',      icon: 'fa-clock' },
-    { key: 'newcomers', label: 'New Comers',       icon: 'fa-user-plus' },
-    { key: 'serious',   label: 'Serious Analysis', icon: 'fa-star' },
-    { key: 'teams',     label: 'Team Leaderboard', icon: 'fa-trophy' },
-    { key: 'trends',    label: 'Trends',           icon: 'fa-chart-line' },
-    { key: 'accuracy',  label: 'Accuracy',         icon: 'fa-bullseye'   },
+    { key: 'sheet',         label: 'Attendance Sheet',        icon: 'fa-table' },
+    { key: 'late',          label: 'Late Comers',             icon: 'fa-clock' },
+    { divider: true, label: 'CARE' },
+    { key: 'care-newcomers',  label: 'New Comers',            icon: 'fa-user-plus' },
+    { key: 'care-returning',  label: 'Returning Newcomers',   icon: 'fa-seedling' },
+    { key: 'repeat-absent',   label: 'Repeat Absentees',      icon: 'fa-user-slash' },
+    { key: 'care-absent',     label: 'Absent',                icon: 'fa-user-times' },
+    { divider: true, label: 'MORE' },
+    { key: 'serious',       label: 'Serious Analysis',        icon: 'fa-star' },
+    { key: 'teams',         label: 'Team Leaderboard',        icon: 'fa-trophy' },
+    { key: 'trends',        label: 'Trends',                  icon: 'fa-chart-line' },
+    { key: 'accuracy',      label: 'Accuracy',                icon: 'fa-bullseye' },
   ],
   'calling-mgmt': [
     { key: 'calling',       label: 'Calling List',     icon: 'fa-phone-alt' },
@@ -1859,6 +2344,15 @@ const TAB_VIEWS = {
     { key: 'notinterested', label: 'Not Interested',   icon: 'fa-times-circle' },
     { key: 'festival',      label: 'Festival Calling', icon: 'fa-star' },
   ],
+  meetings: [
+    { key: 'overdue',   label: 'Overdue',      icon: 'fa-exclamation-circle' },
+    { key: 'scheduled', label: 'Scheduled',    icon: 'fa-calendar-alt' },
+    { key: 'completed', label: 'Completed',    icon: 'fa-check-circle' },
+    { key: 'recent',    label: 'Recently Met', icon: 'fa-history' },
+    { key: 'ptm',       label: 'PTM',          icon: 'fa-users' },
+    { key: 'my-log',    label: 'My Log',       icon: 'fa-clipboard-list' },
+  ],
+  // Note: "meetings" tab is labelled "Connecting" in the UI.
 };
 
 // Friendly labels for breadcrumb — derived from TAB_VIEWS for views that have one.
@@ -1872,21 +2366,97 @@ function _closeAllTabMenus() {
   document.querySelectorAll('.tab-menu').forEach(m => m.classList.add('hidden'));
 }
 
+// ── SUBTAB CARD PICKER ───────────────────────────────────
+// Per-view visual style: { bg, color } — used in the card grid.
+const _SUBTAB_STYLES = {
+  'calls':              { bg:'#eff6ff', color:'#1d4ed8' },
+  'team-calling':       { bg:'#f0fdf4', color:'#15803d' },
+  'said-coming':        { bg:'#fef2f2', color:'#b91c1c' },
+  'not-coming-present': { bg:'#f0fdf4', color:'#15803d' },
+  'weekly':        { bg:'#fff7ed', color:'#c2410c' },
+  'submission':    { bg:'#fef3c7', color:'#92400e' },
+  'history':       { bg:'#f5f3ff', color:'#6d28d9' },
+  'live':          { bg:'#f0fdf4', color:'#15803d' },
+  'coordinator':   { bg:'#eff6ff', color:'#1d4ed8' },
+  'sheet':         { bg:'#fff7ed', color:'#c2410c' },
+  'late':          { bg:'#fef2f2', color:'#b91c1c' },
+  'newcomers':     { bg:'#fef3c7', color:'#92400e' },
+  'serious':       { bg:'#f5f3ff', color:'#6d28d9' },
+  'teams':         { bg:'#fffbeb', color:'#b45309' },
+  'trends':        { bg:'#ecfdf5', color:'#065f46' },
+  'accuracy':      { bg:'#eff6ff', color:'#1e40af' },
+  'calling':       { bg:'#eff6ff', color:'#1d4ed8' },
+  'online':        { bg:'#f0fdf4', color:'#15803d' },
+  'notinterested': { bg:'#fef2f2', color:'#b91c1c' },
+  'festival':      { bg:'#fffbeb', color:'#b45309' },
+  'overdue':       { bg:'#fef2f2', color:'#b91c1c' },
+  'scheduled':     { bg:'#eff6ff', color:'#1d4ed8' },
+  'completed':     { bg:'#f0fdf4', color:'#15803d' },
+  'recent':        { bg:'#f5f3ff', color:'#6d28d9' },
+  'ptm':               { bg:'#fff7ed', color:'#c2410c' },
+  'my-log':            { bg:'#eff6ff', color:'#0d2d5a' },
+  'repeat-absent':     { bg:'#fef2f2', color:'#7f1d1d' },
+  'care-newcomers':    { bg:'#fef3c7', color:'#92400e' },
+  'care-returning':    { bg:'#f0fdf4', color:'#15803d' },
+  'care-absent':       { bg:'#fef2f2', color:'#b91c1c' },
+};
+
+const _TAB_LABELS = {
+  calling: 'Calling', attendance: 'Attendance',
+  meetings: 'Connecting', 'calling-mgmt': 'Calling Mgmt',
+};
+const _TAB_ICONS = {
+  calling: 'fa-phone-alt', attendance: 'fa-clipboard-check',
+  meetings: 'fa-link', 'calling-mgmt': 'fa-headset',
+};
+
+let _subtabPickerCurrentTab = null;
+
+function openSubtabPicker(tab) {
+  const views = TAB_VIEWS[tab];
+  if (!views) return;
+  _subtabPickerCurrentTab = tab;
+
+  const titleEl = document.getElementById('subtab-picker-title');
+  const bodyEl  = document.getElementById('subtab-picker-body');
+  if (!titleEl || !bodyEl) return;
+
+  titleEl.innerHTML = `<i class="fas ${_TAB_ICONS[tab] || 'fa-th'}"></i> ${_TAB_LABELS[tab] || tab}`;
+
+  // Flat 2-column grid — skip dividers, filter by role
+  const filteredViews = views.filter(it => !it.divider && (!it.roles || it.roles.includes(AppState.userRole)));
+
+  const cardHtml = filteredViews.map(it => {
+    const s = _SUBTAB_STYLES[it.key] || { bg:'#f3f4f6', color:'#374151' };
+    return `
+      <button class="subtab-card" onclick="closeSubtabPicker();navTabView('${tab}','${it.key}')">
+        <div class="subtab-card-icon" style="background:${s.bg};color:${s.color}">
+          <i class="fas ${it.icon || 'fa-circle'}"></i>
+        </div>
+        <span class="subtab-card-label">${it.label}</span>
+      </button>`;
+  }).join('');
+
+  const html = `<div class="subtab-card-grid">${cardHtml}</div>`;
+
+  bodyEl.innerHTML = html;
+  document.getElementById('subtab-picker').classList.remove('hidden');
+}
+window.openSubtabPicker = openSubtabPicker;
+
+function closeSubtabPicker() {
+  document.getElementById('subtab-picker')?.classList.add('hidden');
+  _subtabPickerCurrentTab = null;
+}
+window.closeSubtabPicker = closeSubtabPicker;
+// ── END SUBTAB CARD PICKER ────────────────────────────────
+
 function onTabBtnClick(tab, btn, event) {
   event?.stopPropagation();
+  _closeAllTabMenus();
   if (TAB_VIEWS[tab]) {
-    // Has sub-views — toggle the dropdown menu (use the menu that lives
-    // inside this button's group, so top-nav vs bottom-nav doesn't conflict).
-    const menu = btn.parentElement?.querySelector('.tab-menu');
-    if (!menu) return;
-    const wasHidden = menu.classList.contains('hidden');
-    _closeAllTabMenus();
-    if (wasHidden) {
-      menu.classList.remove('hidden');
-      _positionTabMenu(menu, btn);
-    }
+    openSubtabPicker(tab);
   } else {
-    _closeAllTabMenus();
     switchTab(tab, btn);
   }
 }
@@ -2025,8 +2595,9 @@ function _maybeRestoreLiveSession() {
 // pickers, so auto-snapping the global Session for them does nothing useful
 // (and would mislead users with a "Showing last completed session" toast).
 function _isSessionAnchoredReportsView(tab, view) {
+  const callingLiveViews = ['calls', 'said-coming', 'not-coming-present'];
   return (tab === 'attendance' && view !== 'live')
-      || (tab === 'calling' && view !== 'calls');
+      || (tab === 'calling' && !callingLiveViews.includes(view));
 }
 
 // Live views that work against the upcoming/current session — used by the
@@ -2069,6 +2640,12 @@ async function applyTabView(tab, view) {
     } else if (view === 'history') {
       const btn = document.getElementById('calling-history-btn');
       if (btn) switchCallingSubTab(btn, 'history');
+    } else if (view === 'said-coming') {
+      const btn = document.getElementById('calling-said-btn');
+      if (btn) switchCallingSubTab(btn, 'said-coming');
+    } else if (view === 'not-coming-present') {
+      const btn = document.getElementById('calling-notcoming-btn');
+      if (btn) switchCallingSubTab(btn, 'not-coming-present');
     } else {
       const btn = document.getElementById('calling-reports-btn');
       if (btn) switchCallingSubTab(btn, 'reports');
@@ -2077,13 +2654,24 @@ async function applyTabView(tab, view) {
       const innerBtn = document.querySelector(innerSel);
       const innerKey = view === 'weekly' ? 'weekly' : 'submission';
       if (innerBtn && typeof switchCallingRptSub === 'function') switchCallingRptSub(innerBtn, innerKey);
+      // Override chip label to reflect the specific inner report tab
+      const innerLabel = view === 'submission' ? 'Submission Reports' : 'Calling Reports';
+      _updateSubtabChip?.('calling-active-subtab', 'calling-active-subtab-name', innerLabel);
     }
   } else if (tab === 'attendance') {
+    const _careSubs = ['care-newcomers','care-returning','care-absent'];
     if (view === 'live') {
-      const liveBtn = document.querySelector('#tab-attendance .att-sub-tab:nth-child(1)');
+      const liveBtn = document.querySelector('#tab-attendance .att-sub-tab[onclick*="\'live\'"]');
       if (liveBtn) switchAttSubTab(liveBtn, 'live');
+    } else if (view === 'coordinator') {
+      const coordBtn = document.querySelector('#tab-attendance .att-sub-tab[onclick*="\'coordinator\'"]');
+      if (coordBtn) switchAttSubTab(coordBtn, 'coordinator');
+    } else if (view === 'repeat-absent') {
+      switchAttSubTab(null, 'repeat-absent');
+    } else if (_careSubs.includes(view)) {
+      switchAttSubTab(null, view);
     } else {
-      const reportsBtn = document.querySelector('#tab-attendance .att-sub-tab:nth-child(2)');
+      const reportsBtn = document.querySelector('#tab-attendance .att-sub-tab[onclick*="\'reports\'"]');
       if (reportsBtn) switchAttSubTab(reportsBtn, 'reports');
       const subId = ({
         sheet:      'attendance-detail',
@@ -2094,6 +2682,7 @@ async function applyTabView(tab, view) {
         teams:      'team-leaderboard',
         trends:     'trends',
         accuracy:   'att-accuracy',
+        // coordinator is handled above — not routed through the reports sub-tab
       })[view];
       if (subId) {
         const innerBtn = document.querySelector(`#att-panel-reports .sub-tab[onclick*="'${subId}'"]`);
@@ -2108,6 +2697,9 @@ async function applyTabView(tab, view) {
     // Map view key → existing calling-mgmt panel button
     const cmBtn = document.querySelector(`#tab-calling-mgmt .att-sub-tab[onclick*="'${view}'"]`);
     if (cmBtn && typeof switchCallingMgmtTab === 'function') switchCallingMgmtTab(view, cmBtn);
+  } else if (tab === 'meetings') {
+    // Sub-tabs now live in the top-nav dropdown — no inline button to click.
+    if (typeof switchMeetingsSubTab === 'function') switchMeetingsSubTab(null, view);
   }
 
   if (typeof renderBreadcrumb === 'function') renderBreadcrumb();
@@ -2169,24 +2761,67 @@ function _buildTabMenus() {
   // drift away from its trigger button.
   window.addEventListener('resize', _closeAllTabMenus);
   window.addEventListener('scroll', _closeAllTabMenus, { passive: true });
+  // Close subtab picker on Escape
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSubtabPicker?.(); });
 }
 
 // ── Sub-tab switchers for the collapsed Reports — Attendance / Calling ──
 // Both tabs now host their own [Live | Reports] (or [Calls | Reports]) toggle.
+// Updates the "You are here" subtab name chip shown below the sub-tabs strip
+function _updateSubtabChip(wrapId, nameId, label) {
+  const wrap = document.getElementById(wrapId);
+  const span = document.getElementById(nameId);
+  if (!wrap || !span) return;
+  if (label) { span.textContent = label; wrap.style.display = ''; }
+  else        { wrap.style.display = 'none'; }
+}
+
 function switchAttSubTab(btn, sub) {
   // Live sub-tab is gated to Att. Seva users only
   if (sub === 'live' && !AppState.isAttSevaDev) {
-    sub = 'reports';
-    btn = document.querySelector('#tab-attendance .att-sub-tab[onclick*="\'reports\'"]') || btn;
+    sub = 'coordinator';
+    btn = document.querySelector('#tab-attendance .att-sub-tab[onclick*="\'coordinator\'"]') || btn;
   }
   const tabs = btn?.parentElement;
   if (tabs) tabs.querySelectorAll('.att-sub-tab').forEach(b => b.classList.remove('active'));
   btn?.classList.add('active');
-  document.getElementById('att-panel-live').classList.toggle('active',    sub === 'live');
-  document.getElementById('att-panel-reports').classList.toggle('active', sub === 'reports');
+  const careSubs = ['care-newcomers','care-returning','care-absent'];
+  document.getElementById('att-panel-live').classList.toggle('active',          sub === 'live');
+  document.getElementById('att-panel-coordinator').classList.toggle('active',   sub === 'coordinator');
+  document.getElementById('att-panel-reports').classList.toggle('active',       sub === 'reports');
+  document.getElementById('att-panel-repeat-absent')?.classList.toggle('active', sub === 'repeat-absent');
+  careSubs.forEach(k => document.getElementById('att-panel-' + k)?.classList.toggle('active', sub === k));
   AppState._attSubTab = sub;
+  const _attLabels = {
+    live: 'Live Attendance', coordinator: 'Coordinator Performance', reports: 'Attendance Reports',
+    'care-newcomers': 'New Comers', 'care-returning': 'Returning Newcomers',
+    'repeat-absent': 'Repeat Absentees', 'care-absent': 'Absent',
+  };
+  _updateSubtabChip('att-active-subtab', 'att-active-subtab-name', _attLabels[sub] || sub);
   if (sub === 'live') {
     loadAttendanceTab?.();
+  } else if (sub === 'coordinator') {
+    if (typeof loadCoordinatorPerformance === 'function') loadCoordinatorPerformance();
+  } else if (sub === 'repeat-absent') {
+    if (typeof loadRepeatAbsenteesTab === 'function') loadRepeatAbsenteesTab();
+  } else if (sub === 'care-returning') {
+    const targetEl = document.getElementById('att-care-returning-content');
+    if (targetEl && typeof loadReturningNewComers === 'function') loadReturningNewComers(targetEl);
+  } else if (sub === 'care-absent') {
+    const targetEl = document.getElementById('att-care-absent-merged-content');
+    if (targetEl && typeof loadCareAbsentTab === 'function') loadCareAbsentTab(targetEl);
+  } else if (sub === 'care-newcomers') {
+    const targetEl = document.getElementById('att-care-newcomers-content');
+    if (targetEl) {
+      targetEl.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+      if (typeof loadCareData === 'function') {
+        loadCareData().then(() => {
+          if (typeof _renderCareSection === 'function') _renderCareSection('newComers', targetEl);
+        }).catch(() => {
+          targetEl.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
+        });
+      }
+    }
   } else {
     _reportsCategory = 'attendance';
     if (typeof initReportsSessionFilter === 'function') initReportsSessionFilter();
@@ -2198,17 +2833,35 @@ function switchCallingSubTab(btn, sub) {
   const tabs = btn?.parentElement;
   if (tabs) tabs.querySelectorAll('.att-sub-tab').forEach(b => b.classList.remove('active'));
   btn?.classList.add('active');
-  document.getElementById('calling-panel-list')?.classList.toggle('active',       sub === 'calls');
-  document.getElementById('calling-panel-team')?.classList.toggle('active',       sub === 'team-calling');
-  document.getElementById('calling-panel-reports')?.classList.toggle('active',    sub === 'reports');
-  document.getElementById('calling-panel-history')?.classList.toggle('active',    sub === 'history');
+  // Stats tiles only make sense on live-calling tabs, not reports/history
+  const statsEl = document.getElementById('calling-stats');
+  if (statsEl) {
+    const showStats = ['calls','team-calling'].includes(sub); // only live calling tabs
+    statsEl.style.display = showStats ? '' : 'none';
+  }
+  document.getElementById('calling-panel-list')?.classList.toggle('active',              sub === 'calls');
+  document.getElementById('calling-panel-team')?.classList.toggle('active',              sub === 'team-calling');
+  document.getElementById('calling-panel-reports')?.classList.toggle('active',           sub === 'reports');
+  document.getElementById('calling-panel-history')?.classList.toggle('active',           sub === 'history');
+  document.getElementById('calling-panel-said-coming')?.classList.toggle('active',       sub === 'said-coming');
+  document.getElementById('calling-panel-not-coming-present')?.classList.toggle('active',sub === 'not-coming-present');
   AppState._callingSubTab = sub;
+  const _callingLabels = {
+    'calls': 'Your Calling Sewa', 'team-calling': 'Your Team Calling',
+    'reports': 'Calling Reports', 'history': 'Calling History',
+    'said-coming': 'Said Coming', 'not-coming-present': 'Surprise Present',
+  };
+  _updateSubtabChip('calling-active-subtab', 'calling-active-subtab-name', _callingLabels[sub] || sub);
   if (sub === 'calls') {
     loadCallingStatus?.();
   } else if (sub === 'team-calling') {
     loadTeamCallingList?.();
   } else if (sub === 'history') {
     loadCallingHistory?.();
+  } else if (sub === 'said-coming') {
+    loadSaidComingTab?.();
+  } else if (sub === 'not-coming-present') {
+    loadNotComingPresentTab?.();
   } else {
     _reportsCategory = 'calling';
     if (typeof _populateReportWeeks === 'function') _populateReportWeeks().then(() => loadCallingReports?.());
@@ -2244,55 +2897,4 @@ async function exportAttendance() {
 // ── BREADCRUMB ──────────────────────────────────────────
 // Renders the current location as a clickable path. Reads tab + sub-tab state
 // from the DOM so we don't need a separate registry.
-function renderBreadcrumb() {
-  const el = document.getElementById('breadcrumb-trail');
-  if (!el) return;
-  const tabLabels = {
-    dashboard:      'Dashboard',
-    devotees:       'Devotees',
-    calling:        'Calling',
-    attendance:     'Attendance',
-    care:           'Care',
-    events:         'Events',
-    'calling-mgmt': 'Calling Mgmt',
-  };
-  const tab = AppState.currentTab || 'dashboard';
-  const segments = [
-    { label: '<i class="fas fa-home"></i>', cls: 'bc-home', onClick: `switchTab('dashboard', null)` },
-  ];
-  if (tab !== 'dashboard') segments.push({ label: tabLabels[tab] || tab, onClick: `switchTab('${tab}', null)` });
-
-  // Tabs that use the dropdown nav: append the active view as a final crumb,
-  // pulled from AppState._tabView (set by navTabView).
-  const view = AppState._tabView?.[tab];
-  if (view && TAB_VIEWS[tab]) {
-    const label = _viewLabel(tab, view);
-    if (label) segments.push({ label, current: true });
-  }
-
-  // Calling Mgmt: 5-way sub-tabs
-  if (tab === 'calling-mgmt') {
-    const cmLabels = {
-      'calling-mgmt-panel-calling':       'Calling List',
-      'calling-mgmt-panel-newcomers':     'New Comers',
-      'calling-mgmt-panel-online':        'Online Class',
-      'calling-mgmt-panel-notinterested': 'Not Interested',
-      'calling-mgmt-panel-festival':      'Festival Calling',
-    };
-    const subId = document.querySelector('#tab-calling-mgmt .att-sub-panel.active')?.id || '';
-    if (cmLabels[subId]) segments.push({ label: cmLabels[subId], current: true });
-  }
-
-  // Mark final segment as current
-  if (segments.length && !segments[segments.length - 1].current) {
-    segments[segments.length - 1].current = true;
-  }
-
-  el.innerHTML = segments.map((s, i) => {
-    const sep = i > 0 ? '<span class="bc-sep">›</span>' : '';
-    if (s.current) {
-      return `${sep}<span class="bc-seg bc-current ${s.cls || ''}">${s.label}</span>`;
-    }
-    return `${sep}<button class="bc-seg ${s.cls || ''}" onclick="${s.onClick || ''}">${s.label}</button>`;
-  }).join('');
-}
+function renderBreadcrumb() {}

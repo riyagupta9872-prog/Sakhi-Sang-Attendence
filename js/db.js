@@ -59,6 +59,11 @@ function toSnake(d) {
     is_not_interested:      d.isNotInterested || false,
     not_interested_at:      tsToISO(d.notInterestedAt),
     prior_sessions_attended: d.priorSessionsAttended || 0,
+    // True once this devotee has had a completed personal meeting with Prabhuji.
+    // Drives the © "met" badge next to their name. Toggled off via the
+    // Completed-meetings tab "disconnect" action.
+    met_prabhuji:           d.metPrabhuji === true,
+    profile_pic:            d.profilePic || null,
   };
 }
 
@@ -93,6 +98,7 @@ function toCamel(f) {
     isNotInterested:         f.is_not_interested || false,
     notInterestedAt:         f.not_interested_at || null,
     priorSessionsAttended:   parseInt(f.prior_sessions_attended) || 0,
+    ...(f.profile_pic !== undefined ? { profilePic: f.profile_pic } : {}),
   };
 }
 
@@ -108,7 +114,19 @@ const DB = {
     }
     if (filters.team)       list = list.filter(d => d.teamName === filters.team);
     if (filters.calling_by) list = list.filter(d => d.callingBy === filters.calling_by);
-    if (filters.status)     list = list.filter(d => d.devoteeStatus === filters.status);
+    // "connecting" = devotees who have met Prabhuji (© badge). Source it directly
+    // from completed personal meetings (robust even if the metPrabhuji flag wasn't
+    // written), unioned with the flag. Otherwise match the devotee status.
+    if (filters.status === 'connecting') {
+      const metIds = new Set();
+      try {
+        const snap = await fdb.collection('personalMeetings').where('status', '==', 'completed').get();
+        snap.docs.forEach(doc => { const did = doc.data().devoteeId; if (did) metIds.add(did); });
+      } catch (_) {}
+      list = list.filter(d => d.metPrabhuji === true || metIds.has(d.id));
+    } else if (filters.status) {
+      list = list.filter(d => d.devoteeStatus === filters.status);
+    }
     return list.map(toSnake);
   },
 
@@ -360,36 +378,48 @@ const DB = {
       const batch = callingDates.slice(i, i + 10);
       const cSnap = await fdb.collection('callingStatus').where('weekDate', 'in', batch).get();
       cSnap.docs.forEach(d => {
-        const { weekDate, devoteeId, comingStatus, callingReason, callingNotes, availableFrom } = d.data();
-        const sessionDate = sessionDateForCalling[weekDate];
+        const dt = d.data();
+        const sessionDate = sessionDateForCalling[dt.weekDate];
         if (!sessionDate) return; // unmatched calling date — skip
         if (!csMap[sessionDate]) csMap[sessionDate] = {};
-        // Full status object so the sheet can display reason + caller's notes
-        // in a single cell (not just a short abbreviation).
-        csMap[sessionDate][devoteeId] = {
-          comingStatus: comingStatus || '',
-          callingReason: callingReason || '',
-          callingNotes: callingNotes || '',
-          availableFrom: availableFrom || '',
-        };
+        // Store the FULL calling-status record (all fields: comingStatus,
+        // callingReason, callingNotes, availableFrom, lateRemarks, triesCount,
+        // texted, …) so every view can show complete data, not an abbreviation.
+        csMap[sessionDate][dt.devoteeId] = { ...dt };
       });
     }
     return { sessions, devotees, attMap, attTimeMap, csMap };
   },
 
   async getSessionStats(sessionId) {
-    // Fetch session + calling config in parallel so we can map sessionDate → callingDate
+    // sessionId may be the Firestore doc ID OR the date string (YYYY-MM-DD).
+    // Try doc lookup first; if missing, fall back to a date query.
     const [sessSnap, cfgSnap] = await Promise.all([
       fdb.collection('sessions').doc(sessionId).get(),
       fdb.collection('settings').doc('callingWeek').get(),
     ]);
-    const sessionDate = sessSnap.exists ? sessSnap.data().sessionDate : getUpcomingSunday();
+    let realSessionId = sessionId;
+    let sessionDate;
+    if (sessSnap.exists) {
+      sessionDate = sessSnap.data().sessionDate;
+    } else {
+      // sessionId is probably a date string — look it up by field
+      const byDate = await fdb.collection('sessions').where('sessionDate', '==', sessionId).limit(1).get();
+      if (!byDate.empty) {
+        realSessionId = byDate.docs[0].id;
+        sessionDate   = byDate.docs[0].data().sessionDate;
+      } else {
+        sessionDate = getUpcomingSunday();
+      }
+    }
     const cfg = cfgSnap.exists ? cfgSnap.data() : null;
-    // callingStatus docs use callingDate as weekDate, not sessionDate
-    const weekDate = (cfg?.sessionDate === sessionDate) ? (cfg.callingDate || sessionDate) : sessionDate;
+    // callingStatus uses Saturday calling date; derive it if config doesn't match
+    const weekDate = (cfg?.sessionDate === sessionDate && cfg?.callingDate)
+      ? cfg.callingDate
+      : (() => { const d = new Date(sessionDate + 'T00:00:00'); d.setDate(d.getDate()-1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
     const [cs, at, allDevotees, submSnap] = await Promise.all([
       fdb.collection('callingStatus').where('weekDate', '==', weekDate).get(),
-      fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get(),
+      fdb.collection('attendanceRecords').where('sessionId', '==', realSessionId).get(),
       DevoteeCache.all(),
       fdb.collection('callingSubmissions').where('weekDate', '==', weekDate).get(),
     ]);
@@ -413,18 +443,27 @@ const DB = {
 
   /* ATTENDANCE */
   async getAttendanceCandidates(sessionId, search = '') {
-    // Fetch session + calling config together so we use the correct weekDate
     const [sessSnap, cfgSnap] = await Promise.all([
       fdb.collection('sessions').doc(sessionId).get(),
       fdb.collection('settings').doc('callingWeek').get(),
     ]);
-    const sessionDate = sessSnap.exists ? sessSnap.data().sessionDate : getUpcomingSunday();
+    let realSessionId = sessionId;
+    let sessionDate;
+    if (sessSnap.exists) {
+      sessionDate = sessSnap.data().sessionDate;
+    } else {
+      const byDate = await fdb.collection('sessions').where('sessionDate', '==', sessionId).limit(1).get();
+      if (!byDate.empty) { realSessionId = byDate.docs[0].id; sessionDate = byDate.docs[0].data().sessionDate; }
+      else sessionDate = getUpcomingSunday();
+    }
     const cfg = cfgSnap.exists ? cfgSnap.data() : null;
-    const week = (cfg?.sessionDate === sessionDate) ? (cfg.callingDate || sessionDate) : sessionDate;
+    const week = (cfg?.sessionDate === sessionDate && cfg?.callingDate)
+      ? cfg.callingDate
+      : (() => { const d = new Date(sessionDate + 'T00:00:00'); d.setDate(d.getDate()-1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
     const [rawDevotees, csSnap, atSnap] = await Promise.all([
       DevoteeCache.all(),
       fdb.collection('callingStatus').where('weekDate', '==', week).get(),
-      fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get()
+      fdb.collection('attendanceRecords').where('sessionId', '==', realSessionId).get()
     ]);
     const csMap = {}, markedAtMap = {};
     csSnap.docs.forEach(d => { csMap[d.data().devoteeId] = d.data(); });
@@ -461,6 +500,8 @@ const DB = {
     });
     await fdb.collection('devotees').doc(devotee.id).update({ lifetimeAttendance: INC(1), inactivityFlag: false, updatedAt: TS() });
     DevoteeCache.bust();
+    if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
+    if (typeof _bustCareCache === 'function') _bustCareCache();
   },
 
   async undoPresent(sessionId, devoteeId) {
@@ -469,6 +510,8 @@ const DB = {
     await snap.docs[0].ref.delete();
     await fdb.collection('devotees').doc(devoteeId).update({ lifetimeAttendance: INC(-1), updatedAt: TS() });
     DevoteeCache.bust();
+    if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
+    if (typeof _bustCareCache === 'function') _bustCareCache();
   },
 
   async getSessionAttendance(sessionId) {
@@ -479,11 +522,16 @@ const DB = {
     }).sort((a, b) => (b.marked_at || '').localeCompare(a.marked_at || ''));
   },
 
-  /* CALLING CONFIG */
+  /* CALLING CONFIG — cached 15s so window open/close propagates fast */
+  _cfgCache: null,
   async getCallingWeekConfig() {
+    if (this._cfgCache && Date.now() - this._cfgCache.ts < 15_000) return this._cfgCache.data;
     const doc = await fdb.collection('settings').doc('callingWeek').get();
-    return doc.exists ? doc.data() : null;
+    const data = doc.exists ? doc.data() : null;
+    this._cfgCache = { ts: Date.now(), data };
+    return data;
   },
+  _bustCfgCache() { this._cfgCache = null; },
   async setCallingWeekConfig(callingDate, sessionDate, extra = {}) {
     const payload = {
       callingDate, sessionDate: sessionDate || '',
@@ -492,7 +540,9 @@ const DB = {
     if (extra.topic       !== undefined) payload.topic       = extra.topic || '';
     if (extra.speakerName !== undefined) payload.speakerName = extra.speakerName || '';
     if (extra.sessionType !== undefined) payload.sessionType = extra.sessionType || 'regular';
+    if (extra.callingWindowOpen !== undefined) payload.callingWindowOpen = !!extra.callingWindowOpen;
     await fdb.collection('settings').doc('callingWeek').set(payload, { merge: true });
+    this._bustCfgCache();
     // Also propagate topic onto the Session doc so it shows on attendance screen
     if (sessionDate && (extra.topic !== undefined || extra.speakerName !== undefined || extra.sessionType !== undefined)) {
       const snap = await fdb.collection('sessions').where('sessionDate','==',sessionDate).limit(1).get();
@@ -506,6 +556,10 @@ const DB = {
         await snap.docs[0].ref.update(update);
       }
     }
+    // Calling week config changed → all derived caches are stale.
+    if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
+    if (typeof _bustCareCache === 'function') _bustCareCache();
+    if (typeof _bustCMCache === 'function') _bustCMCache();
   },
 
   /* ATTENDANCE TARGETS */
@@ -517,6 +571,8 @@ const DB = {
     await fdb.collection('settings').doc('attendanceTargets').set({
       type, teams, global, updatedAt: TS(), updatedBy: AppState.userName
     });
+    // Target changes affect dashboard % column.
+    if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
   },
 
   // One-time migration: rename a team across all collections.
@@ -619,6 +675,7 @@ const DB = {
       status: data.status || 'scheduled',
       completedDate: data.completedDate || '',
       notes: data.notes || '',
+      authorityRemarks: data.authorityRemarks || '',
       createdAt: TS(),
       updatedAt: TS(),
       createdBy: AppState.userName || '',
@@ -632,6 +689,93 @@ const DB = {
   },
   async deletePersonalMeeting(id) {
     await fdb.collection('personalMeetings').doc(id).delete();
+  },
+
+  // ── INTERACTIONS (4-level call/meet tracker) ──────────────────────────────
+  async logInteraction(data) {
+    return fdb.collection('interactions').add({
+      devoteeId:    data.devoteeId    || '',
+      devoteeName:  data.devoteeName  || '',
+      teamName:     data.teamName     || '',
+      level:        data.level        || 4,      // 1-4
+      type:         data.type         || 'call', // 'call' | 'meet' | 'parent-meet'
+      by:           data.by           || AppState.userName || '',
+      byUserId:     data.byUserId     || AppState.userId   || '',
+      notes:        data.notes        || '',
+      at:           TS(),
+      atClient:     new Date().toISOString(),
+    });
+  },
+
+  async getDevoteeInteractions(devoteeId) {
+    // No orderBy to avoid composite index requirement — sort client-side
+    const snap = await fdb.collection('interactions')
+      .where('devoteeId', '==', devoteeId).limit(50).get();
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.atClient || '').localeCompare(a.atClient || ''));
+  },
+
+  async getMyInteractions(userId) {
+    // No orderBy to avoid composite index requirement — sort client-side
+    const snap = await fdb.collection('interactions')
+      .where('byUserId', '==', userId).limit(100).get();
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.atClient || '').localeCompare(a.atClient || ''));
+  },
+
+  async getRecentInteractions(teamFilter) {
+    // Simple collection scan — no composite index needed
+    const snap = await fdb.collection('interactions').limit(200).get();
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .filter(d => !teamFilter || d.teamName === teamFilter)
+      .sort((a, b) => (b.atClient || '').localeCompare(a.atClient || ''));
+  },
+
+  // Permanently delete devotees (hard delete). Used only for the
+  // Not-Interested bulk-cleanup flow — super-admin only, irreversible.
+  // History/audit rows in other collections are left untouched.
+  async hardDeleteDevotees(ids) {
+    const list = (ids || []).filter(Boolean);
+    if (!list.length) return 0;
+    const BATCH = 400;
+    for (let i = 0; i < list.length; i += BATCH) {
+      const batch = fdb.batch();
+      list.slice(i, i + BATCH).forEach(id => batch.delete(fdb.collection('devotees').doc(id)));
+      await batch.commit();
+    }
+    DevoteeCache.bust();
+    return list.length;
+  },
+
+  // Toggle the "met Prabhuji" badge flag on a devotee. Set true when a meeting
+  // is completed; set false from the Completed-meetings "disconnect" action.
+  async setDevoteeMetPrabhuji(devoteeId, value) {
+    if (!devoteeId) return;
+    await fdb.collection('devotees').doc(devoteeId).set(
+      { metPrabhuji: !!value, updatedAt: TS() }, { merge: true }
+    );
+    DevoteeCache.bust();
+  },
+
+  // One-time backfill: mark every devotee who already has a completed meeting
+  // so existing data shows the © badge. Idempotent — guarded by a migration key.
+  async migrateMetPrabhujiOnce() {
+    const migKey = 'metPrabhujiBackfill_v1';
+    try {
+      const mDoc = await fdb.collection('settings').doc('migrations').get();
+      if (mDoc.exists && mDoc.data()[migKey]) return false;
+    } catch (_) { return false; }
+    const snap = await fdb.collection('personalMeetings').where('status', '==', 'completed').get();
+    const ids = [...new Set(snap.docs.map(d => d.data().devoteeId).filter(Boolean))];
+    const BATCH = 400;
+    for (let i = 0; i < ids.length; i += BATCH) {
+      const batch = fdb.batch();
+      ids.slice(i, i + BATCH).forEach(id =>
+        batch.set(fdb.collection('devotees').doc(id), { metPrabhuji: true }, { merge: true }));
+      await batch.commit();
+    }
+    await fdb.collection('settings').doc('migrations').set({ [migKey]: true }, { merge: true });
+    return ids.length > 0;
   },
 
   /* CALLING */
@@ -666,6 +810,8 @@ const DB = {
       calling_id:        csMap[d.id]?.id              || null,
       updated_at_client: csMap[d.id]?.updatedAtClient || null,
       late_remarks:      csMap[d.id]?.lateRemarks     || null,
+      tries_count:       csMap[d.id]?.triesCount      ?? null,
+      texted:            csMap[d.id]?.texted          ?? null,
     }));
   },
 
@@ -707,6 +853,8 @@ const DB = {
       available_from:    csMap[d.id]?.availableFrom   || null,
       calling_id:        csMap[d.id]?.id              || null,
       updated_at_client: csMap[d.id]?.updatedAtClient || null,
+      tries_count:       csMap[d.id]?.triesCount      ?? null,
+      texted:            csMap[d.id]?.texted          ?? null,
     }));
     return { devotees, submittedCallers };
   },
@@ -754,6 +902,9 @@ const DB = {
     if (data.calling_reason  !== undefined) payload.callingReason  = data.calling_reason  ?? null;
     if (data.available_from  !== undefined) payload.availableFrom  = data.available_from  ?? null;
     if (data.late_remarks    !== undefined) payload.lateRemarks    = data.late_remarks    ?? null;
+    // Did-not-pick follow-up fields
+    if (data.tries_count     !== undefined) payload.triesCount     = data.tries_count     ?? null;
+    if (data.texted          !== undefined) payload.texted         = data.texted          ?? null;
 
     if (snap.empty) {
       payload.createdAt = TS();
@@ -780,7 +931,12 @@ const DB = {
         });
       }
     }
+    // Calling status drives Dashboard "Called/Yes" counts and Care lists.
+    // Bust those caches so next view shows fresh numbers.
+    if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
+    if (typeof _bustCareCache === 'function') _bustCareCache();
   },
+
 
   // Returns last 4 calling weeks + per-devotee status + which devotee+week combos
   // had post-submission edits (for the pencil icon in the Calling History grid).
@@ -911,6 +1067,7 @@ const DB = {
 
   async saveCallingRemarks(statusId, remarks) {
     await fdb.collection('callingStatus').doc(statusId).update({ lateRemarks: remarks, updatedAt: TS() });
+    if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
   },
 
   async submitCallingWeek(weekDate, userId, userName, teamName) {
@@ -982,6 +1139,11 @@ const DB = {
     const uidNameMap = {};
     usersSnap.docs.forEach(d => { if (d.data().name) uidNameMap[d.id] = d.data().name; });
 
+    // Super admins are NOT callers — their calling activity must not be tracked
+    // in this report. Collect their names to exclude everywhere below.
+    const superAdminNames = new Set();
+    usersSnap.docs.forEach(d => { const u = d.data(); if (u.role === 'superAdmin' && u.name) superAdminNames.add(u.name); });
+
     // Build old-stored-name → current-name alias map from submission docs.
     // Each submission stores both userId and the userName at submission time,
     // so if a coordinator renamed themselves we can detect and merge them.
@@ -1034,9 +1196,10 @@ const DB = {
     Object.entries(teamAdminMap).forEach(([team, name]) => {
       if (!coordTeamMap[name]) coordTeamMap[name] = team;
     });
-    // Include anyone who submitted but isn't in devotees
+    // Include anyone who submitted but isn't in devotees — except super admins.
     fourWeeks.forEach(w => {
       Object.entries(submMap[w]).forEach(([name, s]) => {
+        if (superAdminNames.has(name)) return;   // never list super admins as callers
         if (!coordTeamMap[name]) coordTeamMap[name] = s.teamName || '';
       });
     });
@@ -1054,8 +1217,10 @@ const DB = {
     [...knownTeamNames, ...Object.keys(teamMap).filter(t => !knownTeamNames.includes(t))].forEach(team => {
       if (!teamMap[team]) return;
       const { admin, others } = teamMap[team];
-      const othersSorted = [...new Set(others)].filter(n => n !== admin).sort();
-      teamRows.push({ team, admin, coordinators: othersSorted });
+      const cleanAdmin = superAdminNames.has(admin) ? null : admin;
+      const othersSorted = [...new Set(others)].filter(n => n !== cleanAdmin && !superAdminNames.has(n)).sort();
+      if (!cleanAdmin && !othersSorted.length) return;  // drop empty rows (e.g. super-admin-only)
+      teamRows.push({ team, admin: cleanAdmin, coordinators: othersSorted });
     });
 
     return { fourWeeks, submMap, teamRows };
@@ -1308,19 +1473,45 @@ const DB = {
     return { absentThisWeek, absentPast2Weeks };
   },
 
-  async getCareNewcomers() {
-    const snap = await fdb.collection('sessions').orderBy('sessionDate', 'desc').limit(2).get();
-    if (snap.size < 2) return [];
-    const [latest, prev] = snap.docs.map(d => d.id);
-    const [pSnap, lSnap] = await Promise.all([
-      fdb.collection('attendanceRecords').where('sessionId', '==', prev).get(),
-      fdb.collection('attendanceRecords').where('sessionId', '==', latest).get()
-    ]);
-    const prevNew   = new Set(pSnap.docs.filter(d => d.data().isNewDevotee).map(d => d.data().devoteeId));
-    const latestAll = new Set(lSnap.docs.map(d => d.data().devoteeId));
-    const ids = [...prevNew].filter(id => latestAll.has(id));
+  // New devotees who attended the selected session (isNewDevotee flag in attendanceRecords)
+  async getNewComersForSession(sessionDate) {
+    if (!sessionDate) return [];
+    const sSnap = await fdb.collection('sessions').where('sessionDate', '==', sessionDate).limit(1).get();
+    if (sSnap.empty) return [];
+    const sessionDocId = sSnap.docs[0].id;
+    const attSnap = await fdb.collection('attendanceRecords').where('sessionId', '==', sessionDocId).get();
+    const newDocs = attSnap.docs.filter(d => d.data().isNewDevotee);
+    if (!newDocs.length) return [];
+    const newIds = new Set(newDocs.map(d => d.data().devoteeId));
+    const markedAtMap = {};
+    newDocs.forEach(d => { markedAtMap[d.data().devoteeId] = d.data().markedAt; });
     const raw = await DevoteeCache.all();
-    return raw.filter(d => ids.includes(d.id)).map(toSnake);
+    return raw.filter(d => newIds.has(d.id)).map(d => ({ ...toSnake(d), marked_at: markedAtMap[d.id] || null }));
+  },
+
+  // All active devotees whose devoteeStatus is still 'New Devotee', with last-8-session attendance matrix
+  async getReturningNewComers() {
+    const sessSnap = await fdb.collection('sessions').orderBy('sessionDate', 'desc').limit(8).get();
+    const sessions = sessSnap.docs.map(d => ({ id: d.id, date: d.data().sessionDate }));
+    const all = await DevoteeCache.all();
+    const newDevs = all.filter(d => d.isActive !== false && d.devoteeStatus === 'New Devotee');
+    if (!newDevs.length || !sessions.length) return { sessions: [], devotees: [] };
+    const attSnaps = await Promise.all(
+      sessions.map(s => fdb.collection('attendanceRecords').where('sessionId', '==', s.id).get().catch(() => ({ docs: [] })))
+    );
+    const attMap = {};
+    sessions.forEach((s, i) => { attMap[s.id] = new Set(attSnaps[i].docs.map(d => d.data().devoteeId)); });
+    const devotees = newDevs.map(d => ({
+      ...toSnake(d),
+      attendance: sessions.map(s => attMap[s.id]?.has(d.id) ?? false),
+    }));
+    // Sort by dateOfJoining descending (most recently joined first), then by name
+    devotees.sort((a, b) => {
+      const aj = a.date_of_joining || '', bj = b.date_of_joining || '';
+      if (aj !== bj) return bj.localeCompare(aj);
+      return (a.name || '').localeCompare(b.name || '');
+    });
+    return { sessions, devotees };
   },
 
   async getCareBirthdays() {

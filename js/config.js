@@ -57,6 +57,10 @@ const AppState = {
   attendanceCandidates: {},
   sessionsCache: {},     // sessionId → session object
   isAttSevaDev: false,  // extra flag: can access live attendance of all teams (set by superAdmin per user)
+  // ── DELEGATION FLAGS ── per-user "super-admin lite" powers (set by superAdmin per user)
+  canAllTeamCalling: false,  // can submit/edit calling on behalf of any team
+  canAllTeamReports: false,  // can view reports across all teams
+  canManageAllTeams: false,  // full write access app-wide (lite super admin)
   // Auth
   userRole: null,       // 'superAdmin' | 'teamAdmin' | 'serviceDevotee'
   userTeam: null,       // team name for coordinators
@@ -128,8 +132,25 @@ function dispatchFilters(patch) {
     // Team-locked roles cannot change away from their assigned team — EXCEPT on
     // the Devotees tab, where every admin browses all teams' data. Reports and
     // logging tabs stay team-scoped for teamAdmin.
-    const onDevoteesTab = AppState.currentTab === 'devotees';
-    if (AppState.userRole && AppState.userRole !== 'superAdmin' && AppState.userTeam && !onDevoteesTab) {
+    //
+    // Derive "are we on Devotees?" from the visible DOM panel (not from
+    // AppState.currentTab) — that variable drifts when the user navigates via
+    // browser back, history restore, or any path that toggles .tab-panel.active
+    // without going through switchTab. The drift was the root cause of
+    // coordinators seeing other teams' data on the dashboard.
+    let onDevoteesTab;
+    if (typeof document !== 'undefined') {
+      const activePanel = document.querySelector('.tab-panel.active');
+      onDevoteesTab = activePanel
+        ? activePanel.id === 'tab-devotees'
+        : AppState.currentTab === 'devotees';
+    } else {
+      onDevoteesTab = AppState.currentTab === 'devotees';
+    }
+    // Team-locked unless: super admin, has a cross-team permission flag, or
+    // currently on the Devotees tab (where every admin browses all teams).
+    const unlocked = isSuperAdmin() || canChangeTeamFilter() || onDevoteesTab;
+    if (AppState.userRole && AppState.userTeam && !unlocked) {
       f.team = AppState.userTeam;
     } else {
       f.team = patch.team || '';
@@ -160,6 +181,23 @@ function dispatchFilters(patch) {
 function getFilterTeam()      { return AppState.filters?.team      || ''; }
 function getFilterCallingBy() { return AppState.filters?.callingBy || ''; }
 function getFilterSessionId() { return AppState.filters?.sessionId || null; }
+
+// ── ROLE / PERMISSION HELPERS ──────────────────────────
+// These are the canonical checks. Use them everywhere instead of raw role
+// equality so the new delegation flags (canAllTeamCalling / canAllTeamReports
+// / canManageAllTeams) automatically apply.
+function isSuperAdmin()         { return AppState.userRole === 'superAdmin'; }
+function isCoordinator()        { return AppState.userRole === 'teamAdmin'; }
+function isFacilitator()        { return AppState.userRole === 'serviceDevotee'; }
+function isAdminOrCoord()       { return isSuperAdmin() || isCoordinator(); }
+// canCrossTeamCalling = can submit calling for ANY team (not just their own).
+// True for super admin, anyone with canAllTeamCalling, or canManageAllTeams.
+function canCrossTeamCalling()  { return isSuperAdmin() || !!AppState.canAllTeamCalling || !!AppState.canManageAllTeams; }
+function canCrossTeamReports()  { return isSuperAdmin() || !!AppState.canAllTeamReports || !!AppState.canManageAllTeams; }
+function canCrossTeamManage()   { return isSuperAdmin() || !!AppState.canManageAllTeams; }
+// "Can the user freely change the Team filter chip?" — yes if they can see
+// reports for all teams OR manage all teams OR are super admin.
+function canChangeTeamFilter()  { return canCrossTeamReports() || canCrossTeamManage() || canCrossTeamCalling(); }
 
 // ── TEAMS LIST (single source of truth) ───────────────
 const TEAMS = ['Champaklata','Chitralekha','Indulekha','Lalita','Nilachal','Other','Rangadevi','Sudevi','Tungavidya','Vishakha'];
@@ -254,6 +292,33 @@ function statusBadge(s) {
   return `<span class="badge badge-expected">${label}</span>`;
 }
 function teamBadge(t) { return t ? `<span class="badge badge-team">${t}</span>` : ''; }
+
+// Inline tags shown right after a devotee's name across the app:
+//   © circle → has had a completed personal meeting with Prabhuji
+//   "New"    → devotee_status is "New Devotee"
+// Accepts either snake_case (from DevoteeCache) or camelCase (form/state) shapes.
+function nameTags(d) {
+  if (!d) return '';
+  const met    = (d.met_prabhuji === true) || (d.metPrabhuji === true);
+  const status = d.devotee_status || d.devoteeStatus || '';
+  const isNew  = /new/i.test(status);
+  let html = '';
+  if (met)   html += '<span class="met-badge" title="Met Prabhuji">C</span>';
+  if (isNew) html += '<span class="new-tag" title="New devotee">New</span>';
+  return html;
+}
+
+// Calling submission window state. OPEN is MANUAL (Session Config toggle), but
+// it AUTO-CLOSES at 11:59 PM on the calling date (Saturday night). An admin can
+// also close it early by turning the toggle off. Returns true only while the
+// window is effectively open.
+function isCallingWindowOpen(cfg) {
+  if (!cfg || cfg.callingWindowOpen !== true) return false;
+  const cd = cfg.callingDate;
+  if (!cd) return true;                       // manually open, no date to gate against
+  const deadline = new Date(cd + 'T23:59:59'); // Saturday 11:59 PM local
+  return new Date() <= deadline;
+}
 // contactIcons(mobile) → direct call/whatsapp links (single number).
 // contactIcons(mobile, { altMobile, devoteeId, name }) → if altMobile is also
 // present, the icons instead open the number-picker modal so the user can
@@ -390,19 +455,42 @@ window.addEventListener('popstate', () => {
   // If nothing was closed, let the browser actually navigate back next time
 });
 
-// ── DEVOTEE CACHE (90-second TTL) ────────────────────
+// ── DEVOTEE CACHE (5-minute TTL) ─────────────────────
+// Writes call DevoteeCache.bust() so edits show up instantly. The TTL only
+// controls passive refreshes, and the devotee list changes only a few times
+// per day — 5 min avoids re-fetching on every casual tab switch.
+//
+// bust() ALSO invalidates dependent caches (dashboard, care, calling-mgmt)
+// because all three derive their aggregates from devotee data. Without this
+// chain, a devotee edit would leave the dashboard showing stale numbers
+// until the user manually refreshed.
 const DevoteeCache = {
-  raw: [], stamp: 0, TTL: 90000,
+  raw: [], stamp: 0, TTL: 300000,
+  _inflight: null,   // deduplicates concurrent refresh calls → 1 Firestore read
   async refresh() {
-    const snap = await fdb.collection('devotees').where('isActive', '==', true).get();
-    this.raw = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    this.raw.sort((a, b) => a.name.localeCompare(b.name));
-    this.stamp = Date.now();
-    return this.raw;
+    if (this._inflight) return this._inflight;
+    this._inflight = (async () => {
+      try {
+        const snap = await fdb.collection('devotees').where('isActive', '==', true).get();
+        this.raw = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        this.raw.sort((a, b) => a.name.localeCompare(b.name));
+        this.stamp = Date.now();
+        return this.raw;
+      } finally {
+        this._inflight = null;
+      }
+    })();
+    return this._inflight;
   },
   async all(force = false) {
     if (force || Date.now() - this.stamp > this.TTL) return this.refresh();
     return this.raw;
   },
-  bust() { this.stamp = 0; }
+  bust() {
+    this.stamp = 0;
+    this._inflight = null;
+    if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
+    if (typeof _bustCareCache      === 'function') _bustCareCache();
+    if (typeof _bustCMCache        === 'function') _bustCMCache();
+  }
 };
