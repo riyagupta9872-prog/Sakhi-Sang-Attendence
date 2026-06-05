@@ -935,6 +935,8 @@ const DB = {
     // Bust those caches so next view shows fresh numbers.
     if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
     if (typeof _bustCareCache === 'function') _bustCareCache();
+    if (typeof _bustCallStatusCache === 'function') _bustCallStatusCache();
+    if (typeof _bustCallingHistoryCache === 'function') _bustCallingHistoryCache();
   },
 
 
@@ -1068,6 +1070,8 @@ const DB = {
   async saveCallingRemarks(statusId, remarks) {
     await fdb.collection('callingStatus').doc(statusId).update({ lateRemarks: remarks, updatedAt: TS() });
     if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
+    if (typeof _bustCallStatusCache === 'function') _bustCallStatusCache();
+    if (typeof _bustCallingHistoryCache === 'function') _bustCallingHistoryCache();
   },
 
   async submitCallingWeek(weekDate, userId, userName, teamName) {
@@ -1087,6 +1091,8 @@ const DB = {
         initialSubmittedAt: TS(), initialSubmittedAtClient: now,
       });
     }
+    if (typeof _bustCallStatusCache === 'function') _bustCallStatusCache();
+    if (typeof _bustCallingHistoryCache === 'function') _bustCallingHistoryCache();
   },
 
   async getCallingSubmissions(weekDates) {

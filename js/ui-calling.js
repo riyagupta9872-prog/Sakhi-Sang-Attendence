@@ -3,6 +3,13 @@
 let _callingActiveTab = 'list';
 let _callingLocked = false;
 
+// Cache for the personal calling list — keyed by calling weekDate.
+// TTL matches team calling (3 min). Busted on any status save or submit.
+let _callStatusCache = null;
+const _CALL_STATUS_TTL = 3 * 60 * 1000;
+function _bustCallStatusCache() { _callStatusCache = null; }
+window._bustCallStatusCache = _bustCallStatusCache;
+
 function switchCallingTab(tab, btn) {
   // Legacy no-op: Calling tab now shows only the calling list.
   _callingActiveTab = 'list';
@@ -130,7 +137,6 @@ async function saveCallingWeekConfig() {
 async function loadCallingStatus() {
   _clearCallingTimers();
   _callingLocked = false;
-  document.getElementById('calling-list').innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
     const cfg = await DB.getCallingWeekConfig();
     const masterSession = (typeof getFilterSessionId === 'function') ? getFilterSessionId() : null;
@@ -157,9 +163,6 @@ async function loadCallingStatus() {
     if (isHistoricalView) {
       // Historical view: already locked; skip today-vs-callingDate gating.
     } else if (week) {
-      // Submission is gated by the Session Config "Calling Window Open" toggle:
-      // OPEN is manual, and it AUTO-CLOSES at 11:59 PM on the calling date.
-      // When the window is closed (toggle off OR past the deadline) → locked.
       const open = (typeof isCallingWindowOpen === 'function')
         ? isCallingWindowOpen(cfg)
         : !(Date.now() > new Date(week + 'T23:59:00').getTime());
@@ -175,9 +178,9 @@ async function loadCallingStatus() {
       }
     }
 
+    // Always update UI chrome (dates strip + session chip) — pure DOM, instant.
     window._callingSessionDate = sessionDate;
     document.getElementById('calling-week').value = week;
-
     const disp = document.getElementById('calling-dates-display');
     if (disp) {
       if (week) {
@@ -188,7 +191,6 @@ async function loadCallingStatus() {
         disp.innerHTML = '<span style="color:var(--danger);font-size:.82rem"><i class="fas fa-exclamation-circle"></i> No dates configured</span>';
       }
     }
-
     _renderSessionInfoChip(cfg, sessionDate);
 
     if (!week) {
@@ -201,7 +203,30 @@ async function loadCallingStatus() {
 
     window._beforeCallingDate = beforeCallingDate;
 
-    // Fetch calling data; attendance is cached per session (not re-fetched if session unchanged)
+    // ── CACHE CHECK ────────────────────────────────────────────────────────────
+    // Key = calling weekDate. Team/CallingBy filters don't affect the personal
+    // calling list (already scoped to AppState.userName inside DB.getCallingStatus).
+    // Session change recalculates `week` above → automatic cache miss.
+    if (_callStatusCache && _callStatusCache.key === week
+        && Date.now() - _callStatusCache.ts < _CALL_STATUS_TTL) {
+      const c = _callStatusCache;
+      AppState.callingData = c.devotees;
+      renderCallingStats(c.devotees);
+      if (AppState.userRole === 'superAdmin') {
+        const bar = document.getElementById('calling-submit-bar');
+        if (bar) bar.innerHTML = '';
+      } else if (_callingLocked) {
+        _renderLockedBanner(c.isHistoryFallback, week, beforeCallingDate, c.isHistoricalView, sessionDate, c.windowClosed);
+      } else {
+        _renderCallingSubmitBar(week, c.mySubmission);
+      }
+      filterCallingList();
+      return;
+    }
+
+    // ── CACHE MISS — show spinner, fetch, store ────────────────────────────────
+    document.getElementById('calling-list').innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+
     const lastSessionId = AppState.currentSessionId;
     const [devotees, mySubmission] = await Promise.all([
       DB.getCallingStatus(week),
@@ -217,11 +242,10 @@ async function loadCallingStatus() {
     } else if (!lastSessionId) {
       window._callingPresentSet = new Set();
     }
+
+    _callStatusCache = { key: week, ts: Date.now(), devotees, mySubmission, isHistoricalView, isHistoryFallback, windowClosed };
+
     AppState.callingData = devotees;
-
-    // Team / Calling By dropdowns moved to the master filter bar — nothing to
-    // populate locally on this tab any more.
-
     renderCallingStats(devotees);
     if (AppState.userRole === 'superAdmin') {
       const bar = document.getElementById('calling-submit-bar');
@@ -1758,14 +1782,29 @@ function _csCell(weekEntry) {
   return `<div class="ch-cell-inner ch-not-called"><i class="fas fa-circle-notch"></i> Not called</div>`;
 }
 
+// Cache for calling history grid — keyed by team+caller filters.
+// 2-min TTL; history changes rarely between visits.
+let _chCache = null;
+const _CH_TTL = 2 * 60 * 1000;
+function _bustCallingHistoryCache() { _chCache = null; }
+window._bustCallingHistoryCache = _bustCallingHistoryCache;
+
 async function loadCallingHistory() {
   const el = document.getElementById('calling-history-grid-content');
   if (!el) return;
-  el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
     const teamFilter   = getFilterTeam();
     const callerFilter = getFilterCallingBy();
-    const { weeks, devotees, submMap } = await DB.getCallingHistoryGrid(teamFilter, callerFilter);
+    const chKey = (teamFilter || '') + '|' + (callerFilter || '');
+
+    let weeks, devotees, submMap;
+    if (_chCache && _chCache.key === chKey && Date.now() - _chCache.ts < _CH_TTL) {
+      ({ weeks, devotees, submMap } = _chCache);
+    } else {
+      el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+      ({ weeks, devotees, submMap } = await DB.getCallingHistoryGrid(teamFilter, callerFilter));
+      _chCache = { key: chKey, ts: Date.now(), weeks, devotees, submMap };
+    }
 
     if (!devotees.length) {
       el.innerHTML = '<div class="empty-state"><i class="fas fa-history"></i><p>No calling data found</p></div>';
@@ -1827,6 +1866,7 @@ async function loadCallingHistory() {
 // ── Team Calling tab — all facilitators grouped by team ──────────────────────
 // superAdmin: sees all teams (master filter bar applies team/caller filter)
 // teamAdmin: sees only their own team's facilitators
+
 
 // ── TEAM CALLING — three-screen flow ──────────────────────────────────
 // Screen 1: grid of team summary cards (one card per team)
@@ -2137,10 +2177,21 @@ window._tcResubmitForCaller = _tcResubmitForCaller;
 async function loadSaidComingTab() {
   const el = document.getElementById('calling-said-content');
   if (!el) return;
+  const sessionDate = (typeof getFilterSessionId === 'function') ? getFilterSessionId() : null;
+
+  // _careRawCache is populated whenever the Care tab loads (same Firestore queries).
+  // Reuse it here so switching to this sub-tab is instant when Care was visited first.
+  if (typeof _careRawCache !== 'undefined' && _careRawCache
+      && _careRawCache.key === (sessionDate || '')) {
+    const team = (typeof getFilterTeam === 'function') ? getFilterTeam() : '';
+    const raw  = _careRawCache.saidComing?.list || [];
+    const list = team ? raw.filter(d => (d.team_name || d.teamName) === team) : raw;
+    _renderCorrelationTab(el, list, '😕 Said Coming — Didn\'t Come', '#dc2626', 'Confirmed on call but absent on session');
+    return;
+  }
+
   el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   try {
-    // Use Care's robust implementation which queries Firestore directly
-    const sessionDate = (typeof getFilterSessionId === 'function') ? getFilterSessionId() : null;
     const result = await _careFetchSaidComing(sessionDate);
     const list = result?.list || [];
     _renderCorrelationTab(el, list, '😕 Said Coming — Didn\'t Come', '#dc2626', 'Confirmed on call but absent on session');

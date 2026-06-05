@@ -20,7 +20,7 @@
 // source of the "stuck on Loading…" bug for super admin).
 let _dashCache = null;  // { key, data: { allDevotees, csByDevotee, presentSet, targetCfg } }
 
-function _bustDashboardCache() { _dashCache = null; }
+function _bustDashboardCache() { _dashCache = null; _cpCache = null; }
 window._bustDashboardCache = _bustDashboardCache;
 
 const _DASH_TIMEOUT_MS = 8000;
@@ -4391,21 +4391,31 @@ function downloadIndividualReports() {
 // Clicking a team bubble on the home leaderboard routes here with master Team
 // filter pre-set, so the table scopes to that one team instantly.
 let _cpInFlight = null;
+let _cpCache = null;  // { key, ts } — key = sessionId|callingDate|team
+const _CP_TTL = 3 * 60 * 1000;
+
 async function loadCoordinatorPerformance() {
   if (_cpInFlight) return _cpInFlight;
   const el = document.getElementById('att-coordinator-content');
   if (!el) return;
-  el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
   _cpInFlight = (async () => {
     try {
-      const ctx = await _dashResolveContext();
-      const key  = `${ctx.sessionId || ''}|${ctx.callingDate || ''}`;
+      const ctx  = await _dashResolveContext();
+      const team = (typeof getFilterTeam === 'function') ? getFilterTeam() : '';
+      const cpKey = `${ctx.sessionId || ''}|${ctx.callingDate || ''}|${team}`;
+
+      // CACHE HIT — DOM already shows the correct render; nothing to do.
+      if (_cpCache && _cpCache.key === cpKey && Date.now() - _cpCache.ts < _CP_TTL) return;
+
+      el.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+
+      const dashKey = `${ctx.sessionId || ''}|${ctx.callingDate || ''}`;
       let data;
-      if (_dashCache && _dashCache.key === key) {
+      if (_dashCache && _dashCache.key === dashKey) {
         data = _dashCache.data;
       } else {
         data = await _dashFetchData(ctx);
-        _dashCache = { key, data };
+        _dashCache = { key: dashKey, data };
       }
       const sessLbl = ctx.sessionDate
         ? new Date(ctx.sessionDate + 'T00:00:00').toLocaleDateString('en-IN',
@@ -4419,6 +4429,7 @@ async function loadCoordinatorPerformance() {
           <div class="loading"><i class="fas fa-spinner"></i></div>
         </div>`;
       _dashRender(data, ctx);
+      _cpCache = { key: cpKey, ts: Date.now() };
     } catch (e) {
       console.error('loadCoordinatorPerformance', e);
       if (el) el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
