@@ -47,7 +47,7 @@ All logic lives in [js/](js/), loaded as `<script>` tags in [index.html](index.h
 | [js/ui-calling.js](js/ui-calling.js) | Weekly calling list, calling reports, late-submission tracker |
 | [js/ui-attendance.js](js/ui-attendance.js) | Attendance sheet, Sunday config, live marking |
 | [js/ui-analytics.js](js/ui-analytics.js) | Reports + Care + Events tabs |
-| [js/ui-activities.js](js/ui-activities.js) | Books / Service / Registration / Donation — driven by `ACTIVITY_CONFIG` |
+| [js/ui-activities.js](js/ui-activities.js) | **Empty stub** — activity tabs were removed; file kept only for SW cache compatibility |
 | [js/ui-home.js](js/ui-home.js) | Home tab + quick-entry drawers; reuses `_initDevoteePicker(prefix)` for `bd`/`reg`/`srv` |
 | [js/ui-ai-chat.js](js/ui-ai-chat.js) | AI chat FAB; proxied via Cloudflare Worker `_AI_PROXY_BASE` to hide the Gemini key |
 
@@ -98,6 +98,16 @@ The Calling tab's **Submit window** is gated by `settings/callingWeek.callingDat
 
 **Special flag** — `AppState.isAttSevaDev` is set when a service devotee logs in via "Login as Attendance Service Devotee". Grants cross-team attendance marking for one session without promoting the role. Check this flag (not just `userRole`) wherever Attendance is team-scoped.
 
+**Delegation flags** — superAdmin can grant extra powers per-user without making them a full superAdmin. All live on `AppState` and on the `users/{uid}` doc:
+| Flag | Effect |
+|---|---|
+| `canAllTeamCalling` | Submit/edit calling on behalf of any team |
+| `canAllTeamReports` | View reports across all teams (read-only) |
+| `canManageAllTeams` | Both above + full write access app-wide ("lite super admin") |
+| `canBackDateAttendance` | Mark/undo attendance on past sessions |
+
+Use the helper functions `canCrossTeamCalling()`, `canCrossTeamReports()`, `canCrossTeamManage()` from `config.js` instead of checking flags directly — they fold in `isSuperAdmin()`.
+
 **First-user bootstrap** — if the `users` collection is empty at signup, the new user gets `superAdmin`. Otherwise signups default to `serviceDevotee` until upgraded.
 
 **Signup approval** — new signups go to `signupRequests` (pending). `subscribePendingSignups()` shows a badge to super admins. `approveSignupRequest(id)` creates the `users/{uid}` doc that `onAuthStateChanged` needs; without that doc, no login.
@@ -139,10 +149,6 @@ Anchored on master Session, computes four lists:
 - **Inactive** — `inactivityFlag: true` after repeated absence
 - **Returning Newcomers** — newly created devotees attending after an initial gap
 
-### Adding a New Activity Type
-
-Add one entry to `ACTIVITY_CONFIG` in [js/ui-activities.js](js/ui-activities.js): `prefix`, `addFn`, `getFn`, field list, display labels. The Log Entry and Reports sub-tabs auto-generate. No other plumbing.
-
 ### AI Chat (ui-ai-chat.js)
 
 Natural-language queries over Firestore data. Calls the Gemini API via a Cloudflare Worker (`_AI_PROXY_BASE`) so the key stays server-side. Tries models in order from `_GEMINI_MODELS` (gemini-2.5-flash → flash-lite → 2.0-flash-lite → …) — if quota is hit on one, it falls back to the next automatically.
@@ -152,7 +158,7 @@ Natural-language queries over Firestore data. Calls the Gemini API via a Cloudfl
 - `DevoteeCache` — 90 s TTL in-memory cache. **Call `DevoteeCache.bust()` after any devotee create/update/delete.**
 - `sessionsCache` on `AppState` — session metadata by ID
 - **Service worker** ([sw.js](sw.js)): Firebase URLs bypass cache; `/js/*.js` is network-first; static assets are cache-first. **Bump `sakhi-sang-vXX` on every deploy** to invalidate caches.
-- Firestore offline persistence is on with `synchronizeTabs: true`. The `try/catch` around it in `config.js` exists because multi-tab init can throw an assertion — it reloads the page in that case. **Don't remove that try/catch.**
+- Firestore offline persistence is on with `synchronizeTabs: true`. Global `unhandledrejection` and `error` handlers in `config.js` catch Firestore `INTERNAL ASSERTION FAILED` errors (a known SDK bug with multi-tab persistence) and reload the page automatically. **Don't remove those handlers.**
 
 ### UI Utilities (globals from ui-core.js)
 
