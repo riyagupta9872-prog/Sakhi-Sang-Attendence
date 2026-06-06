@@ -287,16 +287,18 @@ async function doSignup(e) {
     _resetBtn(); return;
   }
   try {
-    // Check if this email already has a pending signup request to avoid duplicates
-    const dupCheck = await fdb.collection('signupRequests')
-      .where('email', '==', email).where('status', '==', 'pending').limit(1).get();
-    if (!dupCheck.empty) {
+    // Create the Auth account first — only then are we authenticated enough
+    // to read/write Firestore (rules require request.auth != null).
+    const cred = await auth.createUserWithEmailAndPassword(email, password);
+    await cred.user.updateProfile({ displayName: name });
+
+    // Now authenticated — check for an existing pending request by UID (single-doc read).
+    const existingReq = await fdb.collection('signupRequests').doc(cred.user.uid).get();
+    if (existingReq.exists && existingReq.data().status === 'pending') {
       showPendingApprovalScreen();
       _resetBtn(); return;
     }
 
-    const cred = await auth.createUserWithEmailAndPassword(email, password);
-    await cred.user.updateProfile({ displayName: name });
     // First user EVER bootstraps as approved superAdmin. Everyone else lands
     // in signupRequests for super admin to approve.
     const existing = await fdb.collection('users').limit(2).get();
@@ -319,7 +321,10 @@ async function doSignup(e) {
     showPendingApprovalScreen();
     _resetBtn();
   } catch (ex) {
-    err.textContent = ex.code === 'auth/email-already-in-use' ? 'Email already registered' : ex.message;
+    const msg = ex.code === 'auth/email-already-in-use'
+      ? 'This email is already registered. If your account is awaiting approval, please wait for the super admin to approve it.'
+      : ex.message;
+    err.textContent = msg;
     err.classList.add('show');
     _resetBtn();
   }

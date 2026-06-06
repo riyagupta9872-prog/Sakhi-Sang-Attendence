@@ -288,14 +288,20 @@ async function renderHomeLeaderboard() {
         return `<th>${d.toLocaleDateString('en-IN',{day:'numeric',month:'short'})}</th>`;
       }).join('');
 
+      // sessionSums[i] = sum of per-team counts for session i (matches row cells exactly).
+      // Using attMap[sess].size would count devotees with no team and cause totals to
+      // drift from the visible row sums.
+      const sessionSums = sessions.map(() => 0);
+
       const tableRows = sorted.map((team, rank) => {
         const color = _teamColor(teamIdx[team] || 0);
         const sName = team.replace(/'/g, "\\'");
         let totalCame = 0;
-        const cells = sessions.map(sess => {
+        const cells = sessions.map((sess, si) => {
           const presentSet = attMap[sess.id] || new Set();
           const came = [...presentSet].filter(id => devTeamMap[id] === team).length;
           totalCame += came;
+          sessionSums[si] += came;
           const numColor = came >= 13 ? '#16a34a' : came >= 10 ? '#d97706' : '#dc2626';
           return `<td class="lb-td" style="color:${numColor};font-weight:700">${came}</td>`;
         }).join('');
@@ -315,12 +321,11 @@ async function renderHomeLeaderboard() {
         </tr>`;
       }).join('');
 
-      // Total row
-      const totalCells = sessions.map(sess => {
-        const n = attMap[sess.id]?.size || 0;
-        return `<td class="lb-td lb-total-td"><strong>${n}</strong></td>`;
-      }).join('');
-      const overallTotal = sessions.reduce((s, sess) => s + (attMap[sess.id]?.size || 0), 0);
+      // Total row — derived from sessionSums so it always equals the sum of team rows.
+      const totalCells = sessionSums.map(n =>
+        `<td class="lb-td lb-total-td"><strong>${n}</strong></td>`
+      ).join('');
+      const overallTotal = sessionSums.reduce((s, n) => s + n, 0);
       const overallAvg = sessions.length ? Math.round(overallTotal / sessions.length) : 0;
       const overallAvgColor = overallAvg >= 15 ? '#16a34a' : overallAvg >= 8 ? '#b45309' : '#dc2626';
 
