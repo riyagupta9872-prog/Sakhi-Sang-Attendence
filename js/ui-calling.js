@@ -211,7 +211,7 @@ async function loadCallingStatus() {
         && Date.now() - _callStatusCache.ts < _CALL_STATUS_TTL) {
       const c = _callStatusCache;
       AppState.callingData = c.devotees;
-      renderCallingStats(c.devotees);
+      if (AppState._callingSubTab !== 'team-calling') renderCallingStats(c.devotees);
       if (AppState.userRole === 'superAdmin') {
         const bar = document.getElementById('calling-submit-bar');
         if (bar) bar.innerHTML = '';
@@ -246,7 +246,7 @@ async function loadCallingStatus() {
     _callStatusCache = { key: week, ts: Date.now(), devotees, mySubmission, isHistoricalView, isHistoryFallback, windowClosed };
 
     AppState.callingData = devotees;
-    renderCallingStats(devotees);
+    if (AppState._callingSubTab !== 'team-calling') renderCallingStats(devotees);
     if (AppState.userRole === 'superAdmin') {
       const bar = document.getElementById('calling-submit-bar');
       if (bar) bar.innerHTML = '';
@@ -521,8 +521,8 @@ function filterCallingList() {
     return true;
   });
   // Stats follow whichever filters are active so the numbers always match
-  // what's visible in the list below.
-  renderCallingStats(filtered);
+  // what's visible in the list below. Skip if 'team-calling' owns the stats bar.
+  if (AppState._callingSubTab !== 'team-calling') renderCallingStats(filtered);
   renderCallingList(filtered, _callingLocked);
 }
 
@@ -1914,6 +1914,14 @@ async function loadTeamCallingList() {
     } else {
       _tcRenderTeamGrid();
     }
+
+    // Populate the shared calling-stats bar with aggregate data from this sub-tab.
+    // Without this, the bar shows the personal (calls sub-tab) data — all zeros for Super Admin.
+    const teamFilter = (typeof getFilterTeam === 'function') ? getFilterTeam() : '';
+    const statsDevotees = teamFilter
+      ? _tcData.allDevotees.filter(d => (d.team_name || d.teamName) === teamFilter)
+      : _tcData.allDevotees;
+    if (typeof renderCallingStats === 'function') renderCallingStats(statsDevotees);
   } catch (e) {
     console.error('loadTeamCallingList', e);
     el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';

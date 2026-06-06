@@ -792,54 +792,54 @@ h3 { font-size: .93rem; }
 
 .header-avatar {
   width: 36px; height: 36px; border-radius: 50%;
-  background: #fef9c3;
-  border: 2px solid #fde68a;
+  background: #dbeafe;
+  border: 2px solid #93c5fd;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; flex-shrink: 0; overflow: hidden;
   transition: border-color .2s, transform .15s, box-shadow .2s;
-  font-size: .75rem; font-weight: 700; color: #92400e;
+  font-size: .75rem; font-weight: 700; color: #1e40af;
 }
 .header-avatar:hover {
-  border-color: var(--gold-light);
+  border-color: #60a5fa;
   transform: scale(1.06);
-  box-shadow: 0 0 0 3px rgba(253,240,171,.25);
+  box-shadow: 0 0 0 3px rgba(147,197,253,.35);
 }
 
 .role-pill {
   padding: .12rem .5rem;
   border-radius: var(--radius-full);
   font-size: .67rem; font-weight: 700;
-  background: #fef9c3;
-  border: 1px solid #fde68a;
-  color: #92400e;
+  background: #dbeafe;
+  border: 1px solid #93c5fd;
+  color: #1e40af;
   white-space: nowrap;
   letter-spacing: .2px;
 }
 
 .btn-logout {
   width: 32px; height: 32px; border-radius: 50%;
-  border: 1.5px solid #fde68a;
-  background: transparent; color: #92400e;
+  border: 1.5px solid #93c5fd;
+  background: transparent; color: #1e40af;
   font-size: .85rem; cursor: pointer; transition: all .18s;
   display: flex; align-items: center; justify-content: center;
 }
 .btn-logout:hover {
-  background: #fef9c3;
-  border-color: #c8860a;
-  color: #c8860a;
+  background: #dbeafe;
+  border-color: #3b82f6;
+  color: #1d4ed8;
 }
 
 .btn-admin-gear {
   width: 32px; height: 32px; border-radius: 50%; border: none;
-  background: #fef9c3;
-  border: 1px solid #fde68a;
-  color: #92400e;
+  background: #dbeafe;
+  border: 1px solid #93c5fd;
+  color: #1e40af;
   cursor: pointer; font-size: .82rem; transition: all .2s;
   display: flex; align-items: center; justify-content: center;
 }
 .btn-admin-gear:hover {
-  background: #fde68a;
-  color: #92400e;
+  background: #bfdbfe;
+  color: #1d4ed8;
   transform: rotate(30deg);
 }
 
@@ -6444,8 +6444,8 @@ thead th {
 .um-row .um-avatar {
   width: 40px; height: 40px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #fde68a 0%, #dbeafe 100%);
-  color: #1a1a1a;
+  background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+  color: #1e40af;
   display: flex; align-items: center; justify-content: center;
   font-family: 'Cinzel', serif;
   font-weight: 800; font-size: .85rem;
