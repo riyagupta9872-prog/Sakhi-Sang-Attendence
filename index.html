@@ -842,7 +842,7 @@
         </div>
         <div class="calling-config-field">
           <label><i class="fas fa-chalkboard-teacher"></i> Session Date</label>
-          <input type="date" id="cm-config-session-date" class="filter-select">
+          <input type="date" id="cm-config-session-date" class="filter-select" onchange="cmAutoFillCallingDate()">
         </div>
         <button class="btn btn-primary" onclick="saveCMCallingDates()">
           <i class="fas fa-save"></i> Save Dates

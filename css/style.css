@@ -4201,26 +4201,29 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
 .adm-flag-chk:has(input:checked) { background: #fef3c7; border-color: #f59e0b; color: #92400e; }
 
 /* ══ USER ACTION MODAL — built on design system primitives ═════════════ */
+/* Whole modal scrolls. Header + footer use sticky so they stay visible.
+   This avoids the flex-collapse bug (flex:1/min-height:0 needs a fixed
+   parent height to work; without it the body collapses to 0). */
 .ua {
-  max-width: 560px; width: 95%;
-  padding: 0;
-  border-radius: var(--r-lg);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-/* Body scrolls; header stays pinned — overflow:hidden on .ua alone clips content */
-.ua__body {
+  max-width: 700px; width: 96%;
+  max-height: 90vh;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  flex: 1 1 0;
-  min-height: 0;
-  padding: var(--s-4) var(--s-5);
-  padding-bottom: var(--s-6);
+  padding: 0;
+  border-radius: var(--r-lg);
+  display: block;           /* plain block — let content set the height */
+}
+.modal-box.ua { overflow-y: auto; }  /* override base modal-box scroll */
+
+/* Body — plain padding, no flex needed */
+.ua__body {
+  padding: var(--s-5) var(--s-6);
+  padding-bottom: var(--s-2);
 }
 
-/* Custom header — softer than the generic gradient modal header */
+/* Custom header — sticky so it stays visible when scrolling */
 .ua__head {
+  position: sticky; top: 0; z-index: 2;
   display: flex; align-items: center; justify-content: space-between;
   gap: var(--s-3);
   padding: var(--s-4) var(--s-5);
@@ -4305,8 +4308,9 @@ button.fab:hover { transform: scale(1.1) rotate(90deg); box-shadow: 0 8px 28px r
   color: var(--txt-secondary); line-height: var(--lh-snug);
 }
 
-/* Footer — sticky-feeling separator with clear action hierarchy */
+/* Footer — sticky at bottom so actions are always reachable */
 .ua__footer {
+  position: sticky; bottom: 0; z-index: 2;
   display: flex; align-items: center; justify-content: space-between;
   gap: var(--s-3);
   padding: var(--s-3) var(--s-5);

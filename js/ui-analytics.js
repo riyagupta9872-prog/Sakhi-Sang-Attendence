@@ -1901,6 +1901,17 @@ function toggleCMConfig(btn) {
   btn.innerHTML = hidden ? '<i class="fas fa-cog"></i> Configure' : '<i class="fas fa-times"></i> Close';
 }
 
+function cmAutoFillCallingDate() {
+  const sd = document.getElementById('cm-config-session-date')?.value;
+  if (!sd) return;
+  const d = new Date(sd + 'T00:00:00');
+  d.setDate(d.getDate() - 1); // Saturday before the Sunday session
+  const sat = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const ci = document.getElementById('cm-config-calling-date');
+  if (ci) ci.value = sat;
+}
+window.cmAutoFillCallingDate = cmAutoFillCallingDate;
+
 async function saveCMCallingDates() {
   const cd = document.getElementById('cm-config-calling-date')?.value;
   const sd = document.getElementById('cm-config-session-date')?.value;

@@ -23,21 +23,33 @@ fdb.enablePersistence({ synchronizeTabs: true }).catch(err => {
 
 // Recover from Firestore SDK internal assertion errors (known bug with multi-tab persistence).
 // When this happens the SDK is in an unrecoverable state — a reload is the only fix.
+// The error can surface three ways: unhandledrejection, window error, or console.error
+// (when Firebase catches it internally and logs it without re-throwing). All three covered.
+let _reloadScheduled = false;
 function _isFirestoreAssertionError(msg) {
   return typeof msg === 'string' && msg.includes('INTERNAL ASSERTION FAILED');
 }
+function _scheduleReload() {
+  if (_reloadScheduled) return;
+  _reloadScheduled = true;
+  console.warn('[Sakhi Sang] Firestore internal error — reloading to recover');
+  setTimeout(() => location.reload(), 800);
+}
 window.addEventListener('unhandledrejection', e => {
-  if (_isFirestoreAssertionError(e.reason?.message)) {
-    console.warn('[Sakhi Sang] Firestore internal error — reloading to recover');
-    setTimeout(() => location.reload(), 600);
-  }
+  if (_isFirestoreAssertionError(e.reason?.message)) _scheduleReload();
 });
 window.addEventListener('error', e => {
-  if (_isFirestoreAssertionError(e.message)) {
-    console.warn('[Sakhi Sang] Firestore internal error — reloading to recover');
-    setTimeout(() => location.reload(), 600);
-  }
+  if (_isFirestoreAssertionError(e.message)) _scheduleReload();
 });
+// Firebase sometimes catches the error internally and logs it via console.error
+// without re-throwing — intercept that path too.
+const _origConsoleError = console.error.bind(console);
+console.error = function (...args) {
+  _origConsoleError(...args);
+  const first = args[0];
+  const msg = typeof first === 'string' ? first : (first?.message || '');
+  if (_isFirestoreAssertionError(msg)) _scheduleReload();
+};
 
 // ── APP STATE ─────────────────────────────────────────
 const AppState = {

@@ -251,6 +251,7 @@ async function doLogin(e) {
   try {
     await auth.signInWithEmailAndPassword(email, password);
   } catch (ex) {
+    if (_isFirestoreAssertionError(ex.message)) { _scheduleReload(); return; }
     const badCred = ['auth/wrong-password','auth/user-not-found','auth/invalid-credential','auth/invalid-email'];
     err.textContent = badCred.includes(ex.code) ? 'Invalid email or password' : ex.message;
     err.classList.add('show');
@@ -321,6 +322,7 @@ async function doSignup(e) {
     showPendingApprovalScreen();
     _resetBtn();
   } catch (ex) {
+    if (_isFirestoreAssertionError(ex.message)) { _scheduleReload(); return; }
     const msg = ex.code === 'auth/email-already-in-use'
       ? 'This email is already registered. If your account is awaiting approval, please wait for the super admin to approve it.'
       : ex.message;
@@ -1744,7 +1746,7 @@ async function _mfbReloadSessionOptions() {
                     data-value="${u.session_date}"
                     onclick="_frPickSession('${u.session_date}','${u.id}')">
                  <span class="fr-dropdown-item-label">${lbl}</span>
-                 <span class="fr-dropdown-item-sub">Upcoming</span>
+                 <span class="fr-dropdown-item-sub">Next Session</span>
                </div>
                <div class="fr-dropdown-divider"></div>`;
     }
@@ -2609,7 +2611,7 @@ function _isSessionAnchoredReportsView(tab, view) {
 // auto-restore logic when leaving Reports.
 function _isLiveSessionView(tab, view) {
   return (tab === 'attendance' && view === 'live')
-      || (tab === 'calling' && view === 'calls');
+      || (tab === 'calling' && (view === 'calls' || view === 'team-calling'));
 }
 
 // Maps a TAB_VIEWS key to the underlying sub-tab + sub-panel for that tab.

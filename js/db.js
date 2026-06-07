@@ -937,6 +937,7 @@ const DB = {
     if (typeof _bustCareCache === 'function') _bustCareCache();
     if (typeof _bustCallStatusCache === 'function') _bustCallStatusCache();
     if (typeof _bustCallingHistoryCache === 'function') _bustCallingHistoryCache();
+    if (typeof _tcBustCache === 'function') _tcBustCache();
   },
 
 
@@ -1072,6 +1073,7 @@ const DB = {
     if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
     if (typeof _bustCallStatusCache === 'function') _bustCallStatusCache();
     if (typeof _bustCallingHistoryCache === 'function') _bustCallingHistoryCache();
+    if (typeof _tcBustCache === 'function') _tcBustCache();
   },
 
   async submitCallingWeek(weekDate, userId, userName, teamName) {
@@ -1093,6 +1095,7 @@ const DB = {
     }
     if (typeof _bustCallStatusCache === 'function') _bustCallStatusCache();
     if (typeof _bustCallingHistoryCache === 'function') _bustCallingHistoryCache();
+    if (typeof _tcBustCache === 'function') _tcBustCache();
   },
 
   async getCallingSubmissions(weekDates) {
