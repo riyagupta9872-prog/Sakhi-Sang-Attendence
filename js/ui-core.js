@@ -290,15 +290,10 @@ async function doSignup(e) {
   try {
     // Create the Auth account first — only then are we authenticated enough
     // to read/write Firestore (rules require request.auth != null).
+    // auth/email-already-in-use covers the duplicate-signup case, so no
+    // pre-auth or post-auth signupRequests read is needed here.
     const cred = await auth.createUserWithEmailAndPassword(email, password);
     await cred.user.updateProfile({ displayName: name });
-
-    // Now authenticated — check for an existing pending request by UID (single-doc read).
-    const existingReq = await fdb.collection('signupRequests').doc(cred.user.uid).get();
-    if (existingReq.exists && existingReq.data().status === 'pending') {
-      showPendingApprovalScreen();
-      _resetBtn(); return;
-    }
 
     // First user EVER bootstraps as approved superAdmin. Everyone else lands
     // in signupRequests for super admin to approve.
@@ -2602,7 +2597,7 @@ function _maybeRestoreLiveSession() {
 // pickers, so auto-snapping the global Session for them does nothing useful
 // (and would mislead users with a "Showing last completed session" toast).
 function _isSessionAnchoredReportsView(tab, view) {
-  const callingLiveViews = ['calls', 'said-coming', 'not-coming-present'];
+  const callingLiveViews = ['calls', 'team-calling', 'history', 'said-coming', 'not-coming-present'];
   return (tab === 'attendance' && view !== 'live')
       || (tab === 'calling' && !callingLiveViews.includes(view));
 }
