@@ -320,16 +320,36 @@ function nameTags(d) {
   return html;
 }
 
-// Calling submission window state. OPEN is MANUAL (Session Config toggle), but
-// it AUTO-CLOSES at 11:59 PM on the calling date (Saturday night). An admin can
-// also close it early by turning the toggle off. Returns true only while the
-// window is effectively open.
+// Calling submission window state — TWO layers:
+//
+//  1. AUTOMATIC (driver) — the configured `callingDate` itself opens the
+//     window for a 24-hour span starting at midnight of that date. No admin
+//     action needed; this is the normal weekly behavior.
+//  2. MANUAL OVERRIDE — the Session Config "Calling Window Open" toggle lets
+//     the admin force the window open OR closed regardless of the calling
+//     date (e.g. early access, late/catch-up submissions, or an early
+//     shutdown). Whatever the admin sets it to wins for exactly 24 hours
+//     from the moment they touch it (`callingWindowOverrideAt`), then the
+//     override expires and control reverts to the automatic calling-date
+//     driver above.
 function isCallingWindowOpen(cfg) {
-  if (!cfg || cfg.callingWindowOpen !== true) return false;
+  if (!cfg) return false;
+
+  const overrideAt = cfg.callingWindowOverrideAt;
+  if (overrideAt) {
+    const ms = overrideAt.toMillis ? overrideAt.toMillis() : new Date(overrideAt).getTime();
+    if (ms && !isNaN(ms) && (Date.now() - ms) < 24 * 60 * 60 * 1000) {
+      return cfg.callingWindowOverride === true; // active override — honor admin's explicit choice
+    }
+  }
+
+  // No active override — let the calling date drive it: open for 24h
+  // starting at the beginning of that date.
   const cd = cfg.callingDate;
-  if (!cd) return true;                       // manually open, no date to gate against
-  const deadline = new Date(cd + 'T23:59:59'); // Saturday 11:59 PM local
-  return new Date() <= deadline;
+  if (!cd) return false;
+  const start = new Date(cd + 'T00:00:00').getTime();
+  const now   = Date.now();
+  return now >= start && now < start + 24 * 60 * 60 * 1000;
 }
 // contactIcons(mobile) → direct call/whatsapp links (single number).
 // contactIcons(mobile, { altMobile, devoteeId, name }) → if altMobile is also
@@ -483,7 +503,13 @@ const DevoteeCache = {
     if (this._inflight) return this._inflight;
     this._inflight = (async () => {
       try {
-        const snap = await fdb.collection('devotees').where('isActive', '==', true).get();
+        let q = fdb.collection('devotees').where('isActive', '==', true);
+        // Team-scoped fetch: users who can't see cross-team data only get their own team.
+        // canCrossTeamManage/Reports/Calling all fold in isSuperAdmin so one check covers all.
+        if (!canCrossTeamManage() && !canCrossTeamReports() && !canCrossTeamCalling() && AppState.userTeam) {
+          q = q.where('teamName', '==', AppState.userTeam);
+        }
+        const snap = await q.get();
         this.raw = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         this.raw.sort((a, b) => a.name.localeCompare(b.name));
         this.stamp = Date.now();

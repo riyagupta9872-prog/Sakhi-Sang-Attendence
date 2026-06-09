@@ -156,15 +156,17 @@ const DB = {
       );
       if (ex) throw { error: 'Duplicate', message: `"${ex.name}" with this mobile already exists`, existingId: ex.id };
     }
-    const payload = { ...toCamel(formData), lifetimeAttendance: 0, isActive: true, inactivityFlag: false, createdAt: TS(), updatedAt: TS() };
+    const payload = { ...toCamel(formData), lifetimeAttendance: 0, isActive: true, inactivityFlag: false, createdAt: TS(), updatedAt: TS(), createdBy: AppState.userName || '', createdById: AppState.userId || '' };
     const ref = await fdb.collection('devotees').add(payload);
+    await fdb.collection('profileChanges').add({ devoteeId: ref.id, fieldName: 'created', oldValue: '', newValue: 'Registered', changedAt: TS(), changedBy: AppState.userName || 'Admin', changedById: AppState.userId || '' });
     DevoteeCache.bust();
     return toSnake({ id: ref.id, ...payload });
   },
 
   async forceCreateDevotee(formData) {
-    const payload = { ...toCamel(formData), lifetimeAttendance: 0, isActive: true, inactivityFlag: false, createdAt: TS(), updatedAt: TS() };
+    const payload = { ...toCamel(formData), lifetimeAttendance: 0, isActive: true, inactivityFlag: false, createdAt: TS(), updatedAt: TS(), createdBy: AppState.userName || '', createdById: AppState.userId || '' };
     const ref = await fdb.collection('devotees').add(payload);
+    await fdb.collection('profileChanges').add({ devoteeId: ref.id, fieldName: 'created', oldValue: '', newValue: 'Registered', changedAt: TS(), changedBy: AppState.userName || 'Admin', changedById: AppState.userId || '' });
     DevoteeCache.bust();
     return toSnake({ id: ref.id, ...payload });
   },
@@ -259,7 +261,7 @@ const DB = {
           } else if (exact) {
             skipped.push({ row: rowNum, name, mobile: mobile || '', reason: `Duplicate — same name + mobile already exists as "${exact.name}"` });
           } else {
-            batch.set(fdb.collection('devotees').doc(), { ...payload, lifetimeAttendance: 0, createdAt: TS() });
+            batch.set(fdb.collection('devotees').doc(), { ...payload, lifetimeAttendance: 0, createdAt: TS(), createdBy: AppState.userName || '', createdById: AppState.userId || '' });
             pairMap[dupKey] = { id: 'new', name };
             imported++; any = true;
           }
@@ -502,6 +504,7 @@ const DB = {
     DevoteeCache.bust();
     if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
     if (typeof _bustCareCache === 'function') _bustCareCache();
+    if (typeof _bustCallStatusCache === 'function') _bustCallStatusCache();
   },
 
   async undoPresent(sessionId, devoteeId) {
@@ -512,6 +515,7 @@ const DB = {
     DevoteeCache.bust();
     if (typeof _bustDashboardCache === 'function') _bustDashboardCache();
     if (typeof _bustCareCache === 'function') _bustCareCache();
+    if (typeof _bustCallStatusCache === 'function') _bustCallStatusCache();
   },
 
   async getSessionAttendance(sessionId) {
@@ -540,7 +544,24 @@ const DB = {
     if (extra.topic       !== undefined) payload.topic       = extra.topic || '';
     if (extra.speakerName !== undefined) payload.speakerName = extra.speakerName || '';
     if (extra.sessionType !== undefined) payload.sessionType = extra.sessionType || 'regular';
-    if (extra.callingWindowOpen !== undefined) payload.callingWindowOpen = !!extra.callingWindowOpen;
+
+    // Calling-window state is two layers (see isCallingWindowOpen in config.js):
+    //   1. AUTOMATIC — the `callingDate` itself drives a 24h open window. No
+    //      action needed here; saving the date is enough to drive it.
+    //   2. MANUAL OVERRIDE — the admin's explicit toggle wins for 24h from the
+    //      moment they touch it, then expires back to automatic.
+    // We only ever WRITE the override fields when the admin actually toggled
+    // it this save (`extra.callingWindowOpen !== undefined`); we never infer
+    // or force an override from a date change — that would fight the
+    // calling-date driver instead of working with it.
+    if (extra.callingWindowOpen !== undefined) {
+      payload.callingWindowOverride   = !!extra.callingWindowOpen;
+      payload.callingWindowOverrideAt = TS();
+    }
+    // Drop any legacy fields from the old single-toggle model so stale data
+    // can't be misread by isCallingWindowOpen.
+    payload.callingWindowOpen     = firebase.firestore.FieldValue.delete();
+    payload.callingWindowOpenedAt = firebase.firestore.FieldValue.delete();
     await fdb.collection('settings').doc('callingWeek').set(payload, { merge: true });
     this._bustCfgCache();
     // Also propagate topic onto the Session doc so it shows on attendance screen
@@ -891,9 +912,16 @@ const DB = {
 
   async updateCallingStatus(devoteeId, weekDate, data) {
     const now = new Date();
-    const snap = await fdb.collection('callingStatus').where('devoteeId', '==', devoteeId).where('weekDate', '==', weekDate).limit(1).get();
+    const [snap, allDevotees] = await Promise.all([
+      fdb.collection('callingStatus').where('devoteeId', '==', devoteeId).where('weekDate', '==', weekDate).limit(1).get(),
+      DevoteeCache.all()
+    ]);
+    // Stamp the devotee's team onto the write so Firestore rules can scope
+    // calling edits to "your own team, or super admin / delegated cross-team".
+    const devotee = allDevotees.find(d => d.id === devoteeId);
     const payload = {
       devoteeId, weekDate,
+      teamName:        devotee?.teamName || null,
       comingStatus:    data.coming_status || '',
       updatedAt:       TS(),
       updatedAtClient: now.toISOString(),
@@ -1797,5 +1825,27 @@ const DB = {
     const snap = await q.get();
     return snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  },
+
+  /* SUPPORT REQUESTS */
+  async submitSupportRequest(data) {
+    return fdb.collection('supportRequests').add({
+      userId:    AppState.userId   || '',
+      userName:  AppState.userName || '',
+      userTeam:  AppState.userTeam || '',
+      userRole:  AppState.userRole || '',
+      message:   data.message   || '',
+      imageData: data.imageData || null,
+      voiceData: data.voiceData || null,
+      status:    'open',
+      createdAt: TS(),
+    });
+  },
+  async getSupportRequests() {
+    const snap = await fdb.collection('supportRequests').orderBy('createdAt', 'desc').limit(200).get();
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  },
+  async markSupportResolved(id) {
+    await fdb.collection('supportRequests').doc(id).update({ status: 'resolved', resolvedAt: TS() });
   },
 };

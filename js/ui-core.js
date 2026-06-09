@@ -797,7 +797,24 @@ async function openSessionConfig() {
     document.getElementById('sc-session-type').value    = cfg?.sessionType  || 'regular';
     document.getElementById('sc-calling-date').value    = cfg?.callingDate  || '';
     document.getElementById('sc-attendance-date').value = cfg?.sessionDate  || '';
-    document.getElementById('sc-calling-window').checked = cfg?.callingWindowOpen === true;
+    // Reflect the EFFECTIVE state — the calling date drives it automatically
+    // (open for 24h starting that day), and a manual override (if still
+    // active — it lasts 24h from when it was toggled) wins over that.
+    const effectivelyOpen = (typeof isCallingWindowOpen === 'function') ? isCallingWindowOpen(cfg) : false;
+    document.getElementById('sc-calling-window').checked = effectivelyOpen;
+    const scHint = document.getElementById('sc-calling-window-hint');
+    if (scHint) {
+      const overrideAt = cfg?.callingWindowOverrideAt;
+      const overrideMs = overrideAt ? (overrideAt.toMillis ? overrideAt.toMillis() : new Date(overrideAt).getTime()) : 0;
+      const overrideActive = overrideMs && !isNaN(overrideMs) && (Date.now() - overrideMs) < 24 * 60 * 60 * 1000;
+      if (overrideActive) {
+        scHint.textContent = cfg.callingWindowOverride
+          ? 'Manually forced OPEN — overrides the calling date for 24 hours from when you switched it on, then reverts to automatic.'
+          : 'Manually forced CLOSED — overrides the calling date for 24 hours from when you switched it off, then reverts to automatic.';
+      } else {
+        scHint.textContent = 'Opens automatically for 24 hours on the calling date. Use this toggle to override that for 24 hours if needed.';
+      }
+    }
   } catch (_) {}
   openModal('session-config-modal');
 }
@@ -2335,13 +2352,12 @@ const TAB_VIEWS = {
     { key: 'care-absent',     label: 'Absent',                icon: 'fa-user-times' },
     { divider: true, label: 'MORE' },
     { key: 'serious',       label: 'Serious Analysis',        icon: 'fa-star' },
-    { key: 'teams',         label: 'Team Leaderboard',        icon: 'fa-trophy' },
     { key: 'trends',        label: 'Trends',                  icon: 'fa-chart-line' },
-    { key: 'accuracy',      label: 'Accuracy',                icon: 'fa-bullseye' },
   ],
   'calling-mgmt': [
     { key: 'calling',       label: 'Calling List',     icon: 'fa-phone-alt' },
     { key: 'newcomers',     label: 'New Comers',       icon: 'fa-user-plus' },
+    { key: 'unassigned',    label: 'Unassigned',       icon: 'fa-user-slash' },
     { key: 'online',        label: 'Online Class',     icon: 'fa-laptop' },
     { key: 'notinterested', label: 'Not Interested',   icon: 'fa-times-circle' },
     { key: 'festival',      label: 'Festival Calling', icon: 'fa-star' },
@@ -2384,10 +2400,9 @@ const _SUBTAB_STYLES = {
   'late':          { bg:'#fef2f2', color:'#b91c1c' },
   'newcomers':     { bg:'#fef3c7', color:'#92400e' },
   'serious':       { bg:'#f5f3ff', color:'#6d28d9' },
-  'teams':         { bg:'#fffbeb', color:'#b45309' },
   'trends':        { bg:'#ecfdf5', color:'#065f46' },
-  'accuracy':      { bg:'#eff6ff', color:'#1e40af' },
   'calling':       { bg:'#eff6ff', color:'#1d4ed8' },
+  'unassigned':    { bg:'#fef2f2', color:'#7f1d1d' },
   'online':        { bg:'#f0fdf4', color:'#15803d' },
   'notinterested': { bg:'#fef2f2', color:'#b91c1c' },
   'festival':      { bg:'#fffbeb', color:'#b45309' },
@@ -2681,9 +2696,7 @@ async function applyTabView(tab, view) {
         individual: 'individual-reports',
         newcomers:  'newcomers-report',
         serious:    'serious-analysis',
-        teams:      'team-leaderboard',
         trends:     'trends',
-        accuracy:   'att-accuracy',
         // coordinator is handled above — not routed through the reports sub-tab
       })[view];
       if (subId) {
@@ -2692,7 +2705,6 @@ async function applyTabView(tab, view) {
         if (subId === 'attendance-detail'  && typeof loadYearlySheet       === 'function') loadYearlySheet();
         if (subId === 'late-comers'        && typeof loadLateComersReport  === 'function') loadLateComersReport();
         if (subId === 'individual-reports' && typeof _loadIndividualReports === 'function') _loadIndividualReports();
-        if (subId === 'att-accuracy'       && typeof loadAttAccuracyReport  === 'function') loadAttAccuracyReport();
       }
     }
   } else if (tab === 'calling-mgmt') {

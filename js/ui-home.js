@@ -789,6 +789,111 @@ async function loadAttendanceReport() {
   }
 }
 
+// ── DEVOTEE SUPPORT ───────────────────────────────────────────────────────────
+let _suppImageData = null, _suppVoiceData = null, _suppRecorder = null, _suppRecording = false;
+
+function openSupportModal() {
+  _suppImageData = null; _suppVoiceData = null; _suppRecording = false;
+  const msg = document.getElementById('support-message');
+  if (msg) msg.value = '';
+  document.getElementById('support-img-preview').innerHTML  = '';
+  document.getElementById('support-voice-preview').innerHTML = '';
+  const vBtn = document.getElementById('voice-record-btn');
+  if (vBtn) { vBtn.innerHTML = '<i class="fas fa-microphone"></i> Record Voice Note'; vBtn.style.cssText = 'background:#f0fdf4;color:#15803d;border:1.5px solid #bbf7d0;border-radius:7px;padding:.3rem .7rem;font-size:.78rem;cursor:pointer'; }
+  const adminSec = document.getElementById('support-admin-section');
+  if (adminSec) { adminSec.classList.toggle('hidden', !isSuperAdmin()); if (isSuperAdmin()) _loadSupportRequests(); }
+  openModal('support-modal');
+}
+window.openSupportModal = openSupportModal;
+
+function handleSupportImageSelect(e) {
+  const file = e.target.files[0]; if (!file) return;
+  if (file.size > 2 * 1024 * 1024) { showToast('Image too large — please choose under 2 MB', 'error'); return; }
+  const reader = new FileReader();
+  reader.onload = ev => {
+    _suppImageData = ev.target.result;
+    document.getElementById('support-img-preview').innerHTML =
+      `<div style="position:relative;display:inline-block;margin-bottom:.5rem">
+         <img src="${ev.target.result}" style="max-width:100%;max-height:150px;border-radius:8px;border:1px solid #e2e8f0">
+         <button onclick="_suppImageData=null;document.getElementById('support-img-preview').innerHTML=''" style="position:absolute;top:3px;right:3px;background:rgba(0,0,0,.55);border:none;color:#fff;border-radius:50%;width:20px;height:20px;cursor:pointer;font-size:.65rem"><i class="fas fa-times"></i></button>
+       </div>`;
+  };
+  reader.readAsDataURL(file);
+}
+window.handleSupportImageSelect = handleSupportImageSelect;
+
+async function toggleSupportVoiceRecording() {
+  if (_suppRecording) {
+    if (_suppRecorder) { _suppRecorder.stop(); _suppRecorder.stream?.getTracks().forEach(t => t.stop()); }
+    _suppRecording = false;
+    const btn = document.getElementById('voice-record-btn');
+    if (btn) { btn.innerHTML = '<i class="fas fa-microphone"></i> Record Voice Note'; btn.style.cssText = 'background:#f0fdf4;color:#15803d;border:1.5px solid #bbf7d0;border-radius:7px;padding:.3rem .7rem;font-size:.78rem;cursor:pointer'; }
+  } else {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const chunks = [];
+      _suppRecorder = new MediaRecorder(stream);
+      _suppRecorder.ondataavailable = e => chunks.push(e.data);
+      _suppRecorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onload = ev => {
+          _suppVoiceData = ev.target.result;
+          document.getElementById('support-voice-preview').innerHTML =
+            `<audio controls src="${ev.target.result}" style="width:100%;border-radius:8px;margin-bottom:.4rem"></audio>`;
+        };
+        reader.readAsDataURL(blob);
+      };
+      _suppRecorder.start();
+      _suppRecording = true;
+      const btn = document.getElementById('voice-record-btn');
+      if (btn) { btn.innerHTML = '<i class="fas fa-stop-circle"></i> Stop Recording'; btn.style.cssText = 'background:#fef2f2;color:#b91c1c;border:1.5px solid #fca5a5;border-radius:7px;padding:.3rem .7rem;font-size:.78rem;cursor:pointer'; }
+    } catch { showToast('Microphone access denied — please allow mic permission', 'error'); }
+  }
+}
+window.toggleSupportVoiceRecording = toggleSupportVoiceRecording;
+
+async function submitSupportIssue() {
+  const message = (document.getElementById('support-message')?.value || '').trim();
+  if (!message && !_suppImageData && !_suppVoiceData) { showToast('Please describe your issue or attach a photo/voice note', 'error'); return; }
+  try {
+    await DB.submitSupportRequest({ message, imageData: _suppImageData, voiceData: _suppVoiceData });
+    showToast('Support request submitted! Hare Krishna 🙏', 'success');
+    closeModal('support-modal');
+  } catch (e) { showToast('Failed to submit: ' + e.message, 'error'); }
+}
+window.submitSupportIssue = submitSupportIssue;
+
+async function _loadSupportRequests() {
+  const el = document.getElementById('support-requests-list'); if (!el) return;
+  el.innerHTML = '<div class="loading" style="padding:.5rem"><i class="fas fa-spinner"></i></div>';
+  try {
+    const reqs = await DB.getSupportRequests();
+    if (!reqs.length) { el.innerHTML = '<div style="font-size:.8rem;color:#94a3b8;text-align:center;padding:.5rem">No requests yet</div>'; return; }
+    const fmt = ts => ts?.toDate ? ts.toDate().toLocaleString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',hour12:true}) : '—';
+    el.innerHTML = reqs.map(r => `
+      <div style="border:1px solid ${r.status==='open'?'#fcd34d':'#e2e8f0'};border-radius:8px;padding:.55rem .75rem;margin-bottom:.4rem;background:${r.status==='open'?'#fefce8':'#f8fafc'}">
+        <div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.2rem">
+          <span style="font-weight:700;font-size:.78rem;color:#0d2d5a">${r.userName||'—'}</span>
+          <span style="font-size:.68rem;color:#94a3b8;margin-left:auto">${fmt(r.createdAt)}</span>
+        </div>
+        ${r.message ? `<div style="font-size:.78rem;color:#374151;margin-bottom:.3rem">${r.message}</div>` : ''}
+        ${r.imageData ? `<img src="${r.imageData}" style="max-width:100%;max-height:80px;border-radius:6px;margin-bottom:.3rem;display:block">` : ''}
+        ${r.voiceData ? `<audio controls src="${r.voiceData}" style="width:100%;height:28px;margin-bottom:.3rem"></audio>` : ''}
+        ${r.status==='open'
+          ? `<button onclick="markSupportResolved('${r.id}')" style="background:#dcfce7;color:#15803d;border:none;border-radius:5px;padding:.2rem .55rem;font-size:.72rem;cursor:pointer"><i class="fas fa-check"></i> Mark Resolved</button>`
+          : `<span style="font-size:.7rem;color:#15803d"><i class="fas fa-check-circle"></i> Resolved</span>`}
+      </div>`).join('');
+  } catch { el.innerHTML = '<div style="font-size:.8rem;color:#ef4444">Failed to load</div>'; }
+}
+window._loadSupportRequests = _loadSupportRequests;
+
+async function markSupportResolved(id) {
+  try { await DB.markSupportResolved(id); showToast('Marked as resolved!', 'success'); _loadSupportRequests(); }
+  catch (e) { showToast('Failed: ' + e.message, 'error'); }
+}
+window.markSupportResolved = markSupportResolved;
+
 // ── CALLING REPORT → Calling tab → Reports sub-tab ────
 function openCallingReport() {
   switchTab('calling', document.querySelector('[data-tab="calling"]'));

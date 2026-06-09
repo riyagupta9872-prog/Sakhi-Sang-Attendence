@@ -46,6 +46,16 @@ function removeDevoteePhoto() {
 }
 window.removeDevoteePhoto = removeDevoteePhoto;
 
+// Global map: devoteeId → { src, name }  — populated by _devAvatarHtml and My Log
+// so we never embed large base64 strings in onclick= attributes.
+const _photoZoomMap = {};
+function openDevoteePhotoZoom(id) {
+  if (!isAdminOrCoord()) return;
+  const e = _photoZoomMap[id];
+  if (e?.src) openPhotoLightbox(e.src, e.name);
+}
+window.openDevoteePhotoZoom = openDevoteePhotoZoom;
+
 function openPhotoLightbox(src, name) {
   if (!src) return;
   const lb  = document.getElementById('photo-lightbox');
@@ -173,9 +183,14 @@ async function loadDevotees() {
 }
 
 function _devAvatarHtml(d) {
-  return d.profile_pic
-    ? `<div class="devotee-avatar" style="overflow:hidden;padding:0"><img src="${d.profile_pic}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%"></div>`
-    : `<div class="devotee-avatar">${initials(d.name)}</div>`;
+  if (d.profile_pic) {
+    const canZoom = isAdminOrCoord();
+    if (canZoom) _photoZoomMap[d.id] = { src: d.profile_pic, name: d.name };
+    return `<div class="devotee-avatar" style="overflow:hidden;padding:0${canZoom ? ';cursor:zoom-in' : ''}"
+      ${canZoom ? `onclick="openDevoteePhotoZoom('${d.id}');event.stopPropagation()" title="Tap to view full photo"` : ''}>
+      <img src="${d.profile_pic}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;pointer-events:none"></div>`;
+  }
+  return `<div class="devotee-avatar">${initials(d.name)}</div>`;
 }
 
 function renderDevoteeItem(d) {
@@ -458,6 +473,13 @@ function openDevoteeFormModal(fromAttendance = false, editId = null) {
   document.getElementById('f-id').value = editId || '';
   document.getElementById('devotee-form-title').textContent = editId ? 'Edit Devotee Profile' : (fromAttendance ? 'Register New Devotee' : 'Add New Devotee');
   if (editId) populateEditForm(editId); else clearDevoteeForm();
+  // When opened from attendance: lock team=Other and status=New Devotee so
+  // walk-in registrations are always routed to New Comers for follow-up.
+  const lockForAtt = fromAttendance && !editId;
+  const fTeam   = document.getElementById('f-team');
+  const fStatus = document.getElementById('f-status');
+  if (fTeam)   { fTeam.disabled   = lockForAtt; fTeam.title   = lockForAtt ? 'Fixed during attendance — reassign from Calling Mgt → New Comers' : ''; }
+  if (fStatus) { fStatus.disabled = lockForAtt; fStatus.title = lockForAtt ? 'Fixed during attendance — reassign from Calling Mgt → New Comers' : ''; }
   switchProfileTab('identity', null);
   openModal('devotee-form-modal');
 }
@@ -713,7 +735,7 @@ async function openHistoryModal() {
   try {
     const history = await DB.getProfileHistory(AppState.currentDevoteeId);
     if (!history.length) { content.innerHTML = '<div class="empty-state" style="padding:2rem"><i class="fas fa-history"></i><p>No changes recorded yet</p></div>'; return; }
-    const labels = { name:'Name', mobile:'Mobile', chanting_rounds:'Chanting Rounds', kanthi:'Kanthi', gopi_dress:'Gopi Dress', team_name:'Team', devotee_status:'Status', facilitator:'Facilitator', reference_by:'Reference', calling_by:'Calling By' };
+    const labels = { name:'Name', mobile:'Mobile', chanting_rounds:'Chanting Rounds', kanthi:'Kanthi', gopi_dress:'Gopi Dress', team_name:'Team', devotee_status:'Status', facilitator:'Facilitator', reference_by:'Reference', calling_by:'Calling By', created:'Registered', is_not_interested:'Not Interested', calling_mode:'Calling Mode' };
     content.innerHTML = history.map(h => `
       <div class="history-item">
         <div class="history-field">${labels[h.field_name] || h.field_name}</div>

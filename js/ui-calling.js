@@ -7,7 +7,10 @@ let _callingLocked = false;
 // TTL matches team calling (3 min). Busted on any status save or submit.
 let _callStatusCache = null;
 const _CALL_STATUS_TTL = 3 * 60 * 1000;
-function _bustCallStatusCache() { _callStatusCache = null; }
+// Also drops the cached "was present at the previous Sunday's class" set —
+// otherwise the Calls list keeps showing a stale Last:Present/Absent badge
+// after that class's attendance is corrected (it's keyed by date, not TTL'd).
+function _bustCallStatusCache() { _callStatusCache = null; window._callingPresentSetDate = null; }
 window._bustCallStatusCache = _bustCallStatusCache;
 
 function switchCallingTab(tab, btn) {
@@ -227,19 +230,34 @@ async function loadCallingStatus() {
     // ── CACHE MISS — show spinner, fetch, store ────────────────────────────────
     document.getElementById('calling-list').innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
 
-    const lastSessionId = AppState.currentSessionId;
     const [devotees, mySubmission] = await Promise.all([
       DB.getCallingStatus(week),
       _callingLocked ? Promise.resolve(null) : DB.getMyCallingSubmission(week, AppState.userId).catch(() => null),
     ]);
-    // Only (re)fetch attendance if session changed — avoids a Firestore read on every calling tab open
-    if (lastSessionId && window._callingPresentSetSession !== lastSessionId) {
-      const attSnap = await fdb.collection('attendanceRecords')
-        .where('sessionId', '==', lastSessionId).get().catch(() => null);
+    // "Last: Present/Absent" should reflect the class BEFORE the one this calling
+    // week is preparing devotees for — not whatever session happens to be selected
+    // in the master filter (that's usually the upcoming class, which hasn't
+    // happened yet at calling time and would make the badge meaningless/empty).
+    // So: take this week's sessionDate (e.g. 7 Jun) and look one Sunday back (31 May).
+    let prevSundayStr = '';
+    if (sessionDate) {
+      const d = new Date(sessionDate + 'T00:00:00');
+      d.setDate(d.getDate() - 7);
+      prevSundayStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+    // Only (re)fetch if the reference date changed — avoids a Firestore read on every calling tab open
+    if (prevSundayStr && window._callingPresentSetDate !== prevSundayStr) {
       window._callingPresentSet = new Set();
-      if (attSnap) attSnap.docs.forEach(d => { window._callingPresentSet.add(d.data().devoteeId); });
-      window._callingPresentSetSession = lastSessionId;
-    } else if (!lastSessionId) {
+      try {
+        const sessSnap = await fdb.collection('sessions').where('sessionDate', '==', prevSundayStr).limit(1).get();
+        if (!sessSnap.empty) {
+          const prevSessionId = sessSnap.docs[0].id;
+          const attSnap = await fdb.collection('attendanceRecords').where('sessionId', '==', prevSessionId).get();
+          attSnap.docs.forEach(d => { window._callingPresentSet.add(d.data().devoteeId); });
+        }
+      } catch (_) {} // non-critical — badge is best-effort
+      window._callingPresentSetDate = prevSundayStr;
+    } else if (!prevSundayStr) {
       window._callingPresentSet = new Set();
     }
 
@@ -347,7 +365,7 @@ function _renderLockedBanner(isHistoryFallback, weekDate, beforeCallingDate, isH
         <i class="fas fa-lock"></i> Calling window is closed
       </span>
       <div style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem">
-        Submission is disabled. The window is opened by Super Admin (Session Configuration) and auto-closes at 11:59 PM on the calling date.
+        Submission is disabled. The window opens automatically for 24 hours on the calling date — or Super Admin can switch ON "Calling Window Open" from Session Configuration to override this for 24 hours.
       </div>
     </div>`;
   } else {
@@ -358,7 +376,7 @@ function _renderLockedBanner(isHistoryFallback, weekDate, beforeCallingDate, isH
         <i class="fas fa-lock"></i> Calling date of <strong>${weekLabel}</strong> has passed
       </span>
       <div style="font-size:.75rem;color:var(--text-muted);margin-top:.2rem">
-        The submission window (until 11:59 PM on calling date) has closed. This list is read-only.
+        Submission is currently disabled. This list is read-only — Super Admin can switch ON "Calling Window Open" from Session Configuration to override this for 24 hours.
       </div>
     </div>`;
   }
@@ -538,6 +556,23 @@ function renderCallingList(devotees, locked) {
 // Status is shown as a colored left-border accent (no chip, no chevron).
 // Clicking anywhere on the card (except the icon buttons) opens the
 // 4-week history modal — that's where status marking happens.
+// At-a-glance "have I called this person yet?" indicator — shown right next
+// to the name so a coordinator can scan the whole list without opening cards.
+//   Confirmed (green)  — marked Coming
+//   Try Again (amber)  — didn't pick up / needs a redo call
+//   Called (blue)      — some outcome recorded (reason/notes) but not Yes
+//   Pending (gray)     — nothing recorded yet this week
+function _callingCardStatusInfo(d) {
+  const isYes  = d.coming_status === 'Yes';
+  const reason = d.calling_reason || '';
+  const notes  = d.calling_notes || '';
+  if (isYes)                  return { label: 'Confirmed', nameColor: '#1b5e20', bg: '#e8f5e9', fg: '#1b5e20' };
+  if (reason === 'did_not_pick') return { label: 'Try Again', nameColor: '#bf360c', bg: '#fff3e0', fg: '#bf360c' };
+  if (reason)                 return { label: _reasonLabel(reason), nameColor: '#0d47a1', bg: '#e3f2fd', fg: '#0d47a1' };
+  if (notes)                  return { label: 'Called', nameColor: '#0d47a1', bg: '#e3f2fd', fg: '#0d47a1' };
+  return { label: 'Pending', nameColor: '', bg: '#f1f5f9', fg: '#64748b' };
+}
+
 function renderCallingCard(d, i, locked) {
   const isYes   = d.coming_status === 'Yes';
   const reason  = d.calling_reason || '';
@@ -547,6 +582,9 @@ function renderCallingCard(d, i, locked) {
   const cardCls = ['calling-card', 'cc-v2'];
   if (isYes)   cardCls.push('cc-confirmed');
   if (reason)  cardCls.push('cc-has-reason');
+
+  const _st = _callingCardStatusInfo(d);
+  const statusTag = `<span style="display:inline-block;font-size:.62rem;font-weight:700;line-height:1;padding:.16rem .4rem;border-radius:4px;white-space:nowrap;background:${_st.bg};color:${_st.fg};margin-left:.35rem;vertical-align:middle">${_st.label}</span>`;
 
   const phoneRow = d.mobile
     ? `<div class="cc-v2-phone">${d.mobile}</div>`
@@ -562,8 +600,8 @@ function renderCallingCard(d, i, locked) {
   const wasPresent = window._callingPresentSet?.has(safeId);
   const attBadge = window._callingPresentSet
     ? (wasPresent
-        ? `<span style="background:#dcfce7;color:#15803d;font-size:.65rem;font-weight:700;padding:.08rem .35rem;border-radius:4px;white-space:nowrap"><i class="fas fa-check"></i> Last: Present</span>`
-        : `<span style="background:#fee2e2;color:#b91c1c;font-size:.65rem;font-weight:700;padding:.08rem .35rem;border-radius:4px;white-space:nowrap"><i class="fas fa-times"></i> Last: Absent</span>`)
+        ? `<span title="Attended last Sunday's class" style="background:#dcfce7;color:#15803d;font-size:.65rem;font-weight:700;padding:.08rem .35rem;border-radius:4px;white-space:nowrap"><i class="fas fa-check"></i> Last: Present</span>`
+        : `<span title="Did not attend last Sunday's class" style="background:#fee2e2;color:#b91c1c;font-size:.65rem;font-weight:700;padding:.08rem .35rem;border-radius:4px;white-space:nowrap"><i class="fas fa-times"></i> Last: Absent</span>`)
     : '';
   const crBadge = `<span style="background:#f1f5f9;color:#475569;font-size:.65rem;font-weight:700;padding:.08rem .35rem;border-radius:4px;white-space:nowrap"><i class="fas fa-dharmachakra" style="font-size:.6rem"></i> ${cr}R</span>`;
 
@@ -572,7 +610,7 @@ function renderCallingCard(d, i, locked) {
     <div class="cc-swipe-bg cc-swipe-bg--wa"><span>WhatsApp</span><i class="fab fa-whatsapp"></i></div>
     <div class="cc-v2-content" onclick="openCallingHistory('${safeId}','${safeName}')">
       <div class="cc-v2-main">
-        <div class="cc-v2-name">${d.name}${nameTags(d)}${birthday}</div>
+        <div class="cc-v2-name"${_st.nameColor ? ` style="color:${_st.nameColor}"` : ''}>${d.name}${nameTags(d)}${birthday}${statusTag}</div>
         <div style="display:flex;gap:.3rem;flex-wrap:wrap;margin-top:.2rem">${crBadge}${attBadge}</div>
         ${phoneRow}
       </div>
