@@ -2363,12 +2363,12 @@ const TAB_VIEWS = {
     { key: 'festival',      label: 'Festival Calling', icon: 'fa-star' },
   ],
   meetings: [
-    { key: 'overdue',   label: 'Overdue',      icon: 'fa-exclamation-circle' },
-    { key: 'scheduled', label: 'Scheduled',    icon: 'fa-calendar-alt' },
+    { key: 'scheduled', label: 'Schedule',     icon: 'fa-calendar-alt' },
+    { key: 'my-log',    label: 'My Log',       icon: 'fa-clipboard-list' },
     { key: 'completed', label: 'Completed',    icon: 'fa-check-circle' },
     { key: 'recent',    label: 'Recently Met', icon: 'fa-history' },
+    { key: 'overdue',   label: 'Overdue',      icon: 'fa-exclamation-circle' },
     { key: 'ptm',       label: 'PTM',          icon: 'fa-users' },
-    { key: 'my-log',    label: 'My Log',       icon: 'fa-clipboard-list' },
   ],
   // Note: "meetings" tab is labelled "Connecting" in the UI.
 };

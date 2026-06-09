@@ -3171,14 +3171,14 @@ async function openPersonalMeetings() {
 
 // ── MEETINGS TAB ─────────────────────────────────────────────
 // State for the Meetings tab. Sub-tab + status-filter + cached data.
-let _meetActiveSubTab = 'overdue';   // overdue | scheduled | completed | recent
+let _meetActiveSubTab = 'scheduled'; // scheduled | my-log | completed | recent | overdue | ptm
 let _meetStatusFilter = 'all';        // all | Most Serious | Serious | ETS | New Devotee | Inactive
 
 function switchMeetingsSubTab(btn, sub) {
   _meetActiveSubTab = sub;
   document.querySelectorAll('.meet-sub-panel').forEach(p => p.classList.add('hidden'));
   document.getElementById('meet-panel-' + sub)?.classList.remove('hidden');
-  const labels = { overdue:'Overdue', scheduled:'Scheduled', completed:'Completed', recent:'Recently Met', ptm:'PTM', 'my-log':'My Log' };
+  const labels = { overdue:'Overdue', scheduled:'Schedule', completed:'Completed', recent:'Recently Met', ptm:'PTM', 'my-log':'My Log' };
   const lbl = document.getElementById('meet-active-label');
   if (lbl) lbl.textContent = labels[sub] || '';
 

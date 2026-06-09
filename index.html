@@ -782,7 +782,7 @@
   <section id="tab-meetings" class="tab-panel meet">
     <header class="meet__head">
       <div>
-        <span class="active-subtab-chip" id="meet-active-label">Overdue</span>
+        <span class="active-subtab-chip" id="meet-active-label">Schedule</span>
       </div>
       <button class="ds-btn" onclick="openScheduleMeetingForm()">
         <i class="fas fa-calendar-plus"></i> Schedule Meeting
@@ -800,10 +800,10 @@
     </div>
 
     <!-- Sub-panels (only one visible at a time via _meetActiveSubTab) -->
-    <div id="meet-panel-overdue"   class="meet-sub-panel">
+    <div id="meet-panel-overdue"   class="meet-sub-panel hidden">
       <div class="loading"><i class="fas fa-spinner"></i> Loading…</div>
     </div>
-    <div id="meet-panel-scheduled" class="meet-sub-panel hidden">
+    <div id="meet-panel-scheduled" class="meet-sub-panel">
       <div class="loading"><i class="fas fa-spinner"></i> Loading…</div>
     </div>
     <div id="meet-panel-completed" class="meet-sub-panel hidden">
