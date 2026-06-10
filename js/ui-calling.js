@@ -1786,9 +1786,9 @@ const _reasonShort = {
   not_interested_now:  'Not Int',
 };
 
-function _csCell(weekEntry) {
+function _csCell(weekEntry, devoteeId, devoteeName) {
   const pencil = weekEntry.wasEdited
-    ? `<span class="ch-edited" title="Edited after submission">✏</span>`
+    ? `<span class="ch-edited" style="cursor:pointer" title="Edited after submission — click to see what changed" onclick="event.stopPropagation();openCallingChangeHistory('${devoteeId}','${devoteeName}')">✏</span>`
     : '';
   if (!weekEntry.cs) {
     return `<div class="ch-cell-inner ch-not-called"><i class="fas fa-circle-notch"></i> Not called</div>`;
@@ -1863,8 +1863,8 @@ async function loadCallingHistory() {
     }).join('');
 
     const bodyRows = devotees.map((d, idx) => {
-      const cells = d.weeks.map(w => `<td class="ch-cell">${_csCell(w)}</td>`).join('');
       const safeName = (d.name || '').replace(/'/g, "\\'");
+      const cells = d.weeks.map(w => `<td class="ch-cell">${_csCell(w, d.id, safeName)}</td>`).join('');
       return `<tr class="chg-row">
         <td class="ch-sticky-sno">${idx + 1}</td>
         <td class="ch-name ch-sticky-name" onclick="openCallingHistory('${d.id}','${safeName}')">${d.name || ''}</td>
@@ -1876,7 +1876,7 @@ async function loadCallingHistory() {
 
     const editLegend = `
       <span class="ch-edited" style="display:inline">✏</span>
-      <span style="font-size:.75rem;color:var(--text-muted)"> = edited after submission</span>
+      <span style="font-size:.75rem;color:var(--text-muted)"> = edited after submission (click ✏ to see before/after)</span>
       &nbsp;&nbsp;
       <span class="ch-sub-dot" style="display:inline"></span>
       <span style="font-size:.75rem;color:var(--text-muted)"> = week submitted</span>`;

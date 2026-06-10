@@ -1043,17 +1043,19 @@ const DB = {
   },
 
   async getCallingStatusChanges(devoteeId) {
-    // Last 8 weeks of change history, newest first
+    // Last 8 weeks of change history, newest first.
+    // Single equality filter only (no composite index needed); the 8-week
+    // cutoff and sort are applied client-side.
     const cutoff = (() => {
       const d = new Date(); d.setDate(d.getDate() - 56);
       return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     })();
     const snap = await fdb.collection('callingStatusChanges')
       .where('devoteeId', '==', devoteeId)
-      .where('weekDate', '>=', cutoff)
       .get();
     return snap.docs
       .map(d => ({ id: d.id, ...d.data(), changedAtISO: tsToISO(d.data().changedAt) }))
+      .filter(r => (r.weekDate || '') >= cutoff)
       .sort((a, b) => (b.changedAtISO || b.changedAtClient || '').localeCompare(a.changedAtISO || a.changedAtClient || ''));
   },
 
