@@ -788,7 +788,10 @@ async function openCallingHistory(devoteeId, devoteeName) {
     const isSuperAdmin = AppState.userRole === 'superAdmin';
     const canCrossCall = (typeof canCrossTeamCalling === 'function') && canCrossTeamCalling();
     const onCallsTab   = AppState._callingSubTab === 'calls' || AppState._callingSubTab === undefined;
-    const canEditCurrentWeek = !!currentWeek && (isSuperAdmin || canCrossCall || (onCallsTab && !_callingLocked));
+    // Team admins viewing their own team via "Team Calling" can also edit —
+    // not just on the "Calls" sub-tab — as long as it's their own team's devotee.
+    const isOwnTeam    = AppState.userRole === 'teamAdmin' && d?.team_name === AppState.userTeam;
+    const canEditCurrentWeek = !!currentWeek && (isSuperAdmin || canCrossCall || ((onCallsTab || isOwnTeam) && !_callingLocked));
 
     // Always show the 4 most recent calling weeks — even if some weeks have
     // no callingStatus record yet. For weeks without data we render a placeholder
