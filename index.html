@@ -412,6 +412,33 @@
   <!-- ──────── TAB 0: DASHBOARD — Leaderboard Home ──────── -->
   <section id="tab-dashboard" class="tab-panel active dash">
 
+    <!-- ── Devotee Support Banner ── -->
+    <div style="background:linear-gradient(135deg,#14532d 0%,#166534 60%,#15803d 100%);border-radius:14px;padding:.85rem 1rem;display:flex;align-items:center;gap:.85rem;margin-bottom:.75rem;box-shadow:0 4px 18px rgba(21,128,61,.35);position:relative;overflow:hidden">
+      <div style="position:absolute;right:-18px;top:-18px;width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,.06)"></div>
+      <div style="position:absolute;right:24px;bottom:-24px;width:60px;height:60px;border-radius:50%;background:rgba(255,255,255,.04)"></div>
+      <div style="flex-shrink:0;width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;color:#fff;font-size:1.3rem;border:2px solid rgba(255,255,255,.25)">
+        <i class="fas fa-headset"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:800;font-size:.9rem;color:#fff;font-family:var(--ff-head);letter-spacing:.02em">🙏 Devotee Support Helpline</div>
+        <div style="font-size:.75rem;color:#bbf7d0;margin-top:.2rem;font-weight:600">HG Rudrani Devi Dasi &nbsp;·&nbsp; 9872831394</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:.4rem;flex-shrink:0;align-items:flex-end">
+        <div style="display:flex;gap:.4rem">
+          <a href="tel:9872831394" style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;background:#fff;color:#15803d;border-radius:50%;text-decoration:none;font-size:.95rem;box-shadow:0 2px 8px rgba(0,0,0,.2)" title="Call now">
+            <i class="fas fa-phone"></i>
+          </a>
+          <a href="https://wa.me/919872831394" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;background:#25d366;color:#fff;border-radius:50%;text-decoration:none;font-size:1.1rem;box-shadow:0 2px 8px rgba(0,0,0,.2)" title="WhatsApp">
+            <i class="fab fa-whatsapp"></i>
+          </a>
+        </div>
+        <button onclick="openSupportModal()" style="background:rgba(255,255,255,.18);color:#fff;border:1.5px solid rgba(255,255,255,.35);border-radius:8px;padding:.3rem .65rem;font-size:.72rem;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:.3rem;letter-spacing:.02em;white-space:nowrap">
+          <i class="fas fa-ticket-alt"></i> Log Issue
+          <span id="support-inbox-badge" class="hidden" style="background:#ef4444;color:#fff;border-radius:50%;width:16px;height:16px;font-size:.6rem;display:inline-flex;align-items:center;justify-content:center;font-weight:800;margin-left:.1rem"></span>
+        </button>
+      </div>
+    </div>
+
     <!-- Top-3 Podium Leaderboard (Mon–Sat only) -->
     <section class="ds-panel" id="home-lb-podium-section">
       <header class="ds-panel__head">
@@ -469,22 +496,6 @@
         </div>
       </div>
     </section>
-
-    <!-- ── Devotee Support Card ── -->
-    <div class="ds-card" style="margin:0 0 var(--s-4);padding:var(--s-3) var(--s-4);display:flex;align-items:center;gap:var(--s-3);border:1.5px solid #bbf7d0;background:linear-gradient(135deg,#f0fdf4 0%,#ecfdf5 100%)">
-      <div style="flex-shrink:0;width:40px;height:40px;border-radius:50%;background:#dcfce7;display:flex;align-items:center;justify-content:center;color:#15803d;font-size:1.15rem">
-        <i class="fas fa-hands-helping"></i>
-      </div>
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:700;font-size:.85rem;color:#166534;font-family:var(--ff-head)">Devotee Support</div>
-        <div style="font-size:.75rem;color:#15803d;margin-top:.1rem">HG Rudrani Devi Dasi &nbsp;·&nbsp; 9872831394</div>
-      </div>
-      <div style="display:flex;gap:.4rem;flex-shrink:0">
-        <a href="tel:9872831394" class="btn btn--xs" style="background:#dcfce7;color:#15803d;border:1px solid #bbf7d0;text-decoration:none;display:flex;align-items:center;gap:.3rem;padding:.3rem .55rem;border-radius:7px;font-size:.75rem"><i class="fas fa-phone"></i></a>
-        <a href="https://wa.me/919872831394" target="_blank" rel="noopener" class="btn btn--xs" style="background:#dcfce7;color:#15803d;border:1px solid #bbf7d0;text-decoration:none;display:flex;align-items:center;gap:.3rem;padding:.3rem .55rem;border-radius:7px;font-size:.75rem"><i class="fab fa-whatsapp"></i></a>
-        <button onclick="openSupportModal()" class="btn btn--xs btn--primary" style="padding:.3rem .65rem;font-size:.75rem;border-radius:7px"><i class="fas fa-ticket-alt"></i> Log Issue</button>
-      </div>
-    </div>
 
     <div class="dash__ornament" aria-hidden="true">·  ·  ❉  ·  ·</div>
 
@@ -1634,7 +1645,7 @@
           </select>
         </div>
       </div>
-      <div style="margin-bottom:.85rem">
+      <div id="meeting-status-wrap" style="margin-bottom:.85rem">
         <label style="display:block;font-size:.83rem;font-weight:600;margin-bottom:.3rem">Status</label>
         <select id="meeting-status" style="width:100%;padding:.42rem .55rem;border:1px solid var(--color-border);border-radius:var(--radius-xs);font-size:.9rem">
           <option value="scheduled">Scheduled</option>
@@ -1647,7 +1658,7 @@
         <label style="display:block;font-size:.83rem;font-weight:600;margin-bottom:.3rem">Notes</label>
         <textarea id="meeting-notes" rows="3" style="width:100%;padding:.42rem .55rem;border:1px solid var(--color-border);border-radius:var(--radius-xs);font-size:.9rem;resize:vertical" placeholder="Outcome, key points discussed…"></textarea>
       </div>
-      <div class="meet-remarks-wrap" style="margin-bottom:.5rem">
+      <div id="meeting-remarks-wrap" class="meet-remarks-wrap" style="margin-bottom:.5rem">
         <label for="meeting-authority-remarks" style="display:block;font-size:.83rem;font-weight:600;margin-bottom:.3rem">
           <i class="fas fa-feather-alt" style="color:#a16207;margin-right:.25rem"></i> Authority Remarks
           <span style="font-weight:400;font-size:.72rem;color:var(--text-muted);margin-left:.25rem">(senior Prabhuji's guidance / minutes of meeting)</span>

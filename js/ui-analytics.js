@@ -68,6 +68,7 @@ async function loadDashboard() {
     const data = await _dashFetchData(ctx);
     _dashCache = { key, data };
     safeRender(data, ctx);
+    if (typeof loadSupportBadge === 'function') loadSupportBadge();
   } catch (e) {
     console.error('loadDashboard fetch', e);
     el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load — <button onclick="loadDashboard()" style="text-decoration:underline;background:none;border:none;cursor:pointer;color:inherit">Retry</button></p></div>';
@@ -364,10 +365,8 @@ function loadReports() {
   if (id === 'attendance-detail') loadYearlySheet();
   if (id === 'late-comers')       loadLateComersReport();
   if (id === 'serious-analysis')  loadSeriousAnalysis();
-  if (id === 'team-leaderboard')  loadTeamLeaderboard();
   if (id === 'trends')            loadTrends();
   if (id === 'newcomers-report')  loadNewComersReport();
-  if (id === 'att-accuracy')      loadAttAccuracyReport();
 }
 
 // Reports → Attendance Reports → New Comers
@@ -620,48 +619,6 @@ async function loadSeriousAnalysis() {
   } catch (_) { c.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>'; }
 }
 
-async function loadTeamLeaderboard() {
-  const c = document.getElementById('team-leaderboard-content');
-  c.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i></div>';
-  try {
-    const callingDate = await resolveCallingDate(getWeekDate());
-    const [data, targetCfg] = await Promise.all([
-      DB.getTeamsReport(callingDate, AppState.currentReportSessionId || AppState.currentSessionId),
-      DB.getAttendanceTargets().catch(() => ({ type: 'class', teams: {} })),
-    ]);
-    // Compute configTarget and pct for every row first, then sort by pct
-    const ranked = data.map(row => {
-      const configTarget = (targetCfg.teams && targetCfg.teams[row.team] > 0)
-        ? targetCfg.teams[row.team]
-        : (targetCfg.global > 0 ? targetCfg.global : row.total);
-      const pct = configTarget > 0 ? Math.round(row.actualPresent / configTarget * 100) : 0;
-      return { ...row, configTarget, pct };
-    });
-    ranked.sort((a, b) => b.pct - a.pct || b.actualPresent - a.actualPresent);
-
-    c.innerHTML = `<div class="table-scroll"><table class="report-table leaderboard-table">
-      <thead><tr><th>Rank</th><th>Team</th><th>Total</th><th>Calling List</th><th>Target</th><th>Present</th><th>Achievement</th></tr></thead>
-      <tbody>${ranked.map((row, i) => {
-        const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${i+1}`;
-        const cls   = i===0?'rank-1':i===1?'rank-2':i===2?'rank-3':'';
-        const col   = row.pct>=100?'var(--success)':row.pct>=70?'var(--warning)':'var(--danger)';
-        return `<tr>
-          <td class="leaderboard-rank ${cls}">${medal}</td>
-          <td style="font-weight:700">${row.team}</td>
-          <td style="text-align:center">${row.total}</td>
-          <td style="text-align:center">${row.callingList}</td>
-          <td style="text-align:center">${row.configTarget}</td>
-          <td style="text-align:center;font-weight:700;color:var(--success)">${row.actualPresent}</td>
-          <td><div style="display:flex;align-items:center;gap:.5rem">
-            <div class="pct-bar-wrap"><div class="pct-bar" style="width:${Math.min(row.pct,100)}%"></div></div>
-            <span style="font-size:.82rem;font-weight:700;color:${col}">${row.pct}%</span>
-          </div></td>
-        </tr>`;
-      }).join('')}
-      </tbody></table></div>`;
-  } catch (_) { c.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>'; }
-}
-
 async function loadTrends() {
   try {
     // Trend granularity: weekly always; range is implicit from data window.
@@ -714,30 +671,34 @@ let _careRawCache = null;  // { key, absentWeek, absent2Weeks, newcomers, inacti
 function _bustCareCache() { _careRawCache = null; }
 window._bustCareCache = _bustCareCache;
 
+let _careInFlight = false;
 async function loadCareData() {
+  if (_careInFlight) return;
   const sessionDate = getFilterSessionId() || '';
   const key = sessionDate;
 
-  if (!_careRawCache || _careRawCache.key !== key) {
-    try {
-      const [absentResult, newComers, inactive, saidComingResult] = await Promise.all([
-        DB.getCareAbsent(sessionDate || undefined).catch(() => ({ absentThisWeek: [], absentPast2Weeks: [] })),
-        DB.getNewComersForSession(sessionDate).catch(() => []),
-        DB.getCareInactive().catch(() => []),
-        _careFetchSaidComing(sessionDate).catch(() => ({ list: [], weekDate: '' })),
-      ]);
-      _careRawCache = {
-        key,
-        absentWeek:   absentResult.absentThisWeek || [],
-        absent2Weeks: absentResult.absentPast2Weeks || [],
-        newComers:    newComers || [],
-        inactive:     inactive || [],
-        saidComing:   saidComingResult,
-      };
-    } catch (e) {
-      console.error('loadCareData fetch', e);
-      return;
-    }
+  if (_careRawCache && _careRawCache.key === key) { _careRender(); return; }
+
+  _careInFlight = true;
+  try {
+    const [absentResult, newComers, inactive, saidComingResult] = await Promise.all([
+      DB.getCareAbsent(sessionDate || undefined).catch(() => ({ absentThisWeek: [], absentPast2Weeks: [] })),
+      DB.getNewComersForSession(sessionDate).catch(() => []),
+      DB.getCareInactive().catch(() => []),
+      _careFetchSaidComing(sessionDate).catch(() => ({ list: [], weekDate: '' })),
+    ]);
+    _careRawCache = {
+      key,
+      absentWeek:   absentResult.absentThisWeek || [],
+      absent2Weeks: absentResult.absentPast2Weeks || [],
+      newComers:    newComers || [],
+      inactive:     inactive || [],
+      saidComing:   saidComingResult,
+    };
+  } catch (e) {
+    console.error('loadCareData fetch', e);
+  } finally {
+    _careInFlight = false;
   }
 
   _careRender();
@@ -783,9 +744,11 @@ async function _careFetchSaidComing(masterSessionDate) {
     if (sessSnap.empty) return { list: [], weekDate: '' };
     sessionDate = sessSnap.docs[0].data().sessionDate;
   }
-  const callingDate = await resolveCallingDate(sessionDate);
+  const [callingDate, all] = await Promise.all([
+    resolveCallingDate(sessionDate),
+    DevoteeCache.all(),
+  ]);
   const { list } = await DB.getYesAbsentList(callingDate, sessionDate);
-  const all = await DevoteeCache.all();
   const byId = Object.fromEntries(all.map(d => [d.id, d]));
   const enriched = (list || []).map(item => {
     const d = byId[item.id] || {};
@@ -1737,11 +1700,6 @@ async function loadYearlySheet() {
     wrap.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
   }
 }
-
-// ══ ATTENDANCE TAB — ACCURACY REPORT ════════════════════════════════════════
-// Shows: per-team and per-caller breakdown of who said Yes vs who actually came.
-// Logic mirrors _loadAccuracyReport() in ui-calling.js but lives in the
-// Attendance tab so users don't need to switch tabs to check calling accuracy.
 
 async function loadAttAccuracyReport() {
   const el = document.getElementById('att-accuracy-content');
@@ -3563,7 +3521,7 @@ function _showMyLogOptions(devoteeId, devoteeName, teamName) {
         <div style="font-weight:700;font-size:.95rem;color:#0d2d5a">${devoteeName}</div>
         <div style="font-size:.75rem;color:#94a3b8;margin-top:.1rem">What would you like to do?</div>
       </div>
-      <button onclick="document.getElementById('ml-option-overlay').remove();openDevoteeProfileModal('${devoteeId}')"
+      <button onclick="document.getElementById('ml-option-overlay').remove();openProfileModal('${devoteeId}')"
         style="width:100%;display:flex;align-items:center;gap:.85rem;padding:.85rem 1.1rem;border:none;background:transparent;cursor:pointer;font-size:.88rem;color:#0d2d5a;font-weight:600;border-bottom:1px solid #f1f5f9;text-align:left"
         onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
         <div style="width:36px;height:36px;border-radius:50%;background:#f0fdf4;display:flex;align-items:center;justify-content:center;flex-shrink:0">
@@ -3698,6 +3656,9 @@ function _renderMeetingsTabContent() {
   const recent    = _pmRenderState?.recent || [];
   const completed = (_meetingsCache || []).filter(m => m.status === 'completed')
                       .sort((a, b) => (b.completedDate || b.scheduledDate || '').localeCompare(a.completedDate || a.scheduledDate || ''));
+
+  // my-log and ptm load their own data independently — chips not applicable.
+  if (_meetActiveSubTab === 'my-log' || _meetActiveSubTab === 'ptm') return;
 
   // Determine which list the chip filter applies to (depends on active sub-tab).
   const activeList =
@@ -4246,6 +4207,10 @@ function openScheduleMeetingForm(meetingId = null, devoteeId = null) {
     ? '<i class="fas fa-edit"></i> Edit Meeting'
     : '<i class="fas fa-calendar-plus"></i> Schedule Meeting';
   document.getElementById('meeting-delete-btn').classList.toggle('hidden', !meetingId);
+  // Status (Completed/Missed/Cancelled) and Authority Remarks only make sense
+  // when editing an existing meeting — a brand-new meeting hasn't happened yet.
+  document.getElementById('meeting-status-wrap').classList.toggle('hidden', !meetingId);
+  document.getElementById('meeting-remarks-wrap').classList.toggle('hidden', !meetingId);
 
   if (meetingId && _meetingsCache) {
     const m = _meetingsCache.find(x => x.id === meetingId);

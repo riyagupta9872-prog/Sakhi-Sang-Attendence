@@ -383,23 +383,24 @@ async function openAttendanceStatList(type) {
 
   try {
     const sessionId = AppState.currentSessionId;
-    const [atSnap, allDevotees] = await Promise.all([
+    // All 4 initial fetches in parallel — reduces from 5+ round trips to 2.
+    const [atSnap, allDevotees, sessDoc, cfg] = await Promise.all([
       fdb.collection('attendanceRecords').where('sessionId', '==', sessionId).get(),
       DevoteeCache.all(),
+      fdb.collection('sessions').doc(sessionId).get(),
+      DB.getCallingWeekConfig(),
     ]);
     const devMap = Object.fromEntries(allDevotees.map(d => [d.id, d]));
 
-    // Also fetch calling status to know who said Yes (for color coding)
-    const sessSnap2 = await fdb.collection('sessions').doc(sessionId).get();
-    const sessionDate2 = sessSnap2.data()?.sessionDate || '';
-    const cfg2 = await DB.getCallingWeekConfig();
-    const weekDate2 = (cfg2?.sessionDate === sessionDate2) ? (cfg2.callingDate || sessionDate2) : (() => {
-      const d2 = new Date(sessionDate2 + 'T00:00:00'); d2.setDate(d2.getDate()-1);
-      return `${d2.getFullYear()}-${String(d2.getMonth()+1).padStart(2,'0')}-${String(d2.getDate()).padStart(2,'0')}`;
+    // Compute weekDate once — reused by both the color-coding map and the 'confirmed' list.
+    const sessionDate = sessDoc.data()?.sessionDate || '';
+    const weekDate = (cfg?.sessionDate === sessionDate && cfg?.callingDate) ? cfg.callingDate : (() => {
+      const d = new Date(sessionDate + 'T00:00:00'); d.setDate(d.getDate()-1);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     })();
-    const csSnap2 = await fdb.collection('callingStatus').where('weekDate','==',weekDate2).get();
+    const csSnap = await fdb.collection('callingStatus').where('weekDate', '==', weekDate).get();
     const callingStatusMap = {};
-    csSnap2.docs.forEach(d => { callingStatusMap[d.data().devoteeId] = d.data().comingStatus; });
+    csSnap.docs.forEach(d => { callingStatusMap[d.data().devoteeId] = d.data().comingStatus; });
 
     // Helper to safely parse Firestore Timestamp or ISO string
     const toDate = ts => {
@@ -428,19 +429,13 @@ async function openAttendanceStatList(type) {
         })
         .sort((a, b) => (a.teamName||'').localeCompare(b.teamName||'') || a.name.localeCompare(b.name));
     } else {
-      // confirmed — fetch from callingStatus
-      const sessSnap = await fdb.collection('sessions').doc(sessionId).get();
-      const sessionDate = sessSnap.data()?.sessionDate || '';
-      const cfg = await DB.getCallingWeekConfig();
-      const weekDate = (cfg?.sessionDate === sessionDate) ? (cfg.callingDate || sessionDate) : (() => {
-        const d = new Date(sessionDate + 'T00:00:00'); d.setDate(d.getDate()-1);
-        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-      })();
-      const csSnap = await fdb.collection('callingStatus').where('weekDate','==',weekDate).where('comingStatus','==','Yes').get();
-      list = csSnap.docs.map(d => {
-        const dev = devMap[d.data().devoteeId] || {};
-        return { id: d.data().devoteeId, name: dev.name || '—', mobile: dev.mobile || '', teamName: dev.teamName || '' };
-      }).sort((a,b) => (a.teamName||'').localeCompare(b.teamName||'') || a.name.localeCompare(b.name));
+      // confirmed — reuse the already-fetched csSnap (no extra round trip needed)
+      list = csSnap.docs
+        .filter(d => d.data().comingStatus === 'Yes')
+        .map(d => {
+          const dev = devMap[d.data().devoteeId] || {};
+          return { id: d.data().devoteeId, name: dev.name || '—', mobile: dev.mobile || '', teamName: dev.teamName || '' };
+        }).sort((a,b) => (a.teamName||'').localeCompare(b.teamName||'') || a.name.localeCompare(b.name));
     }
 
     const HDR  = '#dbeafe';

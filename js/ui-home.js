@@ -792,6 +792,19 @@ async function loadAttendanceReport() {
 // ── DEVOTEE SUPPORT ───────────────────────────────────────────────────────────
 let _suppImageData = null, _suppVoiceData = null, _suppRecorder = null, _suppRecording = false;
 
+async function loadSupportBadge() {
+  if (!isSuperAdmin()) return;
+  try {
+    const reqs = await DB.getSupportRequests();
+    const openCount = reqs.filter(r => r.status === 'open').length;
+    const badge = document.getElementById('support-inbox-badge');
+    if (!badge) return;
+    if (openCount > 0) { badge.textContent = openCount > 9 ? '9+' : openCount; badge.classList.remove('hidden'); }
+    else { badge.classList.add('hidden'); }
+  } catch {}
+}
+window.loadSupportBadge = loadSupportBadge;
+
 function openSupportModal() {
   _suppImageData = null; _suppVoiceData = null; _suppRecording = false;
   const msg = document.getElementById('support-message');
@@ -889,16 +902,7 @@ async function _loadSupportRequests() {
 window._loadSupportRequests = _loadSupportRequests;
 
 async function markSupportResolved(id) {
-  try { await DB.markSupportResolved(id); showToast('Marked as resolved!', 'success'); _loadSupportRequests(); }
+  try { await DB.markSupportResolved(id); showToast('Marked as resolved!', 'success'); _loadSupportRequests(); loadSupportBadge(); }
   catch (e) { showToast('Failed: ' + e.message, 'error'); }
 }
 window.markSupportResolved = markSupportResolved;
-
-// ── CALLING REPORT → Calling tab → Reports sub-tab ────
-function openCallingReport() {
-  switchTab('calling', document.querySelector('[data-tab="calling"]'));
-  setTimeout(() => {
-    const reportsBtn = document.querySelector('#tab-calling .att-sub-tab:nth-child(2)');
-    if (reportsBtn && typeof switchCallingSubTab === 'function') switchCallingSubTab(reportsBtn, 'reports');
-  }, 100);
-}

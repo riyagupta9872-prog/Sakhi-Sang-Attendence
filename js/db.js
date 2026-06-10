@@ -1495,11 +1495,14 @@ const DB = {
     const sessions = sSnap.docs.map(d => ({ id: d.id }));
     if (sessions.length < 2) return { absentThisWeek: [], absentPast2Weeks: [] };
     const [latest, ...prev] = sessions;
-    const raw = await DevoteeCache.all();
     const allIds = sessions.map(s => s.id);
-    const attSnaps = await Promise.all(allIds.map(sid => fdb.collection('attendanceRecords').where('sessionId', '==', sid).get()));
+    // Single 'in' query instead of one query per session — reduces 5 round trips to 1.
+    const [raw, attSnap] = await Promise.all([
+      DevoteeCache.all(),
+      fdb.collection('attendanceRecords').where('sessionId', 'in', allIds).get(),
+    ]);
     const attMap = {};
-    attSnaps.forEach((snap, i) => snap.docs.forEach(d => { const did = d.data().devoteeId; if (!attMap[did]) attMap[did] = new Set(); attMap[did].add(allIds[i]); }));
+    attSnap.docs.forEach(d => { const did = d.data().devoteeId; const sid = d.data().sessionId; if (!attMap[did]) attMap[did] = new Set(); attMap[did].add(sid); });
     const absentThisWeek = [], absentPast2Weeks = [];
     raw.forEach(d => {
       const att = attMap[d.id] || new Set();
