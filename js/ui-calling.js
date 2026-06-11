@@ -3,6 +3,10 @@
 let _callingActiveTab = 'list';
 let _callingLocked = false;
 
+// Last-rendered Submission Report rows/weeks — used by the "Send Reminders" modal
+let _lateReportRows = [];
+let _lateReportWeeks = [];
+
 // Cache for the personal calling list — keyed by calling weekDate.
 // TTL matches team calling (3 min). Busted on any status save or submit.
 let _callStatusCache = null;
@@ -425,6 +429,14 @@ function _renderCallingSubmitBar(week, existing) {
 }
 
 async function doSubmitCallingWeek(week) {
+  const devotees = AppState.callingData || [];
+  const total = devotees.length;
+  const called = devotees.filter(d => d.coming_status || d.calling_reason || d.calling_notes).length;
+  if (total > 0 && called < total) {
+    const pct = Math.round((called / total) * 100);
+    alert(`Calling abhi complete nahi hai — sirf ${called}/${total} devotees ko call kiya gaya hai (${pct}%).\n\nSubmit karne se pehle baaki sabhi devotees ko call karke unka status bharein. 100% complete hone ke baad hi calling submit ho sakti hai.`);
+    return;
+  }
   try {
     await DB.submitCallingWeek(week, AppState.userId, AppState.userName, AppState.userTeam);
     showToast('Calling submitted! Hare Krishna 🙏', 'success');
@@ -1406,13 +1418,13 @@ async function _loadCallingSummary(week, el) {
       </tr></thead>
       <tbody>
         ${bodyRows}
-        <tr style="background:#0d2d5a;color:#fff;font-weight:700;font-size:.83rem;pointer-events:none;user-select:none">
-          <td>Grand Total</td>
-          <td style="text-align:center">${gTotal}</td>
-          <td style="text-align:center">${gCalled}</td>
-          <td style="text-align:center">${gNC}</td>
-          <td style="text-align:center">${gYes}</td>
-          <td style="text-align:center">${gNI}</td>
+        <tr style="background:#0d2d5a;font-weight:700;font-size:.83rem;pointer-events:none;user-select:none">
+          <td style="color:#fff">Grand Total</td>
+          <td style="text-align:center;color:#fff">${gTotal}</td>
+          <td style="text-align:center;color:#fff">${gCalled}</td>
+          <td style="text-align:center;color:#fff">${gNC}</td>
+          <td style="text-align:center;color:#fff">${gYes}</td>
+          <td style="text-align:center;color:#fff">${gNI}</td>
         </tr>
       </tbody>
     </table></div>`;
@@ -1490,11 +1502,11 @@ async function _loadAccuracyReport(week, el) {
       </tr></thead>
       <tbody>
         ${bodyRows}
-        <tr style="background:#0d2d5a;color:#fff;font-weight:700;font-size:.83rem">
-          <td>Grand Total</td>
-          <td style="text-align:center">${grandYes}</td>
-          <td style="text-align:center">${grandYes - grandAbsent}</td>
-          <td style="text-align:center">${grandAbsentBtn}</td>
+        <tr style="background:#0d2d5a;font-weight:700;font-size:.83rem">
+          <td style="color:#fff">Grand Total</td>
+          <td style="text-align:center;color:#fff">${grandYes}</td>
+          <td style="text-align:center;color:#fff">${grandYes - grandAbsent}</td>
+          <td style="text-align:center;color:#fff">${grandAbsentBtn}</td>
         </tr>
       </tbody>
     </table>
@@ -1688,6 +1700,11 @@ async function loadLateReports() {
       return a.name.localeCompare(b.name);
     });
 
+    // Stash for the "Send Reminders" modal — needs the current week's
+    // not-yet-submitted coordinators.
+    _lateReportRows = rows;
+    _lateReportWeeks = weeks;
+
     const weekHeaders = weeks.map(w => {
       const dt = new Date(w + 'T00:00:00');
       return `<th class="sr-wk-hdr">
@@ -1761,6 +1778,102 @@ function saveLateRemark(statusId, remarks) {
     try { await DB.saveCallingRemarks(statusId, remarks); } catch (_) {}
   }, 800);
 }
+
+// ── 1-CLICK SUBMISSION REMINDERS ─────────────────────────────────────────────
+// Lists coordinators/facilitators who haven't submitted calling for the
+// CURRENT week (the last column of the Submission Report) and lets the admin
+// send a pre-filled WhatsApp reminder via wa.me, using the mobile number
+// saved on the recipient's user profile (User Management → Mobile field).
+//
+// Two reminder types:
+//  - A team COORDINATOR (isAdmin) who hasn't submitted → reminded directly.
+//  - A FACILITATOR (non-admin) who hasn't submitted → their team's
+//    coordinator is reminded instead (it's the coordinator's job to chase
+//    their own facilitators), listing all pending facilitator names.
+async function openReminderModal() {
+  const body = document.getElementById('reminder-modal-body');
+  if (!_lateReportWeeks.length) {
+    body.innerHTML = '<div class="empty-state"><i class="fas fa-info-circle"></i><p>Open the Submission Report first (it loads automatically on this tab).</p></div>';
+    openModal('reminder-modal');
+    return;
+  }
+
+  const curWeek = _lateReportWeeks[_lateReportWeeks.length - 1];
+  const weekLabel = new Date(curWeek + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' });
+  const pending = _lateReportRows.filter(r => r.cells[r.cells.length - 1].state === 'none');
+
+  if (!pending.length) {
+    body.innerHTML = `<div class="empty-state"><i class="fas fa-check-circle" style="color:#16a34a"></i><p>Everyone has submitted calling for ${weekLabel}!</p></div>`;
+    openModal('reminder-modal');
+    return;
+  }
+
+  body.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i> Loading…</div>';
+  openModal('reminder-modal');
+
+  // Look up each user's saved mobile number from users/{uid}.mobile
+  const mobileByName = {};
+  try {
+    const usersSnap = await fdb.collection('users').get();
+    usersSnap.docs.forEach(d => {
+      const u = d.data();
+      if (u.name && u.mobile) mobileByName[u.name] = u.mobile;
+    });
+  } catch (_) {}
+
+  const waBtn = (digits, message) => digits.length >= 10
+    ? `<a class="btn btn-primary" style="padding:.3rem .7rem;font-size:.78rem;background:#25D366;border-color:#25D366" href="https://wa.me/91${digits.slice(-10)}?text=${encodeURIComponent(message)}" target="_blank" rel="noopener"><i class="fab fa-whatsapp"></i> Remind</a>`
+    : `<span style="font-size:.7rem;color:#94a3b8;text-align:right"><i class="fas fa-mobile-alt"></i> No mobile saved<br>(add it in User Management)</span>`;
+
+  // ── Coordinators who haven't submitted their own calling ──
+  const pendingCoordinators = pending.filter(r => r.isAdmin);
+  const coordRowsHtml = pendingCoordinators.map(r => {
+    const digits = (mobileByName[r.name] || '').replace(/\D/g, '');
+    const message = `Hare Krishna ${r.name} mataji 🙏\n\nAapne abhi tak ${weekLabel} ke calling ka status submit nahi kiya hai. Kripya jaldi se jaldi sabhi devotees ko call karke status bharein aur calling submit karein.\n\nDhanyawad! 🙏`;
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.5rem .25rem;border-bottom:1px solid #e2e8f0">
+      <div>
+        <div style="font-weight:600;font-size:.88rem">${r.name}</div>
+        <div style="font-size:.74rem;color:#64748b;margin-top:.1rem">${teamBadge(r.team)}</div>
+      </div>
+      ${waBtn(digits, message)}
+    </div>`;
+  }).join('');
+
+  // ── Facilitators who haven't submitted → remind their team coordinator ──
+  const facilitatorsByTeam = {};
+  pending.filter(r => !r.isAdmin).forEach(r => {
+    (facilitatorsByTeam[r.team] = facilitatorsByTeam[r.team] || []).push(r.name);
+  });
+  const teamRowsHtml = Object.entries(facilitatorsByTeam).map(([team, names]) => {
+    const adminRow = _lateReportRows.find(r => r.team === team && r.isAdmin);
+    const adminName = adminRow ? adminRow.name : '';
+    const digits = (mobileByName[adminName] || '').replace(/\D/g, '');
+    const list = names.map(n => `- ${n} mataji`).join('\n');
+    const message = adminName
+      ? `Hare Krishna ${adminName} mataji 🙏\n\nAapki ${team} team ke in facilitator(s) ne abhi tak ${weekLabel} ke calling ka status submit nahi kiya hai:\n${list}\n\nKripya inse contact karke pata karein ki kya wajah hai, aur jaldi se jaldi calling status submit karwayein. Apni team se yeh kaam karwana coordinator ki responsibility hai.\n\nDhanyawad! 🙏`
+      : '';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.5rem .25rem;border-bottom:1px solid #e2e8f0">
+      <div>
+        <div style="font-weight:600;font-size:.88rem">${adminName || '(No coordinator found)'} <span style="font-weight:400;color:#64748b">— ${teamBadge(team)}</span></div>
+        <div style="font-size:.74rem;color:#64748b;margin-top:.1rem">Pending: ${names.join(', ')}</div>
+      </div>
+      ${adminName ? waBtn(digits, message) : ''}
+    </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    ${pendingCoordinators.length ? `
+    <div style="font-size:.8rem;color:#64748b;margin-bottom:.3rem">
+      <strong>${pendingCoordinators.length}</strong> coordinator(s) haven't submitted calling for <strong>${weekLabel}</strong> yet:
+    </div>
+    ${coordRowsHtml}` : ''}
+    ${teamRowsHtml ? `
+    <div style="font-size:.8rem;color:#64748b;margin:${pendingCoordinators.length ? '1rem' : '0'} 0 .3rem">
+      Teams with facilitator(s) pending — remind their coordinator:
+    </div>
+    ${teamRowsHtml}` : ''}`;
+}
+window.openReminderModal = openReminderModal;
 
 // ── Calling History tab — 4-week grid ────────────────────────────────────────
 // Shows every devotee's calling status for the last 4 weeks in a scrollable grid.
@@ -2193,6 +2306,18 @@ window.addEventListener('popstate', function _tcPopHandler(e) {
 });
 async function _tcSubmitForCaller() {
   if (!_tcSelectedCaller || !_tcData) return;
+  const { allDevotees } = _tcData;
+  const list = allDevotees.filter(d =>
+    (d.team_name || 'Unknown') === _tcSelectedTeam &&
+    (d.calling_by || '— Unassigned —') === _tcSelectedCaller
+  );
+  const total = list.length;
+  const called = list.filter(d => d.coming_status || d.calling_reason || d.calling_notes).length;
+  if (total > 0 && called < total) {
+    const pct = Math.round((called / total) * 100);
+    alert(`${_tcSelectedCaller} ne abhi sirf ${called}/${total} devotees ko call kiya hai (${pct}%).\n\nSubmit karne se pehle ${_tcSelectedCaller} ko baaki sabhi devotees call karke status bharna hoga. 100% complete hone ke baad hi calling submit ho sakti hai.`);
+    return;
+  }
   if (!confirm(`Submit calling list on behalf of "${_tcSelectedCaller}" for ${_tcData.weekDate}?`)) return;
   try {
     // Use a deterministic docId scoped to the caller so super-admin submitting
@@ -2235,7 +2360,7 @@ async function loadSaidComingTab() {
     const team = (typeof getFilterTeam === 'function') ? getFilterTeam() : '';
     const raw  = _careRawCache.saidComing?.list || [];
     const list = team ? raw.filter(d => (d.team_name || d.teamName) === team) : raw;
-    _renderCorrelationTab(el, list, '😕 Said Coming — Didn\'t Come', '#dc2626', 'Confirmed on call but absent on session');
+    _renderCorrelationTab(el, list, '😕 Said Coming — Didn\'t Come', '#dc2626', 'Confirmed on call but absent on session', true);
     return;
   }
 
@@ -2243,7 +2368,7 @@ async function loadSaidComingTab() {
   try {
     const result = await _careFetchSaidComing(sessionDate);
     const list = result?.list || [];
-    _renderCorrelationTab(el, list, '😕 Said Coming — Didn\'t Come', '#dc2626', 'Confirmed on call but absent on session');
+    _renderCorrelationTab(el, list, '😕 Said Coming — Didn\'t Come', '#dc2626', 'Confirmed on call but absent on session', true);
   } catch (e) {
     el.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';
     console.error('loadSaidComingTab', e);
@@ -2277,7 +2402,7 @@ async function loadNotComingPresentTab() {
 }
 window.loadNotComingPresentTab = loadNotComingPresentTab;
 
-function _renderCorrelationTab(el, devotees, title, accentColor, subtitle) {
+function _renderCorrelationTab(el, devotees, title, accentColor, subtitle, shareable) {
   if (!devotees.length) {
     el.innerHTML = `<div class="empty-state"><i class="fas fa-check-circle" style="color:#16a34a"></i><p>No devotees in this category</p></div>`;
     return;
@@ -2301,23 +2426,70 @@ function _renderCorrelationTab(el, devotees, title, accentColor, subtitle) {
         <td style="padding:.38rem .55rem;border:1px solid #d1d5db;text-align:center;font-weight:800;color:${accentColor};font-size:1rem">${list.length}</td>
       </tr>`).join('');
 
+  const reportId = '_corrReport_' + Math.random().toString(36).slice(2, 9);
+
   el.innerHTML = `
-    <div style="margin-bottom:.75rem">
-      <div style="font-size:1rem;font-weight:700;color:${accentColor}">${title}</div>
-      <div style="font-size:.78rem;color:#64748b;margin-top:.2rem">${subtitle} · <strong>${devotees.length}</strong> total</div>
-    </div>
-    <div style="margin-bottom:1rem">
-      <table style="width:100%;border-collapse:collapse;border:2px solid #000;font-size:.85rem;max-width:400px">
+    <div id="${reportId}" style="background:#fff;padding:.75rem;display:inline-block;max-width:100%;box-sizing:border-box">
+      <div style="margin-bottom:.75rem">
+        <div style="font-size:1rem;font-weight:700;color:${accentColor}">${title}</div>
+        <div style="font-size:.78rem;color:#64748b;margin-top:.2rem">${subtitle} · <strong>${devotees.length}</strong> total</div>
+      </div>
+      <table style="width:400px;max-width:100%;border-collapse:collapse;border:2px solid #000;font-size:.85rem">
         <thead><tr>
           <th ${TH}>Team</th>
           <th ${TH} style="text-align:center">Count</th>
         </tr></thead>
         <tbody>${summaryRows}</tbody>
       </table>
-      <div style="font-size:.72rem;color:#94a3b8;margin-top:.4rem">Tap a team row to see the devotee list</div>
-    </div>`;
+    </div>
+    <div style="margin-bottom:1rem"></div>
+    ${shareable ? `
+    <div style="margin-bottom:.75rem">
+      <button class="btn btn-secondary" style="font-size:.8rem" onclick="_shareCorrelationImage('${reportId}', '${title.replace(/'/g,"\\'").replace(/[^\x00-\x7F]/g,'')}')">
+        <i class="fas fa-share-alt"></i> Share Report as Image
+      </button>
+    </div>` : ''}
+    <div style="font-size:.72rem;color:#94a3b8;margin-top:.4rem">Tap a team row to see the devotee list</div>`;
 }
 window._renderCorrelationTab = _renderCorrelationTab;
+
+// Render a report block to a PNG image and share it via the device's native
+// share sheet (WhatsApp shows up there on mobile). Falls back to downloading
+// the image if Web Share with files isn't supported (e.g. desktop browsers).
+async function _shareCorrelationImage(reportId, title) {
+  const node = document.getElementById(reportId);
+  if (!node) return;
+  if (typeof html2canvas !== 'function') {
+    showToast('Image export not available — please update the app', 'error');
+    return;
+  }
+  showToast('Generating image…');
+  try {
+    const canvas = await html2canvas(node, { backgroundColor: '#ffffff', scale: 2 });
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) { showToast('Failed to generate image', 'error'); return; }
+    const fileName = (title || 'report').trim().replace(/\s+/g, '_') + '.png';
+    const file = new File([blob], fileName, { type: 'image/png' });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: title || 'Report' });
+      return;
+    }
+
+    // Fallback — download the image so it can be attached manually in WhatsApp
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fileName;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Image downloaded — attach it in WhatsApp', 'success');
+  } catch (e) {
+    if (e?.name === 'AbortError') return; // user cancelled the share sheet
+    console.error('_shareCorrelationImage', e);
+    showToast('Failed to generate image', 'error');
+  }
+}
+window._shareCorrelationImage = _shareCorrelationImage;
 
 // Stored per-team lists for the drilldown modal
 function _openCorrelationList(list, teamName) {

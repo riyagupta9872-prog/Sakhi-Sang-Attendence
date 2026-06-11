@@ -1070,6 +1070,7 @@ function openUserAction(uid) {
   if (av) av.textContent = (typeof initials === 'function') ? initials(u.name || u.email) : (u.name || u.email || 'U').charAt(0).toUpperCase();
   document.getElementById('ua-user-id').value              = uid;
   document.getElementById('ua-position').value             = u.position || '';
+  document.getElementById('ua-mobile').value               = u.mobile   || '';
   document.getElementById('ua-team').value                 = u.teamName || '';
   document.getElementById('ua-role').value                 = u.role     || 'serviceDevotee';
   document.getElementById('ua-att-seva').checked           = !!u.isAttSevaDev;
@@ -1157,6 +1158,7 @@ function _uaRefreshSummary() {
 async function doSaveUserAction() {
   const uid               = document.getElementById('ua-user-id').value;
   const position          = document.getElementById('ua-position').value.trim() || null;
+  const mobile            = document.getElementById('ua-mobile').value.trim() || null;
   const teamName          = document.getElementById('ua-team').value || null;
   const role              = document.getElementById('ua-role').value;
   const isAttSevaDev          = document.getElementById('ua-att-seva').checked;
@@ -1167,14 +1169,14 @@ async function doSaveUserAction() {
   if (!uid) return;
   try {
     await fdb.collection('users').doc(uid).update({
-      position, teamName, role,
+      position, mobile, teamName, role,
       isAttSevaDev, canBackDateAttendance, canAllTeamCalling, canAllTeamReports, canManageAllTeams,
       updatedAt: TS(),
     });
     // reflect in local cache
     const u = _umUsers.find(x => x.uid === uid);
     if (u) {
-      u.position = position; u.teamName = teamName; u.role = role;
+      u.position = position; u.mobile = mobile; u.teamName = teamName; u.role = role;
       u.isAttSevaDev = isAttSevaDev;
       u.canBackDateAttendance = canBackDateAttendance;
       u.canAllTeamCalling = canAllTeamCalling;

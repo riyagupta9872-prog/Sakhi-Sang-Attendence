@@ -1,7 +1,7 @@
 ﻿/* â•â• SERVICE WORKER â€“ Sakhi Sang â•â• */
 // Bump this version string every time you deploy new code.
 // This tells the browser to throw away old cached files and install fresh ones.
-const CACHE = 'sakhi-sang-v443';
+const CACHE = 'sakhi-sang-v449';
 const SHELL = [
   './index.html',
   './js/config.js',
@@ -22,7 +22,8 @@ const SHELL = [
   './icons/icon.svg',
   'https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito:wght@300;400;500;600;700&display=swap',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css',
-  'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js'
+  'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js',
+  'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js'
 ];
 
 self.addEventListener('install', e => {

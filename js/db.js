@@ -937,7 +937,10 @@ const DB = {
     if (snap.empty) {
       payload.createdAt = TS();
       payload.createdAtClient = now.toISOString();
-      await fdb.collection('callingStatus').add(payload);
+      // Deterministic doc ID (devoteeId_weekDate) instead of .add() — if two
+      // saves race for the same devotee/week, both writes land on the same
+      // doc instead of creating duplicate callingStatus records.
+      await fdb.collection('callingStatus').doc(`${devoteeId}_${weekDate}`).set(payload);
     } else {
       const prev = snap.docs[0].data();
       await snap.docs[0].ref.update(payload);
@@ -1358,7 +1361,10 @@ const DB = {
     ]);
     const devMap = {};
     all.forEach(d => { devMap[d.id] = d; });
-    const yesIds = csSnap.docs.map(d => d.data().devoteeId);
+    // De-dupe devoteeIds — duplicate callingStatus docs for the same devotee/week
+    // (a known race condition in updateCallingStatus) would otherwise produce the
+    // same devotee repeated multiple times in the list.
+    const yesIds = [...new Set(csSnap.docs.map(d => d.data().devoteeId))];
     if (sessSnap.empty || sessSnap.docs[0].data().isCancelled) return { hasSession:false, list:[] };
     const attSnap = await fdb.collection('attendanceRecords').where('sessionId','==',sessSnap.docs[0].id).get();
     const attSet = new Set(attSnap.docs.map(d => d.data().devoteeId));
@@ -1366,7 +1372,18 @@ const DB = {
       const d = devMap[id] || {};
       return { id, name:d.name||'—', teamName:d.teamName||'', callingBy:d.callingBy||'', mobile:d.mobile||'' };
     }).sort((a,b) => (a.teamName||'').localeCompare(b.teamName||'') || a.name.localeCompare(b.name));
-    return { hasSession:true, list };
+    // De-dupe by mobile (or name+team if no mobile) — handles duplicate devotee
+    // profiles (same person entered more than once with the same number),
+    // which the devoteeId-based de-dupe above can't catch since each duplicate
+    // profile has its own id and its own callingStatus doc.
+    const seen = new Set();
+    const dedupedList = list.filter(item => {
+      const key = item.mobile ? `m_${item.mobile}` : `n_${item.name.toLowerCase()}_${item.teamName}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return { hasSession:true, list: dedupedList };
   },
 
   /* REPORTS */

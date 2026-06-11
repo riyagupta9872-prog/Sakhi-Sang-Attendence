@@ -1832,11 +1832,11 @@ async function loadAttAccuracyReport() {
           </tr></thead>
           <tbody>
             ${bodyRows || '<tr><td colspan="5" style="text-align:center;padding:1.5rem;color:var(--text-muted)">No data for this session</td></tr>'}
-            <tr style="background:#1e40af;color:#fff;font-weight:700;font-size:.83rem">
-              <td>Grand Total</td>
-              <td style="text-align:center">${grandYes}</td>
-              <td style="text-align:center">${grandCame}</td>
-              <td style="text-align:center">${grandAbsentCell}</td>
+            <tr style="background:#1e40af;font-weight:700;font-size:.83rem">
+              <td style="color:#fff">Grand Total</td>
+              <td style="text-align:center;color:#fff">${grandYes}</td>
+              <td style="text-align:center;color:#fff">${grandCame}</td>
+              <td style="text-align:center;color:#fff">${grandAbsentCell}</td>
               <td style="text-align:center;${grandAccStyle}">${grandAcc}%</td>
             </tr>
           </tbody>
