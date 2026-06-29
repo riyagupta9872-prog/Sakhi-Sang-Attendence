@@ -1656,6 +1656,59 @@ function _fyRangeFor(dateStr) {
   return { start: `${startYear}-04-01`, end: `${startYear + 1}-03-31` };
 }
 
+// Stash for click-to-filter on the stats pills — lets _ysSetFilter() re-render
+// the table from already-fetched data without re-querying Firestore.
+let _ysSheet = null;
+let _ysFilter = null; // 'confirmed' | 'present' | 'newDevotees' | 'totalPresent' | null
+
+const _YS_FILTER_META = {
+  confirmed:    { idsKey: 'confirmedIds',    label: 'Confirmed (Said Coming)' },
+  present:      { idsKey: 'presentIds',      label: 'Present (Regular)' },
+  newDevotees:  { idsKey: 'newIds',          label: 'New Devotees Present' },
+  totalPresent: { idsKey: 'totalPresentIds', label: 'Total Present' },
+};
+
+function _ysStatsBarHtml() {
+  const stats = _ysSheet?.stats;
+  if (!stats) return '';
+  const pill = (kind, num, label, color) => {
+    const active = _ysFilter === kind;
+    return `<div class="sh-stat-pill" style="border-top:3px solid ${color};cursor:pointer;${active ? `background:${color};color:#fff` : ''}" onclick="_ysSetFilter('${kind}')">
+      <span class="sh-stat-num" style="color:${active ? '#fff' : color}">${num}</span>
+      <span class="sh-stat-lbl" style="${active ? 'color:#fff' : ''}">${label}</span>
+    </div>`;
+  };
+  return `
+    <div class="sh-stats-bar">
+      ${pill('confirmed', stats.confirmed, 'Confirmed', 'var(--brand)')}
+      ${pill('present', stats.present, 'Present', 'var(--success)')}
+      ${pill('newDevotees', stats.newDevotees, 'New', 'var(--gold)')}
+      ${pill('totalPresent', stats.totalPresent, 'Total Present', '#6366f1')}
+    </div>
+    ${_ysFilter ? `<div class="sh-filter-banner">
+      <i class="fas fa-filter"></i> Showing only: <strong>${_YS_FILTER_META[_ysFilter].label}</strong>
+      <button class="btn btn-secondary" style="padding:.15rem .6rem;font-size:.74rem;margin-left:.5rem" onclick="_ysSetFilter(null)">Show All</button>
+    </div>` : ''}`;
+}
+
+function _ysTableHtml() {
+  if (!_ysSheet) return '';
+  const { sessions, devotees, attMap, attTimeMap, csMap, teamFilter, stats } = _ysSheet;
+  let rows = devotees;
+  if (_ysFilter && stats) {
+    const ids = stats[_YS_FILTER_META[_ysFilter].idsKey];
+    rows = devotees.filter(d => ids.has(d.id));
+  }
+  return buildFullSheetTable(rows, sessions, attMap, csMap, teamFilter, attTimeMap);
+}
+
+function _ysSetFilter(kind) {
+  _ysFilter = (_ysFilter === kind) ? null : kind;
+  const wrap = document.getElementById('yearly-sheet-wrap');
+  if (wrap) wrap.innerHTML = _ysStatsBarHtml() + _ysTableHtml();
+}
+window._ysSetFilter = _ysSetFilter;
+
 async function loadYearlySheet() {
   const wrap = document.getElementById('yearly-sheet-wrap');
   if (!wrap) return;
@@ -1663,6 +1716,8 @@ async function loadYearlySheet() {
   const start = r.start, end = r.end;
   const teamFilter = getFilterTeam();
   wrap.innerHTML = '<div class="loading" style="padding:2rem"><i class="fas fa-spinner"></i> Loading…</div>';
+  _ysSheet = null;
+  _ysFilter = null;
   try {
     const [sheetData, stats] = await Promise.all([
       DB.getSheetData(start, end),
@@ -1675,26 +1730,8 @@ async function loadYearlySheet() {
       wrap.innerHTML = `<div class="empty-state"><i class="fas fa-table"></i><p>No sessions in this ${r.period} for ${teamFilter || 'any team'}</p></div>`;
       return;
     }
-    const statsBar = stats ? `
-      <div class="sh-stats-bar">
-        <div class="sh-stat-pill" style="border-top:3px solid var(--brand)">
-          <span class="sh-stat-num" style="color:var(--brand)">${stats.confirmed}</span>
-          <span class="sh-stat-lbl">Confirmed</span>
-        </div>
-        <div class="sh-stat-pill" style="border-top:3px solid var(--success)">
-          <span class="sh-stat-num" style="color:var(--success)">${stats.present}</span>
-          <span class="sh-stat-lbl">Present</span>
-        </div>
-        <div class="sh-stat-pill" style="border-top:3px solid var(--gold)">
-          <span class="sh-stat-num" style="color:var(--gold)">${stats.newDevotees}</span>
-          <span class="sh-stat-lbl">New</span>
-        </div>
-        <div class="sh-stat-pill" style="border-top:3px solid #6366f1">
-          <span class="sh-stat-num" style="color:#6366f1">${stats.totalPresent}</span>
-          <span class="sh-stat-lbl">Total Present</span>
-        </div>
-      </div>` : '';
-    wrap.innerHTML = statsBar + buildFullSheetTable(devotees, sessions, attMap, csMap, teamFilter, attTimeMap);
+    _ysSheet = { sessions, devotees, attMap, attTimeMap, csMap, teamFilter, stats };
+    wrap.innerHTML = _ysStatsBarHtml() + _ysTableHtml();
   } catch (e) {
     console.error('loadYearlySheet', e);
     wrap.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>Failed to load</p></div>';

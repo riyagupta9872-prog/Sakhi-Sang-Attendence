@@ -430,17 +430,20 @@ const DB = {
     const submittedCallers = new Set(submSnap.docs.map(d => d.data().userName).filter(Boolean));
     const devCallerMap = {};
     allDevotees.forEach(d => { if (d.callingBy) devCallerMap[d.id] = d.callingBy; });
-    const confirmed = cs.docs.filter(d => {
+    const confirmedIds = new Set(cs.docs.filter(d => {
       if (d.data().comingStatus !== 'Yes') return false;
       const caller = devCallerMap[d.data().devoteeId];
       return !caller || submittedCallers.has(caller);
-    }).length;
+    }).map(d => d.data().devoteeId));
+    const confirmed = confirmedIds.size;
     // "New" = attendance records explicitly marked isNewDevotee
-    const newPresentSet = new Set(at.docs.filter(d => d.data().isNewDevotee).map(d => d.data().devoteeId));
-    const newDevotees = newPresentSet.size;
-    const present     = at.size - newDevotees;   // regular attendees only
-    const totalPresent = at.size;                // present + new = all who attended
-    return { confirmed, present, newDevotees, totalPresent };
+    const newIds = new Set(at.docs.filter(d => d.data().isNewDevotee).map(d => d.data().devoteeId));
+    const presentIds = new Set(at.docs.filter(d => !d.data().isNewDevotee).map(d => d.data().devoteeId));
+    const totalPresentIds = new Set(at.docs.map(d => d.data().devoteeId));
+    const newDevotees = newIds.size;
+    const present     = presentIds.size;          // regular attendees only
+    const totalPresent = totalPresentIds.size;    // present + new = all who attended
+    return { confirmed, present, newDevotees, totalPresent, confirmedIds, presentIds, newIds, totalPresentIds };
   },
 
   /* ATTENDANCE */

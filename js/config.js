@@ -506,7 +506,7 @@ const DevoteeCache = {
         let q = fdb.collection('devotees').where('isActive', '==', true);
         // Team-scoped fetch: users who can't see cross-team data only get their own team.
         // canCrossTeamManage/Reports/Calling all fold in isSuperAdmin so one check covers all.
-        if (!canCrossTeamManage() && !canCrossTeamReports() && !canCrossTeamCalling() && AppState.userTeam) {
+        if (!canCrossTeamManage() && !canCrossTeamReports() && !canCrossTeamCalling() && !AppState.isAttSevaDev && AppState.userTeam) {
           q = q.where('teamName', '==', AppState.userTeam);
         }
         const snap = await q.get();
