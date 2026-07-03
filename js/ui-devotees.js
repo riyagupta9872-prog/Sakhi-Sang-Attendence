@@ -626,7 +626,7 @@ async function saveDevotee(e) {
     setTimeout(() => document.getElementById('f-name')?.focus(), 100);
     return;
   }
-  if (!payload.reference_by) {
+  if (!id && !payload.reference_by) {
     switchProfileTab('team', null);
     showToast('Reference By is required', 'error');
     setTimeout(() => document.querySelector('#picker-reference .picker-input')?.focus(), 100);

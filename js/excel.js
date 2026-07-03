@@ -1221,6 +1221,13 @@ async function handleImportFile(e) {
       // "All Teams", once in the flat sheet).
       if (usedFlat) continue;
       const ws = wb.Sheets[sheetName];
+      if (ws['!ref']) {
+        const range = XLSX.utils.decode_range(ws['!ref']);
+        Object.keys(ws).filter(k => !k.startsWith('!')).forEach(k => {
+          try { const { r } = XLSX.utils.decode_cell(k); if (r > range.e.r) range.e.r = r; } catch (_) {}
+        });
+        ws['!ref'] = XLSX.utils.encode_range(range);
+      }
       let rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
       if (!rows.length) continue;
 
@@ -1250,7 +1257,7 @@ async function handleImportFile(e) {
       });
 
       allRows = allRows.concat(rows);
-      if (/re.?import|flat/i.test(sheetName) && allRows.length) usedFlat = true;
+      if (/re.?import/i.test(sheetName) && /flat/i.test(sheetName) && allRows.length) usedFlat = true;
     }
 
     if (!allRows.length) {
