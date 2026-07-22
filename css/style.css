@@ -1473,15 +1473,10 @@ button.contact-icon { border: none; padding: 0; }
   /* Sub-tabs stay hidden on mobile too — bottom-nav dropdowns drive sub-view
      navigation. Inline sub-tabs would duplicate that. */
 
-  /* Bulk-action bar: fixed at bottom above the mobile bottom-nav (60px) */
-  .cm-bulk-bar {
-    position: fixed;
-    bottom: 68px;
-    left: .75rem; right: .75rem;
-    top: auto;
-    border-radius: var(--radius);
-    margin: 0;
-  }
+  /* NOTE: the mobile .cm-bulk-bar override lives AFTER the base .cm-bulk-bar
+     rule (further down this file), not here. It must come later in source
+     order to win the cascade — otherwise the desktop sticky/top positioning
+     overrides it and the bar floats mid-screen on phones. */
 
   /* Attendance sheet: ensure sticky thead uses the correct single-container
      scroll context (main-content). Table can be as tall as needed. */
@@ -1954,6 +1949,20 @@ button.contact-icon { border: none; padding: 0; }
 .cm-bulk-bar .btn-primary:hover { background: #f3f4f6; }
 .cm-bulk-bar .btn-secondary { background: rgba(255,255,255,.18); color: #fff; border-color: rgba(255,255,255,.3); }
 .cm-bulk-bar .btn-secondary:hover { background: rgba(255,255,255,.28); }
+
+/* Mobile (≤720px): pin the bulk bar to the BOTTOM, above the bottom-nav.
+   This block MUST stay after the base .cm-bulk-bar rule above — equal
+   specificity means later-in-file wins, so this is what actually overrides
+   the desktop sticky/top positioning on phones. */
+@media (max-width: 720px) {
+  .cm-bulk-bar {
+    position: fixed;
+    top: auto;
+    bottom: 68px;
+    left: .75rem; right: .75rem;
+    margin: 0;
+  }
+}
 
 /* Rotate phone handset icons so they sit upright (FA 6 default is tilted) */
 .fas.fa-phone, .fas.fa-phone-alt { transform: rotate(90deg); }
