@@ -1260,7 +1260,7 @@ function _saveCallingReason(devoteeId, reason, notes, availFrom) {
       const row = document.querySelector(`tr[data-id="${devoteeId}"]`);
       if (row) row.className = reason ? 'row-has-reason' : '';
       renderCallingStats(AppState.callingData);
-    } catch (_) {}
+    } catch (_) { showToast('Update failed — please check your connection', 'error'); }
   }, 600);
 }
 
@@ -1277,7 +1277,7 @@ function updateCallingNotes(devoteeId, notes) {
         calling_reason: d?.calling_reason || ''
       });
       if (d) d.calling_notes = notes;
-    } catch (_) {}
+    } catch (_) { showToast('Update failed — please check your connection', 'error'); }
   }, 800);
 }
 
@@ -1775,7 +1775,7 @@ async function loadLateReports() {
 function saveLateRemark(statusId, remarks) {
   clearTimeout(_lateRemarksTimers[statusId]);
   _lateRemarksTimers[statusId] = setTimeout(async () => {
-    try { await DB.saveCallingRemarks(statusId, remarks); } catch (_) {}
+    try { await DB.saveCallingRemarks(statusId, remarks); } catch (_) { showToast('Update failed — please check your connection', 'error'); }
   }, 800);
 }
 
