@@ -533,6 +533,12 @@ function renderCallingStats(devotees) {
     </div>`;
 }
 
+// Canonical "has this devotee been called this week?" test — same rule the
+// stats bar and the 100%-submission gate use. Keep these in sync.
+function _isCallDone(d) {
+  return !!(d.coming_status || d.calling_reason || d.calling_notes);
+}
+
 function filterCallingList() {
   const q    = document.getElementById('calling-search')?.value.toLowerCase() || '';
   const s    = document.getElementById('calling-filter-status')?.value || '';
@@ -550,16 +556,41 @@ function filterCallingList() {
     }
     return true;
   });
+  // Pending float to the top, completed sink to the bottom — the coordinator
+  // works top-down and finished calls drop out of the way. Array.sort is
+  // stable, so the original name order is preserved inside each group.
+  filtered.sort((a, b) => (_isCallDone(a) ? 1 : 0) - (_isCallDone(b) ? 1 : 0));
   // Stats follow whichever filters are active so the numbers always match
   // what's visible in the list below. Skip if 'team-calling' owns the stats bar.
   if (AppState._callingSubTab !== 'team-calling') renderCallingStats(filtered);
   renderCallingList(filtered, _callingLocked);
 }
 
+// Builds divider-grouped card markup. `devotees` MUST already be sorted with
+// pending first. Shared by the personal Calls list and the Team Calling detail
+// view so both group, label and count identically.
+function _buildGroupedCallingCards(devotees, locked) {
+  const pendingCount = devotees.filter(d => !_isCallDone(d)).length;
+  const doneCount    = devotees.length - pendingCount;
+
+  let html = '';
+  if (pendingCount) {
+    html += `<div class="cc-group-divider"><span><i class="fas fa-phone-alt"></i> To Call (${pendingCount})</span></div>`;
+  }
+  devotees.forEach((d, idx) => {
+    // First completed card → insert the "Called" heading just above it.
+    if (idx === pendingCount && doneCount) {
+      html += `<div class="cc-group-divider cc-group-divider--done"><span><i class="fas fa-check-circle"></i> Called (${doneCount})</span></div>`;
+    }
+    html += renderCallingCard(d, idx + 1, locked);
+  });
+  return html;
+}
+
 function renderCallingList(devotees, locked) {
   const wrap = document.getElementById('calling-list');
   if (!devotees.length) { wrap.innerHTML = '<div class="empty-state"><i class="fas fa-phone-slash"></i><p>No devotees found</p></div>'; return; }
-  wrap.innerHTML = `<div class="calling-cards">${devotees.map((d, i) => renderCallingCard(d, i + 1, locked)).join('')}</div>`;
+  wrap.innerHTML = `<div class="calling-cards">${_buildGroupedCallingCards(devotees, locked)}</div>`;
 }
 
 // ── MINIMAL CALLING CARD ─────────────────────────────────────────────
@@ -594,6 +625,9 @@ function renderCallingCard(d, i, locked) {
   const cardCls = ['calling-card', 'cc-v2'];
   if (isYes)   cardCls.push('cc-confirmed');
   if (reason)  cardCls.push('cc-has-reason');
+  // cc-done drives the thick green left bar — the primary "I've already called
+  // them" signal. Outcome nuance stays in the status chip next to the name.
+  if (_isCallDone(d)) cardCls.push('cc-done');
 
   const _st = _callingCardStatusInfo(d);
   const statusTag = `<span style="display:inline-block;font-size:.62rem;font-weight:700;line-height:1;padding:.16rem .4rem;border-radius:4px;white-space:nowrap;background:${_st.bg};color:${_st.fg};margin-left:.35rem;vertical-align:middle">${_st.label}</span>`;
@@ -1027,6 +1061,12 @@ function _refreshCardStatusInList(devoteeId) {
   if (!d) return;
   card.classList.toggle('cc-confirmed', d.coming_status === 'Yes');
   card.classList.toggle('cc-has-reason', !!d.calling_reason);
+  card.classList.toggle('cc-done', _isCallDone(d));
+  // On the personal Calls list, re-render so the card also MOVES into the
+  // correct group and the divider counts update — cheap on a small list, and
+  // it keeps border, position and counts from drifting apart. Team Calling
+  // renders its own list, so there the in-place class toggle above is enough.
+  if (AppState._callingSubTab !== 'team-calling') filterCallingList();
 }
 
 async function _refreshHistoryModalRows() {
@@ -2229,8 +2269,13 @@ function _tcRenderCallerDevotees() {
   const isSuperAdmin = AppState.userRole === 'superAdmin';
   const canCrossCall = (typeof canCrossTeamCalling === 'function') && canCrossTeamCalling();
 
-  const sorted = [...list].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  const cards = sorted.map(d => renderCallingCard(d, 0, false)).join('');
+  // Same grouping as the personal Calls list: pending first, called last,
+  // alphabetical inside each group.
+  const sorted = [...list].sort((a, b) =>
+    (_isCallDone(a) ? 1 : 0) - (_isCallDone(b) ? 1 : 0) ||
+    (a.name || '').localeCompare(b.name || '')
+  );
+  const cards = _buildGroupedCallingCards(sorted, false);
 
   // Super-admin OR delegated user (canAllTeamCalling) can submit on behalf of
   // any caller. The flag is granted per-user from the admin panel.

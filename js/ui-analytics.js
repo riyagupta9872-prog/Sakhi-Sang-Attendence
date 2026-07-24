@@ -1534,7 +1534,11 @@ async function doMgmtAction(type) {
       DevoteeCache.bust();
       closeModal('mgmt-action-modal');
       showToast('Team changed!', 'success');
-      loadMgmtTab();
+      // loadMgmtTab() targets #mgmt-tab-content — the old Management tab that
+      // no longer exists in index.html, so it silently no-ops and the table
+      // stayed stale until a manual refresh. This modal is only reachable from
+      // Calling Mgmt, so refresh that.
+      loadCallingMgmtTab();
     } catch (e) { showToast('Failed: ' + (e.message || 'Error'), 'error'); }
     return;
   }
@@ -1545,7 +1549,7 @@ async function doMgmtAction(type) {
     await DB.setDevoteeCallingMode(devoteeId, type);
     closeModal('mgmt-action-modal');
     showToast(`Shifted to ${labels[type]}!`, 'success');
-    loadMgmtTab();
+    loadCallingMgmtTab();
   } catch (e) { showToast('Failed: ' + (e.message || 'Error'), 'error'); }
 }
 
@@ -1555,7 +1559,7 @@ async function restoreMgmtDevotee(devoteeId) {
     await fdb.collection('devotees').doc(devoteeId).update({ callingMode: '', isNotInterested: false, updatedAt: TS() });
     DevoteeCache.bust();
     showToast('Restored!', 'success');
-    loadMgmtTab();
+    loadCallingMgmtTab();
   } catch (e) { showToast('Failed', 'error'); }
 }
 
@@ -4686,5 +4690,14 @@ window.addEventListener('filtersChanged', () => {
   if (AppState._attSubTab === 'coordinator') {
     _cpInFlight = null;
     loadCoordinatorPerformance();
+  }
+  // Attendance → Reports sub-tabs (Attendance Sheet, Late Comers, New Comers,
+  // Serious, Trends) must also re-fetch when Session / Team / Calling-By change.
+  // loadReports() re-runs whichever report sub-panel is currently active — all
+  // of them read the live master filters (getFilterTeam / _reportRange), they
+  // just weren't being re-triggered. Without this, changing a filter left the
+  // Attendance Sheet stale until a manual tab switch or page refresh.
+  if (AppState._attSubTab === 'reports') {
+    loadReports();
   }
 });
